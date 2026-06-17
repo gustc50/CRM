@@ -86,16 +86,133 @@
             </div>
 
             <div id="page-whatsapp" class="page-content">
-                <div class="card">
-                    <div class="card-header"><h3><i class="fab fa-whatsapp"></i> Integração WhatsApp</h3></div>
-                    <div class="card-body whatsapp-integration">
-                        <div class="whatsapp-status"><i class="fas fa-check-circle" style="color:#10b981;"></i><span>WhatsApp Business conectado</span></div>
-                        <div class="whatsapp-actions">
-                            <button class="btn-primary"><i class="fab fa-whatsapp"></i> Enviar Mensagem em Massa</button>
-                            <button class="btn-secondary"><i class="fas fa-robot"></i> Configurar Automação</button>
+
+                <!-- Estado 1: Não configurado -->
+                <div id="wa-setup" class="wa-section" style="display:none;">
+                    <div class="card">
+                        <div class="card-header"><h3><i class="fab fa-whatsapp"></i> Configurar WhatsApp</h3></div>
+                        <div class="card-body">
+                            <div class="wa-info-box">
+                                <h4><i class="fas fa-info-circle"></i> Como funciona?</h4>
+                                <p>Este CRM integra com a <strong>Evolution API</strong> (gratuita e open-source). Siga os passos:</p>
+                                <ol>
+                                    <li>Instale a <strong>Evolution API</strong> no seu servidor ou computador</li>
+                                    <li>Informe a URL e chave da API abaixo</li>
+                                    <li>Escaneie o QR Code que aparecerá com o seu WhatsApp</li>
+                                </ol>
+                                <p style="margin-top:12px;">
+                                    <a href="https://doc.evolution-api.com" target="_blank" style="color:#3b82f6;">
+                                        <i class="fas fa-external-link-alt"></i> Documentação da Evolution API
+                                    </a>
+                                </p>
+                            </div>
+                            <form id="form-wa-config" onsubmit="salvarConfigWA(event)" style="max-width:500px;margin-top:20px;">
+                                <div class="form-group" style="padding:0 0 12px;">
+                                    <label>URL da Evolution API *</label>
+                                    <input type="url" name="api_url" placeholder="http://localhost:8080" required>
+                                </div>
+                                <div class="form-group" style="padding:0 0 12px;">
+                                    <label>API Key *</label>
+                                    <input type="text" name="api_key" placeholder="sua-chave-aqui" required autocomplete="off">
+                                </div>
+                                <div class="form-group" style="padding:0 0 20px;">
+                                    <label>Nome da Instância</label>
+                                    <input type="text" name="instancia" value="crm-brasil">
+                                </div>
+                                <button type="submit" class="btn-primary"><i class="fab fa-whatsapp"></i> Salvar e Conectar</button>
+                            </form>
                         </div>
                     </div>
                 </div>
+
+                <!-- Estado 2: Configurado, aguardando QR Code -->
+                <div id="wa-qrcode" class="wa-section" style="display:none;">
+                    <div class="card">
+                        <div class="card-header">
+                            <h3><i class="fab fa-whatsapp"></i> Escanear QR Code</h3>
+                            <div style="display:flex;gap:8px;">
+                                <button class="btn-secondary" onclick="verificarStatusWA()"><i class="fas fa-sync"></i> Verificar conexão</button>
+                                <button class="btn-secondary" onclick="mostrarSecaoWA('setup')"><i class="fas fa-cog"></i> Reconfigurar</button>
+                            </div>
+                        </div>
+                        <div class="card-body" style="text-align:center;padding:40px 20px;">
+                            <p style="margin-bottom:20px;color:#6b7280;">Abra o WhatsApp no seu celular → Dispositivos conectados → Conectar dispositivo</p>
+                            <div id="wa-qr-img" style="margin:0 auto 24px;"></div>
+                            <button class="btn-primary" onclick="gerarQRCode()"><i class="fas fa-qrcode"></i> Gerar novo QR Code</button>
+                            <p style="margin-top:16px;font-size:13px;color:#9ca3af;">O QR Code expira em 60 segundos. Após escanear, clique em "Verificar conexão".</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Estado 3: Conectado -->
+                <div id="wa-connected" class="wa-section" style="display:none;">
+                    <div class="wa-status-bar">
+                        <div class="wa-connected-badge"><i class="fas fa-circle" style="color:#10b981;font-size:10px;"></i> WhatsApp Conectado</div>
+                        <button class="btn-secondary" style="font-size:13px;padding:6px 14px;" onclick="mostrarSecaoWA('setup')"><i class="fas fa-cog"></i> Reconfigurar</button>
+                    </div>
+
+                    <div class="content-grid" style="grid-template-columns:1fr 1fr;gap:20px;">
+                        <!-- Envio individual -->
+                        <div class="card">
+                            <div class="card-header"><h3><i class="fas fa-paper-plane"></i> Enviar Mensagem</h3></div>
+                            <div class="card-body">
+                                <form id="form-wa-enviar" onsubmit="enviarMensagemWA(event)">
+                                    <div class="form-group" style="padding:0 0 12px;">
+                                        <label>Contato com WhatsApp</label>
+                                        <select id="wa-select-contato" name="contato_select">
+                                            <option value="">Selecione um contato...</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group" style="padding:0 0 12px;">
+                                        <label>Número (ou preencha o contato acima)</label>
+                                        <input type="tel" name="numero" id="wa-numero" placeholder="Ex: 11999999999">
+                                    </div>
+                                    <div class="form-group" style="padding:0 0 16px;">
+                                        <label>Mensagem *</label>
+                                        <textarea name="mensagem" rows="4" required placeholder="Digite a mensagem..."></textarea>
+                                    </div>
+                                    <button type="submit" class="btn-primary"><i class="fab fa-whatsapp"></i> Enviar</button>
+                                </form>
+                            </div>
+                        </div>
+
+                        <!-- Envio em massa -->
+                        <div class="card">
+                            <div class="card-header"><h3><i class="fas fa-broadcast-tower"></i> Envio em Massa</h3></div>
+                            <div class="card-body">
+                                <form id="form-wa-massa" onsubmit="enviarMassaWA(event)">
+                                    <div class="form-group" style="padding:0 0 12px;">
+                                        <label>Filtrar contatos por Status</label>
+                                        <select name="filtro_status">
+                                            <option value="">Todos com WhatsApp cadastrado</option>
+                                            <option value="Lead">Leads</option>
+                                            <option value="Prospect">Prospects</option>
+                                            <option value="Cliente">Clientes</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group" style="padding:0 0 8px;">
+                                        <label>Mensagem *</label>
+                                        <textarea name="mensagem" rows="4" required placeholder="Digite a mensagem para envio em massa..."></textarea>
+                                    </div>
+                                    <p id="wa-contagem-massa" style="font-size:13px;color:#6b7280;margin-bottom:16px;"></p>
+                                    <button type="submit" class="btn-primary" style="background:#10b981;"><i class="fas fa-paper-plane"></i> Enviar para Todos</button>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Histórico -->
+                    <div class="card">
+                        <div class="card-header"><h3><i class="fas fa-history"></i> Histórico de Envios</h3></div>
+                        <div class="card-body" style="padding:0;">
+                            <table class="data-table">
+                                <thead><tr><th>Contato</th><th>Número</th><th>Mensagem</th><th>Status</th><th>Data/Hora</th></tr></thead>
+                                <tbody id="tbody-wa-mensagens"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
             </div>
         </main>
     </div>

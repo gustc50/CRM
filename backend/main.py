@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from datetime import datetime
 from typing import Optional
 import os
+import httpx
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_DIR = os.path.join(BASE_DIR, "..", "frontend")
@@ -89,6 +90,22 @@ class Interacao(Base):
     contato_id = Column(Integer, ForeignKey("contatos.id"))
     contato = relationship("Contato", back_populates="interacoes")
 
+class ConfiguracaoWhatsApp(Base):
+    __tablename__ = "configuracao_whatsapp"
+    id = Column(Integer, primary_key=True, default=1)
+    api_url = Column(String(500), default="")
+    api_key = Column(String(500), default="")
+    instancia = Column(String(100), default="crm-brasil")
+
+class MensagemWhatsApp(Base):
+    __tablename__ = "mensagens_whatsapp"
+    id = Column(Integer, primary_key=True, index=True)
+    contato_nome = Column(String(200))
+    numero = Column(String(20))
+    mensagem = Column(Text)
+    status = Column(String(20), default="enviada")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="CRM Brasileiro", version="3.1.0")
@@ -153,6 +170,29 @@ class TarefaBase(BaseModel):
 class TarefaCreate(TarefaBase): pass
 class TarefaResponse(TarefaBase):
     id: int
+    created_at: datetime
+    model_config = {"from_attributes": True}
+
+class WhatsAppConfigSchema(BaseModel):
+    api_url: str
+    api_key: str
+    instancia: str = "crm-brasil"
+
+class WhatsAppEnviarSchema(BaseModel):
+    numero: str
+    mensagem: str
+    contato_nome: Optional[str] = None
+
+class WhatsAppMassaSchema(BaseModel):
+    mensagem: str
+    filtro_status: Optional[str] = None
+
+class MensagemWAResponse(BaseModel):
+    id: int
+    contato_nome: Optional[str] = None
+    numero: str
+    mensagem: str
+    status: str
     created_at: datetime
     model_config = {"from_attributes": True}
 
@@ -284,6 +324,131 @@ async def relatorio_resumo(db: Session = Depends(get_db)):
 async def relatorio_funil(db: Session = Depends(get_db)):
     etapas = db.query(Oportunidade.etapa, func.count(Oportunidade.id).label("qtd"), func.sum(Oportunidade.valor).label("val")).group_by(Oportunidade.etapa).all()
     return {"etapas": [{"etapa": e[0], "quantidade": e[1], "valor_total": e[2] or 0} for e in etapas]}
+
+# --- WhatsApp ---
+
+def _get_wa_config(db: Session) -> ConfiguracaoWhatsApp:
+    config = db.query(ConfiguracaoWhatsApp).first()
+    if not config:
+        config = ConfiguracaoWhatsApp(id=1)
+        db.add(config); db.commit(); db.refresh(config)
+    return config
+
+@app.get("/api/whatsapp/config")
+async def get_wa_config(db: Session = Depends(get_db)):
+    c = _get_wa_config(db)
+    return {
+        "api_url": c.api_url or "",
+        "instancia": c.instancia or "crm-brasil",
+        "configurado": bool(c.api_url and c.api_key)
+    }
+
+@app.post("/api/whatsapp/config")
+async def save_wa_config(data: WhatsAppConfigSchema, db: Session = Depends(get_db)):
+    c = _get_wa_config(db)
+    c.api_url = data.api_url.rstrip("/")
+    c.api_key = data.api_key
+    c.instancia = data.instancia
+    db.commit()
+    return {"message": "Configuração salva!"}
+
+@app.get("/api/whatsapp/status")
+async def get_wa_status(db: Session = Depends(get_db)):
+    c = _get_wa_config(db)
+    if not c.api_url or not c.api_key:
+        return {"status": "nao_configurado"}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(
+                f"{c.api_url}/instance/connectionState/{c.instancia}",
+                headers={"apikey": c.api_key}
+            )
+            if r.status_code == 200:
+                state = r.json().get("instance", {}).get("state", "")
+                return {"status": "conectado" if state == "open" else "desconectado", "state": state}
+            return {"status": "erro", "message": f"HTTP {r.status_code}"}
+    except Exception as e:
+        return {"status": "erro", "message": str(e)}
+
+@app.get("/api/whatsapp/qrcode")
+async def get_wa_qrcode(db: Session = Depends(get_db)):
+    c = _get_wa_config(db)
+    if not c.api_url or not c.api_key:
+        raise HTTPException(400, "API não configurada")
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(
+                f"{c.api_url}/instance/connect/{c.instancia}",
+                headers={"apikey": c.api_key}
+            )
+            if r.status_code == 200:
+                qr = r.json().get("qrcode", {})
+                return {"qrcode": qr.get("base64", ""), "code": qr.get("code", "")}
+            raise HTTPException(r.status_code, f"Erro ao gerar QR Code: {r.text}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@app.post("/api/whatsapp/enviar")
+async def enviar_wa(data: WhatsAppEnviarSchema, db: Session = Depends(get_db)):
+    c = _get_wa_config(db)
+    if not c.api_url or not c.api_key:
+        raise HTTPException(400, "API não configurada")
+    numero = "".join(filter(str.isdigit, data.numero))
+    if not numero.startswith("55"):
+        numero = "55" + numero
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(
+                f"{c.api_url}/message/sendText/{c.instancia}",
+                headers={"apikey": c.api_key, "Content-Type": "application/json"},
+                json={"number": numero, "options": {"delay": 1200}, "textMessage": {"text": data.mensagem}}
+            )
+            if r.status_code in (200, 201):
+                db.add(MensagemWhatsApp(contato_nome=data.contato_nome, numero=numero, mensagem=data.mensagem))
+                db.commit()
+                return {"message": "Mensagem enviada!", "numero": numero}
+            raise HTTPException(r.status_code, f"Erro ao enviar: {r.text}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@app.post("/api/whatsapp/enviar-massa")
+async def enviar_wa_massa(data: WhatsAppMassaSchema, db: Session = Depends(get_db)):
+    c = _get_wa_config(db)
+    if not c.api_url or not c.api_key:
+        raise HTTPException(400, "API não configurada")
+    query = db.query(Contato).filter(Contato.whatsapp != None, Contato.whatsapp != "")
+    if data.filtro_status:
+        query = query.filter(Contato.status == data.filtro_status)
+    contatos = query.all()
+    enviados, falhas = 0, 0
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for ct in contatos:
+            numero = "".join(filter(str.isdigit, ct.whatsapp))
+            if not numero.startswith("55"):
+                numero = "55" + numero
+            try:
+                r = await client.post(
+                    f"{c.api_url}/message/sendText/{c.instancia}",
+                    headers={"apikey": c.api_key, "Content-Type": "application/json"},
+                    json={"number": numero, "options": {"delay": 1200}, "textMessage": {"text": data.mensagem}}
+                )
+                if r.status_code in (200, 201):
+                    db.add(MensagemWhatsApp(contato_nome=ct.nome, numero=numero, mensagem=data.mensagem))
+                    enviados += 1
+                else:
+                    falhas += 1
+            except:
+                falhas += 1
+    db.commit()
+    return {"enviados": enviados, "falhas": falhas, "total": len(contatos)}
+
+@app.get("/api/whatsapp/mensagens", response_model=list[MensagemWAResponse])
+async def get_wa_mensagens(limit: int = 50, db: Session = Depends(get_db)):
+    return db.query(MensagemWhatsApp).order_by(MensagemWhatsApp.created_at.desc()).limit(limit).all()
 
 if __name__ == "__main__":
     import uvicorn

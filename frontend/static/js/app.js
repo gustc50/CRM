@@ -497,6 +497,160 @@ function renderizarCalendario() {
     }
 }
 
+// ===================== WHATSAPP =====================
+
+function mostrarSecaoWA(secao) {
+    ['setup', 'qrcode', 'connected'].forEach(s => {
+        const el = document.getElementById(`wa-${s}`);
+        if (el) el.style.display = s === secao ? 'block' : 'none';
+    });
+}
+
+async function carregarWhatsApp() {
+    try {
+        const config = await apiCall('/whatsapp/config');
+        const form = document.getElementById('form-wa-config');
+        if (form) {
+            if (config.api_url) form.elements['api_url'].value = config.api_url;
+            if (config.instancia) form.elements['instancia'].value = config.instancia;
+        }
+        if (!config.configurado) {
+            mostrarSecaoWA('setup');
+        } else {
+            await verificarStatusWA();
+        }
+    } catch (err) {
+        mostrarSecaoWA('setup');
+    }
+}
+
+async function salvarConfigWA(e) {
+    e.preventDefault();
+    const data = cleanFormData(Object.fromEntries(new FormData(e.target)));
+    try {
+        await apiCall('/whatsapp/config', { method: 'POST', body: JSON.stringify(data) });
+        showToast('Configuração salva!');
+        await verificarStatusWA();
+    } catch (err) {
+        console.error(err);
+    }
+}
+
+async function verificarStatusWA() {
+    try {
+        const status = await apiCall('/whatsapp/status');
+        if (status.status === 'conectado') {
+            mostrarSecaoWA('connected');
+            await carregarContatosWA();
+            await carregarMensagensWA();
+            await atualizarContagemMassa();
+        } else if (status.status === 'nao_configurado') {
+            mostrarSecaoWA('setup');
+        } else {
+            mostrarSecaoWA('qrcode');
+            await gerarQRCode();
+        }
+    } catch (err) {
+        mostrarSecaoWA('qrcode');
+    }
+}
+
+async function gerarQRCode() {
+    const div = document.getElementById('wa-qr-img');
+    if (!div) return;
+    div.innerHTML = '<p style="color:#6b7280;">Gerando QR Code...</p>';
+    try {
+        const data = await apiCall('/whatsapp/qrcode');
+        if (data.qrcode) {
+            div.innerHTML = `<img src="${data.qrcode}" style="width:256px;height:256px;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,.15);">`;
+        } else {
+            div.innerHTML = '<p style="color:#ef4444;">Não foi possível gerar o QR Code. Verifique se a Evolution API está em execução.</p>';
+        }
+    } catch (err) {
+        div.innerHTML = '<p style="color:#ef4444;">Erro ao gerar QR Code. Verifique a URL e a chave da API.</p>';
+    }
+}
+
+async function carregarContatosWA() {
+    try {
+        const contatos = await apiCall('/contatos');
+        const select = document.getElementById('wa-select-contato');
+        if (!select) return;
+        const comWA = contatos.filter(c => c.whatsapp);
+        select.innerHTML = '<option value="">Selecione um contato...</option>' +
+            comWA.map(c => `<option value="${c.id}" data-numero="${c.whatsapp}" data-nome="${c.nome}">${c.nome} — ${c.whatsapp}</option>`).join('');
+        select.addEventListener('change', () => {
+            const opt = select.options[select.selectedIndex];
+            const campoNumero = document.getElementById('wa-numero');
+            if (campoNumero && opt.dataset.numero) campoNumero.value = opt.dataset.numero;
+        });
+    } catch (err) { console.error(err); }
+}
+
+async function atualizarContagemMassa() {
+    try {
+        const contatos = await apiCall('/contatos');
+        const comWA = contatos.filter(c => c.whatsapp);
+        const el = document.getElementById('wa-contagem-massa');
+        if (el) el.textContent = `${comWA.length} contato(s) com WhatsApp cadastrado`;
+    } catch (err) { /* silently fail */ }
+}
+
+async function enviarMensagemWA(e) {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const select = document.getElementById('wa-select-contato');
+    const opt = select?.options[select.selectedIndex];
+    const numero = formData.get('numero') || opt?.dataset?.numero || '';
+    const mensagem = formData.get('mensagem');
+    const contato_nome = opt?.dataset?.nome || null;
+
+    if (!numero) { showToast('Informe o número do WhatsApp', 'error'); return; }
+    try {
+        await apiCall('/whatsapp/enviar', {
+            method: 'POST',
+            body: JSON.stringify({ numero, mensagem, contato_nome })
+        });
+        showToast('Mensagem enviada!');
+        e.target.reset();
+        await carregarMensagensWA();
+    } catch (err) { console.error(err); }
+}
+
+async function enviarMassaWA(e) {
+    e.preventDefault();
+    const data = cleanFormData(Object.fromEntries(new FormData(e.target)));
+    const filtro = data.filtro_status ? ` com status "${data.filtro_status}"` : '';
+    if (!confirm(`Enviar mensagem para todos os contatos${filtro} que têm WhatsApp cadastrado?`)) return;
+    try {
+        const result = await apiCall('/whatsapp/enviar-massa', { method: 'POST', body: JSON.stringify(data) });
+        showToast(`Concluído! ${result.enviados} enviadas${result.falhas ? `, ${result.falhas} falhas` : ''}.`);
+        e.target.reset();
+        await carregarMensagensWA();
+    } catch (err) { console.error(err); }
+}
+
+async function carregarMensagensWA() {
+    try {
+        const msgs = await apiCall('/whatsapp/mensagens');
+        const tbody = document.getElementById('tbody-wa-mensagens');
+        if (!tbody) return;
+        if (!msgs || msgs.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="empty-state"><i class="fab fa-whatsapp"></i><p>Nenhuma mensagem enviada ainda</p></td></tr>';
+            return;
+        }
+        tbody.innerHTML = msgs.map(m => `
+            <tr>
+                <td>${m.contato_nome || '-'}</td>
+                <td>${m.numero}</td>
+                <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${m.mensagem}">${m.mensagem}</td>
+                <td><span class="status-badge status-cliente">${m.status}</span></td>
+                <td>${new Date(m.created_at).toLocaleString('pt-BR')}</td>
+            </tr>
+        `).join('');
+    } catch (err) { console.error(err); }
+}
+
 // Busca
 document.getElementById('search-contatos')?.addEventListener('input', e => {
     const termo = e.target.value.toLowerCase();
@@ -513,6 +667,7 @@ function loadPageData(page) {
         case 'tarefas': carregarTarefas(); break;
         case 'calendario': renderizarCalendario(); break;
         case 'relatorios': carregarDashboard(); break;
+        case 'whatsapp': carregarWhatsApp(); break;
     }
 }
 
