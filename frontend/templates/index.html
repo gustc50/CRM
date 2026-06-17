@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CRM Brasileiro</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="app-container">
+        <aside class="sidebar">
+            <div class="logo"><i class="fas fa-chart-line"></i><h1>CRM Brasil</h1></div>
+            <nav class="nav-menu">
+                <a href="#" class="nav-item active" data-page="dashboard"><i class="fas fa-tachometer-alt"></i><span>Dashboard</span></a>
+                <a href="#" class="nav-item" data-page="contatos"><i class="fas fa-users"></i><span>Contatos</span></a>
+                <a href="#" class="nav-item" data-page="oportunidades"><i class="fas fa-briefcase"></i><span>Oportunidades</span></a>
+                <a href="#" class="nav-item" data-page="tarefas"><i class="fas fa-tasks"></i><span>Tarefas</span></a>
+                <a href="#" class="nav-item" data-page="calendario"><i class="fas fa-calendar"></i><span>Calendário</span></a>
+                <a href="#" class="nav-item" data-page="relatorios"><i class="fas fa-chart-bar"></i><span>Relatórios</span></a>
+                <a href="#" class="nav-item" data-page="whatsapp"><i class="fab fa-whatsapp"></i><span>WhatsApp</span></a>
+            </nav>
+        </aside>
+        <main class="main-content">
+            <header class="header">
+                <div class="header-left"><h2 id="page-title">Dashboard</h2></div>
+                <div class="header-right">
+                    <button class="btn-icon"><i class="fas fa-bell"></i><span class="badge">3</span></button>
+                    <div class="user-menu"><i class="fas fa-user-circle"></i><span>Admin</span></div>
+                </div>
+            </header>
+
+            <div id="page-dashboard" class="page-content active">
+                <div class="stats-grid">
+                    <div class="stat-card"><div class="stat-icon" style="background:#3b82f6;"><i class="fas fa-users"></i></div><div class="stat-info"><h3 id="stat-contatos">0</h3><p>Contatos</p></div></div>
+                    <div class="stat-card"><div class="stat-icon" style="background:#10b981;"><i class="fas fa-briefcase"></i></div><div class="stat-info"><h3 id="stat-oportunidades">0</h3><p>Oportunidades</p></div></div>
+                    <div class="stat-card"><div class="stat-icon" style="background:#f59e0b;"><i class="fas fa-tasks"></i></div><div class="stat-info"><h3 id="stat-tarefas">0</h3><p>Tarefas Pendentes</p></div></div>
+                    <div class="stat-card"><div class="stat-icon" style="background:#ef4444;"><i class="fas fa-dollar-sign"></i></div><div class="stat-info"><h3 id="stat-valor">R$ 0</h3><p>Valor Ponderado</p></div></div>
+                </div>
+                <div class="content-grid">
+                    <div class="card"><div class="card-header"><h3><i class="fas fa-chart-pie"></i> Funil de Vendas</h3></div><div class="card-body" id="funil-vendas"></div></div>
+                    <div class="card"><div class="card-header"><h3><i class="fas fa-clock"></i> Tarefas Pendentes</h3></div><div class="card-body" id="tarefas-pendentes"></div></div>
+                </div>
+            </div>
+
+            <div id="page-contatos" class="page-content">
+                <div class="page-actions">
+                    <button class="btn-primary" onclick="abrirNovoContato()"><i class="fas fa-plus"></i> Novo Contato</button>
+                    <input type="text" class="search-input" placeholder="Buscar contatos..." id="search-contatos">
+                </div>
+                <div class="card">
+                    <table class="data-table">
+                        <thead><tr><th>Nome</th><th>Empresa</th><th>Email</th><th>Telefone</th><th>Status</th><th>Ações</th></tr></thead>
+                        <tbody id="tbody-contatos"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div id="page-oportunidades" class="page-content">
+                <div class="page-actions"><button class="btn-primary" onclick="abrirNovaOportunidade()"><i class="fas fa-plus"></i> Nova Oportunidade</button></div>
+                <div class="kanban-board" id="kanban-oportunidades"></div>
+            </div>
+
+            <div id="page-tarefas" class="page-content">
+                <div class="page-actions"><button class="btn-primary" onclick="abrirNovaTarefa()"><i class="fas fa-plus"></i> Nova Tarefa</button></div>
+                <div class="card">
+                    <table class="data-table">
+                        <thead><tr><th>Status</th><th>Título</th><th>Tipo</th><th>Data/Hora</th><th>Prioridade</th><th>Ações</th></tr></thead>
+                        <tbody id="tbody-tarefas"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div id="page-calendario" class="page-content">
+                <div class="card">
+                    <div class="calendar-header"><button class="btn-icon"><i class="fas fa-chevron-left"></i></button><h3 id="cal-title">Calendário</h3><button class="btn-icon"><i class="fas fa-chevron-right"></i></button></div>
+                    <div class="calendar-grid" id="calendar-grid"></div>
+                </div>
+            </div>
+
+            <div id="page-relatorios" class="page-content">
+                <div class="stats-grid">
+                    <div class="stat-card"><div class="stat-icon" style="background:#8b5cf6;"><i class="fas fa-chart-line"></i></div><div class="stat-info"><h3 id="rel-receita">R$ 0</h3><p>Receita Prevista</p></div></div>
+                    <div class="stat-card"><div class="stat-icon" style="background:#ec4899;"><i class="fas fa-percentage"></i></div><div class="stat-info"><h3>0%</h3><p>Taxa de Conversão</p></div></div>
+                </div>
+            </div>
+
+            <div id="page-whatsapp" class="page-content">
+                <div class="card">
+                    <div class="card-header"><h3><i class="fab fa-whatsapp"></i> Integração WhatsApp</h3></div>
+                    <div class="card-body whatsapp-integration">
+                        <div class="whatsapp-status"><i class="fas fa-check-circle" style="color:#10b981;"></i><span>WhatsApp Business conectado</span></div>
+                        <div class="whatsapp-actions">
+                            <button class="btn-primary"><i class="fab fa-whatsapp"></i> Enviar Mensagem em Massa</button>
+                            <button class="btn-secondary"><i class="fas fa-robot"></i> Configurar Automação</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modal Contato -->
+    <div id="modal-contato" class="modal">
+        <div class="modal-content">
+            <div class="modal-header"><h3 id="modal-contato-title">Novo Contato</h3><button class="modal-close" onclick="closeModal('modal-contato')">&times;</button></div>
+            <form id="form-contato" onsubmit="salvarContato(event)">
+                <div class="form-row"><div class="form-group"><label>Nome *</label><input type="text" name="nome" required></div><div class="form-group"><label>Empresa</label><input type="text" name="empresa"></div></div>
+                <div class="form-row"><div class="form-group"><label>Email</label><input type="email" name="email"></div><div class="form-group"><label>Telefone</label><input type="tel" name="telefone"></div></div>
+                <div class="form-row"><div class="form-group"><label>WhatsApp</label><input type="tel" name="whatsapp"></div><div class="form-group"><label>Cargo</label><input type="text" name="cargo"></div></div>
+                <div class="form-row"><div class="form-group"><label>Cidade</label><input type="text" name="cidade"></div><div class="form-group"><label>Estado</label><input type="text" name="estado"></div></div>
+                <div class="form-row">
+                    <div class="form-group"><label>Origem</label><select name="origem"><option value="">Selecione...</option><option value="Indicação">Indicação</option><option value="Site">Site</option><option value="Google Ads">Google Ads</option><option value="LinkedIn">LinkedIn</option><option value="Evento">Evento</option><option value="Outros">Outros</option></select></div>
+                    <div class="form-group"><label>Status</label><select name="status"><option value="Lead">Lead</option><option value="Cliente">Cliente</option><option value="Prospect">Prospect</option></select></div>
+                </div>
+                <div class="form-group"><label>Tags</label><input type="text" name="tags" placeholder="Separe por vírgula"></div>
+                <div class="form-group"><label>Notas</label><textarea name="notas" rows="3"></textarea></div>
+                <div class="modal-footer"><button type="button" class="btn-secondary" onclick="closeModal('modal-contato')">Cancelar</button><button type="submit" class="btn-primary">Salvar</button></div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal Oportunidade -->
+    <div id="modal-oportunidade" class="modal">
+        <div class="modal-content">
+            <div class="modal-header"><h3 id="modal-oportunidade-title">Nova Oportunidade</h3><button class="modal-close" onclick="closeModal('modal-oportunidade')">&times;</button></div>
+            <form id="form-oportunidade" onsubmit="salvarOportunidade(event)">
+                <div class="form-group"><label>Título *</label><input type="text" name="titulo" required></div>
+                <div class="form-row"><div class="form-group"><label>Valor (R$)</label><input type="number" name="valor" step="0.01" value="0"></div><div class="form-group"><label>Etapa</label><select name="etapa"><option value="Prospecção">Prospecção</option><option value="Qualificação">Qualificação</option><option value="Proposta">Proposta</option><option value="Negociação">Negociação</option><option value="Fechamento">Fechamento</option></select></div></div>
+                <div class="form-row"><div class="form-group"><label>Probabilidade (%)</label><input type="number" name="probabilidade" min="0" max="100" value="10"></div><div class="form-group"><label>Data Prevista</label><input type="date" name="data_prevista_fechamento"></div></div>
+                <div class="form-group"><label>Descrição</label><textarea name="descricao" rows="3"></textarea></div>
+                <div class="modal-footer"><button type="button" class="btn-secondary" onclick="closeModal('modal-oportunidade')">Cancelar</button><button type="submit" class="btn-primary">Salvar</button></div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal Tarefa -->
+    <div id="modal-tarefa" class="modal">
+        <div class="modal-content">
+            <div class="modal-header"><h3 id="modal-tarefa-title">Nova Tarefa</h3><button class="modal-close" onclick="closeModal('modal-tarefa')">&times;</button></div>
+            <form id="form-tarefa" onsubmit="salvarTarefa(event)">
+                <div class="form-group"><label>Título *</label><input type="text" name="titulo" required></div>
+                <div class="form-row"><div class="form-group"><label>Tipo</label><select name="tipo"><option value="Ligação">Ligação</option><option value="Email">Email</option><option value="Reunião">Reunião</option><option value="WhatsApp">WhatsApp</option><option value="Outros">Outros</option></select></div><div class="form-group"><label>Prioridade</label><select name="prioridade"><option value="Baixa">Baixa</option><option value="Normal" selected>Normal</option><option value="Alta">Alta</option><option value="Urgente">Urgente</option></select></div></div>
+                <div class="form-group"><label>Data/Hora</label><input type="datetime-local" name="data_hora"></div>
+                <div class="form-group"><label>Descrição</label><textarea name="descricao" rows="3"></textarea></div>
+                <div class="modal-footer"><button type="button" class="btn-secondary" onclick="closeModal('modal-tarefa')">Cancelar</button><button type="submit" class="btn-primary">Salvar</button></div>
+            </form>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
