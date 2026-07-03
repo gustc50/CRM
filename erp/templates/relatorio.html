@@ -1,0 +1,75 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2>Relatório por Período</h2>
+
+<form action="{{ url_for('relatorio') }}" method="GET" class="form-filtro">
+    <label>
+        De
+        <input type="date" name="inicio" value="{{ inicio.isoformat() }}">
+    </label>
+    <label>
+        Até
+        <input type="date" name="fim" value="{{ fim.isoformat() }}">
+    </label>
+    <label>
+        Status
+        <select name="status">
+            <option value="Todos" {{ 'selected' if status_filtro == 'Todos' else '' }}>Todos</option>
+            <option value="Pendente" {{ 'selected' if status_filtro == 'Pendente' else '' }}>Pendente</option>
+            <option value="Concluído" {{ 'selected' if status_filtro == 'Concluído' else '' }}>Concluído</option>
+        </select>
+    </label>
+    <button type="submit">Filtrar</button>
+</form>
+
+<div class="dashboard">
+    <div class="card receber">
+        <h3>Total Entradas</h3>
+        <h2>R$ {{ "%.2f"|format(total_entradas) }}</h2>
+    </div>
+    <div class="card pagar">
+        <h3>Total Saídas</h3>
+        <h2>R$ {{ "%.2f"|format(total_saidas) }}</h2>
+    </div>
+    <div class="card {{ 'receber' if saldo >= 0 else 'pagar' }}">
+        <h3>Saldo do Período</h3>
+        <h2>R$ {{ "%.2f"|format(saldo) }}</h2>
+    </div>
+</div>
+
+<div class="exportar">
+    <span>Exportar período selecionado:</span>
+    <a class="btn-acao btn-exportar"
+       href="{{ url_for('exportar_relatorio', formato='csv', inicio=inicio.isoformat(), fim=fim.isoformat(), status=status_filtro) }}">Baixar CSV</a>
+    <a class="btn-acao btn-exportar"
+       href="{{ url_for('exportar_relatorio', formato='xlsx', inicio=inicio.isoformat(), fim=fim.isoformat(), status=status_filtro) }}">Baixar Excel (XLSX)</a>
+</div>
+
+<table>
+    <thead>
+        <tr>
+            <th>Descrição</th>
+            <th>Tipo</th>
+            <th>Vencimento</th>
+            <th>Valor</th>
+            <th>Status</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for t in transacoes %}
+        <tr>
+            <td>{{ t.descricao }}</td>
+            <td style="color: {{ '#28a745' if t.tipo == 'Receber' else '#dc3545' }}">{{ t.tipo }}</td>
+            <td>{{ t.data_vencimento.strftime('%d/%m/%Y') }}</td>
+            <td>R$ {{ "%.2f"|format(t.valor) }}</td>
+            <td>{{ t.status }}</td>
+        </tr>
+        {% else %}
+        <tr>
+            <td colspan="5">Nenhum lançamento encontrado no período selecionado.</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

@@ -42,12 +42,21 @@
             <td>{{ t.data_vencimento.strftime('%d/%m/%Y') }}</td>
             <td>R$ {{ "%.2f"|format(t.valor) }}</td>
             <td>{{ t.status }}</td>
-            <td>
+            <td class="acoes">
                 {% if t.status == 'Pendente' %}
                 <form action="{{ url_for('concluir', id=t.id) }}" method="POST" class="form-inline">
-                    <button type="submit" class="btn-concluir">Dar Baixa</button>
+                    <button type="submit" class="btn-acao btn-concluir">Dar Baixa</button>
+                </form>
+                {% else %}
+                <form action="{{ url_for('reabrir', id=t.id) }}" method="POST" class="form-inline">
+                    <button type="submit" class="btn-acao btn-reabrir">Reabrir</button>
                 </form>
                 {% endif %}
+                <a href="{{ url_for('editar', id=t.id) }}" class="btn-acao btn-editar">Editar</a>
+                <form action="{{ url_for('excluir', id=t.id) }}" method="POST" class="form-inline"
+                      onsubmit="return confirm('Excluir o lançamento \'{{ t.descricao }}\'? Essa ação não pode ser desfeita.');">
+                    <button type="submit" class="btn-acao btn-excluir">Excluir</button>
+                </form>
             </td>
         </tr>
         {% endfor %}

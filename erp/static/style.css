@@ -24,6 +24,28 @@ body {
 .card.receber h3 { color: #28a745; }
 .card.pagar h3 { color: #dc3545; }
 
+.tabs {
+    display: flex;
+    gap: 5px;
+    margin-bottom: 20px;
+    border-bottom: 2px solid #ddd;
+}
+.tabs a {
+    padding: 10px 18px;
+    text-decoration: none;
+    color: #555;
+    font-weight: bold;
+    border-radius: 6px 6px 0 0;
+}
+.tabs a:hover { background: #e9ecef; }
+.tabs a.active {
+    color: #007bff;
+    background: #fff;
+    border: 2px solid #ddd;
+    border-bottom: 2px solid #fff;
+    margin-bottom: -2px;
+}
+
 .flashes {
     list-style: none;
     margin: 0 0 20px;
@@ -37,6 +59,16 @@ body {
     border-radius: 4px;
     margin-bottom: 8px;
 }
+.flashes li.sucesso {
+    background: #d1e7dd;
+    border-color: #a3cfbb;
+    color: #0f5132;
+}
+.flashes li.erro {
+    background: #f8d7da;
+    border-color: #f1aeb5;
+    color: #842029;
+}
 
 form {
     background: #fff;
@@ -45,6 +77,8 @@ form {
     margin-bottom: 30px;
     display: flex;
     gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
 input, select, button {
@@ -70,6 +104,7 @@ th, td {
     border-bottom: 1px solid #ddd;
     text-align: left;
 }
+
 .form-inline {
     display: inline;
     background: none;
@@ -77,8 +112,13 @@ th, td {
     box-shadow: none;
     margin: 0;
 }
-.btn-concluir {
-    background: #28a745;
+.acoes {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+.btn-acao {
     text-decoration: none;
     padding: 5px 10px;
     color: white;
@@ -86,5 +126,51 @@ th, td {
     font-size: 12px;
     border: none;
     cursor: pointer;
+    display: inline-block;
 }
+.btn-concluir { background: #28a745; }
 .btn-concluir:hover { background: #1e7e34; }
+.btn-reabrir { background: #6c757d; }
+.btn-reabrir:hover { background: #565e64; }
+.btn-editar { background: #007bff; }
+.btn-editar:hover { background: #0056b3; }
+.btn-excluir { background: #dc3545; }
+.btn-excluir:hover { background: #b02a37; }
+.btn-cancelar { background: #6c757d; }
+.btn-cancelar:hover { background: #565e64; }
+.btn-exportar { background: #17a2b8; padding: 8px 14px; font-size: 14px; }
+.btn-exportar:hover { background: #117a8b; }
+
+.form-coluna {
+    flex-direction: column;
+    align-items: stretch;
+    max-width: 400px;
+}
+.form-coluna label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 14px;
+    color: #555;
+}
+.form-acoes {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-top: 10px;
+}
+
+.form-filtro label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 13px;
+    color: #555;
+}
+
+.exportar {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 20px;
+}

@@ -1,0 +1,43 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2>Editar Lançamento</h2>
+
+<form action="{{ url_for('editar', id=t.id) }}" method="POST" class="form-coluna">
+    <label>
+        Tipo
+        <select name="tipo" required>
+            <option value="Receber" {{ 'selected' if t.tipo == 'Receber' else '' }}>Conta a Receber</option>
+            <option value="Pagar" {{ 'selected' if t.tipo == 'Pagar' else '' }}>Conta a Pagar</option>
+        </select>
+    </label>
+
+    <label>
+        Descrição
+        <input type="text" name="descricao" value="{{ t.descricao }}" maxlength="100" required>
+    </label>
+
+    <label>
+        Valor (R$)
+        <input type="number" step="0.01" min="0.01" name="valor" value="{{ t.valor }}" required>
+    </label>
+
+    <label>
+        Vencimento
+        <input type="date" name="data_vencimento" value="{{ t.data_vencimento.isoformat() }}" required>
+    </label>
+
+    <label>
+        Status
+        <select name="status" required>
+            <option value="Pendente" {{ 'selected' if t.status == 'Pendente' else '' }}>Pendente</option>
+            <option value="Concluído" {{ 'selected' if t.status == 'Concluído' else '' }}>Concluído</option>
+        </select>
+    </label>
+
+    <div class="form-acoes">
+        <button type="submit">Salvar Alterações</button>
+        <a href="{{ url_for('index') }}" class="btn-acao btn-cancelar">Cancelar</a>
+    </div>
+</form>
+{% endblock %}

@@ -1,6 +1,13 @@
 # ERP Financeiro (Contas a Pagar/Receber)
 
-Aplicação Flask simples para controle de contas a pagar e a receber.
+Aplicação Flask simples para controle de contas a pagar e a receber, com
+duas abas:
+
+- **Lançamentos**: cadastro de contas a pagar/receber, com editar, excluir,
+  dar baixa e reabrir.
+- **Relatório por Período**: filtro por data inicial/final (e status),
+  mostrando total de entradas, saídas e o saldo do período, com exportação
+  em CSV ou Excel (XLSX).
 
 ## Como gerar o executável (.exe) no Windows
 
@@ -57,10 +64,23 @@ Bugs/riscos corrigidos em relação à versão original enviada:
 - Pequenos ajustes de validação no formulário (`min="0.01"` no valor,
   `maxlength="100"` na descrição).
 
+## Melhorias adicionadas depois da revisão inicial
+
+- **Editar e excluir lançamentos**: cada linha da tabela agora tem os botões
+  "Editar" (altera tipo, descrição, valor, vencimento e status) e "Excluir"
+  (com confirmação, pois não pode ser desfeito). Também foi adicionado
+  "Reabrir" para voltar um lançamento concluído para "Pendente".
+- **Aba "Relatório por Período"**: filtre os lançamentos por data inicial,
+  data final e status (Todos/Pendente/Concluído). Mostra o total de
+  entradas, total de saídas e o saldo (entradas − saídas) do período.
+- **Exportação CSV/XLSX**: na aba de relatório, os botões "Baixar CSV" e
+  "Baixar Excel (XLSX)" exportam exatamente os lançamentos filtrados na
+  tela. O CSV usa `;` como separador e vírgula decimal (padrão do Excel
+  em português) e inclui BOM para os acentos abrirem corretamente.
+
 ## Limitações conhecidas (fora do escopo desta revisão)
 
 - Não há autenticação/login — qualquer pessoa com acesso à máquina/rede onde
   o programa roda pode ver e editar os lançamentos. Adequado para uso local
   de um único usuário; não exponha essa porta na internet.
-- Não há edição/exclusão de lançamentos, apenas inclusão e "dar baixa".
 - Banco de dados local (SQLite), sem sincronização entre computadores.

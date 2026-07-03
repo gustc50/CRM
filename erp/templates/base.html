@@ -9,15 +9,22 @@
 <body>
     <div class="container">
         <h1>Gestão Financeira</h1>
-        {% with messages = get_flashed_messages() %}
+
+        <nav class="tabs">
+            <a href="{{ url_for('index') }}" class="{{ 'active' if request.endpoint in ('index', 'editar') else '' }}">Lançamentos</a>
+            <a href="{{ url_for('relatorio') }}" class="{{ 'active' if request.endpoint == 'relatorio' else '' }}">Relatório por Período</a>
+        </nav>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
             <ul class="flashes">
-                {% for message in messages %}
-                <li>{{ message }}</li>
+                {% for categoria, mensagem in messages %}
+                <li class="{{ categoria }}">{{ mensagem }}</li>
                 {% endfor %}
             </ul>
             {% endif %}
         {% endwith %}
+
         {% block content %}{% endblock %}
     </div>
 </body>
