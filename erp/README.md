@@ -1,13 +1,17 @@
 # ERP Financeiro (Contas a Pagar/Receber)
 
 Aplicação Flask simples para controle de contas a pagar e a receber, com
-duas abas:
+quatro abas:
 
 - **Lançamentos**: cadastro de contas a pagar/receber, com editar, excluir,
   dar baixa e reabrir.
 - **Relatório por Período**: filtro por data inicial/final (e status),
   mostrando total de entradas, saídas e o saldo do período, com exportação
   em CSV ou Excel (XLSX).
+- **Fornecedores** e **Clientes**: cadastro simples (CNPJ/CPF, nome,
+  endereço) com editar e excluir. Por enquanto são cadastros
+  independentes — a seleção de fornecedor/cliente dentro de um lançamento
+  ainda não está integrada ao formulário de Lançamentos.
 
 ## Como gerar o executável (.exe) no Windows
 
@@ -77,6 +81,18 @@ Bugs/riscos corrigidos em relação à versão original enviada:
   "Baixar Excel (XLSX)" exportam exatamente os lançamentos filtrados na
   tela. O CSV usa `;` como separador e vírgula decimal (padrão do Excel
   em português) e inclui BOM para os acentos abrirem corretamente.
+
+## Segunda rodada de melhorias
+
+- **Data de Pagamento**: nova coluna nos lançamentos, preenchida
+  automaticamente com a data de hoje ao clicar em "Dar Baixa" (e limpa ao
+  clicar em "Reabrir"). Também pode ser ajustada manualmente na tela de
+  Editar. Bancos `erp.db` já existentes (de uma versão anterior) são
+  migrados automaticamente na primeira vez que o app roda — a coluna é
+  adicionada sem apagar nenhum lançamento já cadastrado.
+- **Abas Fornecedores e Clientes**: cadastro com CNPJ/CPF (validado por
+  quantidade de dígitos: 11 para CPF, 14 para CNPJ), nome e endereço.
+  Mesma dinâmica de listar/adicionar/editar/excluir da aba de Lançamentos.
 
 ## Limitações conhecidas (fora do escopo desta revisão)
 

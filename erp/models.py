@@ -9,4 +9,19 @@ class Transacao(db.Model):
     descricao = db.Column(db.String(100), nullable=False)
     valor = db.Column(db.Float, nullable=False)
     data_vencimento = db.Column(db.Date, nullable=False)
+    data_pagamento = db.Column(db.Date, nullable=True)
     status = db.Column(db.String(20), default='Pendente')  # 'Pendente' ou 'Concluído'
+
+
+class Fornecedor(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    cnpj_cpf = db.Column(db.String(20), nullable=False)
+    nome = db.Column(db.String(150), nullable=False)
+    endereco = db.Column(db.String(200), nullable=False)
+
+
+class Cliente(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    cnpj_cpf = db.Column(db.String(20), nullable=False)
+    nome = db.Column(db.String(150), nullable=False)
+    endereco = db.Column(db.String(200), nullable=False)

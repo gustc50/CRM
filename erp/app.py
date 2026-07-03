@@ -1,6 +1,7 @@
 import csv
 import io
 import os
+import re
 import sys
 import threading
 import webbrowser
@@ -10,7 +11,7 @@ from flask import Flask, Response, flash, redirect, render_template, request, ur
 from openpyxl import Workbook
 from openpyxl.styles import Font
 
-from models import db, Transacao
+from models import Cliente, Fornecedor, Transacao, db
 
 TIPOS_VALIDOS = {'Receber', 'Pagar'}
 STATUS_VALIDOS = {'Pendente', 'Concluído'}
@@ -51,8 +52,21 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.secret_key = os.urandom(24)  # suficiente para assinar as mensagens flash desta sessão
 db.init_app(app)
 
+
+def migrar_schema():
+    """Adiciona colunas novas em bancos criados por versões anteriores do app."""
+    inspector = db.inspect(db.engine)
+    if 'transacao' not in inspector.get_table_names():
+        return
+    colunas = {c['name'] for c in inspector.get_columns('transacao')}
+    if 'data_pagamento' not in colunas:
+        with db.engine.begin() as conn:
+            conn.execute(db.text('ALTER TABLE transacao ADD COLUMN data_pagamento DATE'))
+
+
 with app.app_context():
     db.create_all()
+    migrar_schema()
 
 
 def validar_transacao(form):
@@ -88,6 +102,93 @@ def validar_transacao(form):
         'data_vencimento': data_vencimento,
     }
     return dados, None
+
+
+def validar_cadastro(form):
+    """Valida os campos comuns ao cadastro de fornecedor/cliente."""
+    cnpj_cpf = form.get('cnpj_cpf', '').strip()
+    nome = form.get('nome', '').strip()
+    endereco = form.get('endereco', '').strip()
+
+    digitos = re.sub(r'\D', '', cnpj_cpf)
+    if len(digitos) not in (11, 14):
+        return None, 'CNPJ/CPF inválido (informe 11 dígitos para CPF ou 14 para CNPJ).'
+
+    if not nome or len(nome) > 150:
+        return None, 'Nome obrigatório (até 150 caracteres).'
+
+    if not endereco or len(endereco) > 200:
+        return None, 'Endereço obrigatório (até 200 caracteres).'
+
+    dados = {'cnpj_cpf': cnpj_cpf, 'nome': nome, 'endereco': endereco}
+    return dados, None
+
+
+def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo):
+    """Registra as rotas de listar/adicionar/editar/excluir para um cadastro
+    simples (CNPJ/CPF, nome, endereço). Fornecedores e clientes usam
+    exatamente a mesma lógica, então as rotas são geradas uma única vez
+    aqui e reaproveitadas para os dois.
+    """
+
+    def listar():
+        registros = model.query.order_by(model.nome).all()
+        return render_template(
+            'cadastro.html',
+            registros=registros,
+            titulo=nome_plural,
+            titulo_singular=nome_singular,
+            prefixo=prefixo,
+        )
+
+    def adicionar():
+        dados, erro = validar_cadastro(request.form)
+        if erro:
+            flash(erro, 'erro')
+        else:
+            db.session.add(model(**dados))
+            db.session.commit()
+            flash(f'{nome_singular} cadastrado com sucesso.', 'sucesso')
+        return redirect(url_for(f'{prefixo}_listar'))
+
+    def editar(id):
+        registro = model.query.get_or_404(id)
+
+        if request.method == 'POST':
+            dados, erro = validar_cadastro(request.form)
+            if erro:
+                flash(erro, 'erro')
+                return redirect(url_for(f'{prefixo}_editar', id=id))
+
+            registro.cnpj_cpf = dados['cnpj_cpf']
+            registro.nome = dados['nome']
+            registro.endereco = dados['endereco']
+            db.session.commit()
+            flash(f'{nome_singular} atualizado com sucesso.', 'sucesso')
+            return redirect(url_for(f'{prefixo}_listar'))
+
+        return render_template(
+            'cadastro_editar.html',
+            registro=registro,
+            titulo_singular=nome_singular,
+            prefixo=prefixo,
+        )
+
+    def excluir(id):
+        registro = model.query.get_or_404(id)
+        db.session.delete(registro)
+        db.session.commit()
+        flash(f'{nome_singular} excluído.', 'sucesso')
+        return redirect(url_for(f'{prefixo}_listar'))
+
+    app.add_url_rule(f'/{prefixo}', f'{prefixo}_listar', listar, methods=['GET'])
+    app.add_url_rule(f'/{prefixo}/adicionar', f'{prefixo}_adicionar', adicionar, methods=['POST'])
+    app.add_url_rule(f'/{prefixo}/editar/<int:id>', f'{prefixo}_editar', editar, methods=['GET', 'POST'])
+    app.add_url_rule(f'/{prefixo}/excluir/<int:id>', f'{prefixo}_excluir', excluir, methods=['POST'])
+
+
+registrar_rotas_cadastro(Fornecedor, 'Fornecedor', 'Fornecedores', 'fornecedores')
+registrar_rotas_cadastro(Cliente, 'Cliente', 'Clientes', 'clientes')
 
 
 def parse_data(valor):
@@ -160,11 +261,20 @@ def editar(id):
             flash('Status inválido.', 'erro')
             return redirect(url_for('editar', id=id))
 
+        data_pagamento_str = request.form.get('data_pagamento', '').strip()
+        data_pagamento = None
+        if data_pagamento_str:
+            data_pagamento = parse_data(data_pagamento_str)
+            if not data_pagamento:
+                flash('Data de pagamento inválida.', 'erro')
+                return redirect(url_for('editar', id=id))
+
         transacao.tipo = dados['tipo']
         transacao.descricao = dados['descricao']
         transacao.valor = dados['valor']
         transacao.data_vencimento = dados['data_vencimento']
         transacao.status = status
+        transacao.data_pagamento = data_pagamento
         db.session.commit()
         flash('Lançamento atualizado com sucesso.', 'sucesso')
         return redirect(url_for('index'))
@@ -185,6 +295,7 @@ def excluir(id):
 def concluir(id):
     transacao = Transacao.query.get_or_404(id)
     transacao.status = 'Concluído'
+    transacao.data_pagamento = datetime.now().date()
     db.session.commit()
     return redirect(url_for('index'))
 
@@ -193,6 +304,7 @@ def concluir(id):
 def reabrir(id):
     transacao = Transacao.query.get_or_404(id)
     transacao.status = 'Pendente'
+    transacao.data_pagamento = None
     db.session.commit()
     return redirect(url_for('index'))
 
@@ -226,12 +338,13 @@ def _exportar_csv(transacoes, nome_arquivo):
     buffer = io.StringIO()
     buffer.write('﻿')  # BOM para o Excel abrir acentos corretamente
     writer = csv.writer(buffer, delimiter=';')
-    writer.writerow(['Descrição', 'Tipo', 'Vencimento', 'Valor', 'Status'])
+    writer.writerow(['Descrição', 'Tipo', 'Vencimento', 'Pagamento', 'Valor', 'Status'])
     for t in transacoes:
         writer.writerow([
             t.descricao,
             t.tipo,
             t.data_vencimento.strftime('%d/%m/%Y'),
+            t.data_pagamento.strftime('%d/%m/%Y') if t.data_pagamento else '',
             f'{t.valor:.2f}'.replace('.', ','),
             t.status,
         ])
@@ -248,7 +361,7 @@ def _exportar_xlsx(transacoes, nome_arquivo):
     ws = wb.active
     ws.title = 'Lançamentos'
 
-    ws.append(['Descrição', 'Tipo', 'Vencimento', 'Valor (R$)', 'Status'])
+    ws.append(['Descrição', 'Tipo', 'Vencimento', 'Pagamento', 'Valor (R$)', 'Status'])
     for celula in ws[1]:
         celula.font = Font(bold=True)
 
@@ -257,12 +370,13 @@ def _exportar_xlsx(transacoes, nome_arquivo):
             t.descricao,
             t.tipo,
             t.data_vencimento.strftime('%d/%m/%Y'),
+            t.data_pagamento.strftime('%d/%m/%Y') if t.data_pagamento else '',
             t.valor,
             t.status,
         ])
 
-    larguras = [30, 12, 14, 14, 14]
-    for coluna, largura in zip('ABCDE', larguras):
+    larguras = [30, 12, 14, 14, 14, 14]
+    for coluna, largura in zip('ABCDEF', larguras):
         ws.column_dimensions[coluna].width = largura
 
     buffer = io.BytesIO()

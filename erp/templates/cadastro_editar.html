@@ -1,0 +1,27 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2>Editar {{ titulo_singular }}</h2>
+
+<form action="{{ url_for(prefixo + '_editar', id=registro.id) }}" method="POST" class="form-coluna">
+    <label>
+        CNPJ/CPF
+        <input type="text" name="cnpj_cpf" value="{{ registro.cnpj_cpf }}" maxlength="20" required>
+    </label>
+
+    <label>
+        Nome
+        <input type="text" name="nome" value="{{ registro.nome }}" maxlength="150" required>
+    </label>
+
+    <label>
+        Endereço
+        <input type="text" name="endereco" value="{{ registro.endereco }}" maxlength="200" required>
+    </label>
+
+    <div class="form-acoes">
+        <button type="submit">Salvar Alterações</button>
+        <a href="{{ url_for(prefixo + '_listar') }}" class="btn-acao btn-cancelar">Cancelar</a>
+    </div>
+</form>
+{% endblock %}

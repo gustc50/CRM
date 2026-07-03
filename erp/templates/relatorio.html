@@ -52,6 +52,7 @@
             <th>Descrição</th>
             <th>Tipo</th>
             <th>Vencimento</th>
+            <th>Pagamento</th>
             <th>Valor</th>
             <th>Status</th>
         </tr>
@@ -62,12 +63,13 @@
             <td>{{ t.descricao }}</td>
             <td style="color: {{ '#28a745' if t.tipo == 'Receber' else '#dc3545' }}">{{ t.tipo }}</td>
             <td>{{ t.data_vencimento.strftime('%d/%m/%Y') }}</td>
+            <td>{{ t.data_pagamento.strftime('%d/%m/%Y') if t.data_pagamento else '—' }}</td>
             <td>R$ {{ "%.2f"|format(t.valor) }}</td>
             <td>{{ t.status }}</td>
         </tr>
         {% else %}
         <tr>
-            <td colspan="5">Nenhum lançamento encontrado no período selecionado.</td>
+            <td colspan="6">Nenhum lançamento encontrado no período selecionado.</td>
         </tr>
         {% endfor %}
     </tbody>

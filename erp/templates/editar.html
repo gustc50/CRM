@@ -35,6 +35,11 @@
         </select>
     </label>
 
+    <label>
+        Data de Pagamento (opcional)
+        <input type="date" name="data_pagamento" value="{{ t.data_pagamento.isoformat() if t.data_pagamento else '' }}">
+    </label>
+
     <div class="form-acoes">
         <button type="submit">Salvar Alterações</button>
         <a href="{{ url_for('index') }}" class="btn-acao btn-cancelar">Cancelar</a>
