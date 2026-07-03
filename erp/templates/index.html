@@ -1,0 +1,56 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="dashboard">
+    <div class="card receber">
+        <h3>A Receber (Pendentes)</h3>
+        <h2>R$ {{ "%.2f"|format(total_receber) }}</h2>
+    </div>
+    <div class="card pagar">
+        <h3>A Pagar (Pendentes)</h3>
+        <h2>R$ {{ "%.2f"|format(total_pagar) }}</h2>
+    </div>
+</div>
+
+<form action="{{ url_for('adicionar') }}" method="POST">
+    <select name="tipo" required>
+        <option value="Receber">Conta a Receber</option>
+        <option value="Pagar">Conta a Pagar</option>
+    </select>
+    <input type="text" name="descricao" placeholder="Descrição (ex: Aluguel)" maxlength="100" required>
+    <input type="number" step="0.01" min="0.01" name="valor" placeholder="Valor (R$)" required>
+    <input type="date" name="data_vencimento" required>
+    <button type="submit">Adicionar Lançamento</button>
+</form>
+
+<table>
+    <thead>
+        <tr>
+            <th>Descrição</th>
+            <th>Tipo</th>
+            <th>Vencimento</th>
+            <th>Valor</th>
+            <th>Status</th>
+            <th>Ação</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for t in transacoes %}
+        <tr>
+            <td>{{ t.descricao }}</td>
+            <td style="color: {{ '#28a745' if t.tipo == 'Receber' else '#dc3545' }}">{{ t.tipo }}</td>
+            <td>{{ t.data_vencimento.strftime('%d/%m/%Y') }}</td>
+            <td>R$ {{ "%.2f"|format(t.valor) }}</td>
+            <td>{{ t.status }}</td>
+            <td>
+                {% if t.status == 'Pendente' %}
+                <form action="{{ url_for('concluir', id=t.id) }}" method="POST" class="form-inline">
+                    <button type="submit" class="btn-concluir">Dar Baixa</button>
+                </form>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}
