@@ -6,9 +6,29 @@
 <form action="{{ url_for('editar', id=t.id) }}" method="POST" class="form-coluna">
     <label>
         Tipo
-        <select name="tipo" required>
+        <select name="tipo" id="tipo-select" required>
             <option value="Receber" {{ 'selected' if t.tipo == 'Receber' else '' }}>Conta a Receber</option>
             <option value="Pagar" {{ 'selected' if t.tipo == 'Pagar' else '' }}>Conta a Pagar</option>
+        </select>
+    </label>
+
+    <label>
+        Fornecedor
+        <select name="fornecedor_id" id="fornecedor-select" class="{{ '' if t.tipo == 'Pagar' else 'campo-oculto' }}" {{ '' if t.tipo == 'Pagar' else 'disabled' }}>
+            <option value="">Selecione o fornecedor...</option>
+            {% for f in fornecedores %}
+            <option value="{{ f.id }}" {{ 'selected' if t.fornecedor_id == f.id else '' }}>{{ f.nome }}</option>
+            {% endfor %}
+        </select>
+    </label>
+
+    <label>
+        Cliente
+        <select name="cliente_id" id="cliente-select" class="{{ '' if t.tipo == 'Receber' else 'campo-oculto' }}" {{ '' if t.tipo == 'Receber' else 'disabled' }}>
+            <option value="">Selecione o cliente...</option>
+            {% for c in clientes %}
+            <option value="{{ c.id }}" {{ 'selected' if t.cliente_id == c.id else '' }}>{{ c.nome }}</option>
+            {% endfor %}
         </select>
     </label>
 

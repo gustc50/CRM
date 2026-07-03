@@ -12,10 +12,29 @@
     </div>
 </div>
 
+{% if not fornecedores or not clientes %}
+<p class="aviso-cadastro">
+    {% if not fornecedores %}Cadastre pelo menos um <a href="{{ url_for('fornecedores_listar') }}">fornecedor</a> para lançar contas a pagar.{% endif %}
+    {% if not clientes %}Cadastre pelo menos um <a href="{{ url_for('clientes_listar') }}">cliente</a> para lançar contas a receber.{% endif %}
+</p>
+{% endif %}
+
 <form action="{{ url_for('adicionar') }}" method="POST">
-    <select name="tipo" required>
+    <select name="tipo" id="tipo-select" required>
         <option value="Receber">Conta a Receber</option>
         <option value="Pagar">Conta a Pagar</option>
+    </select>
+    <select name="fornecedor_id" id="fornecedor-select" class="campo-oculto" disabled>
+        <option value="">Selecione o fornecedor...</option>
+        {% for f in fornecedores %}
+        <option value="{{ f.id }}">{{ f.nome }}</option>
+        {% endfor %}
+    </select>
+    <select name="cliente_id" id="cliente-select" required>
+        <option value="">Selecione o cliente...</option>
+        {% for c in clientes %}
+        <option value="{{ c.id }}">{{ c.nome }}</option>
+        {% endfor %}
     </select>
     <input type="text" name="descricao" placeholder="Descrição (ex: Aluguel)" maxlength="100" required>
     <input type="number" step="0.01" min="0.01" name="valor" placeholder="Valor (R$)" required>
@@ -23,11 +42,13 @@
     <button type="submit">Adicionar Lançamento</button>
 </form>
 
+<div class="table-scroll">
 <table>
     <thead>
         <tr>
             <th>Descrição</th>
             <th>Tipo</th>
+            <th>Fornecedor/Cliente</th>
             <th>Vencimento</th>
             <th>Pagamento</th>
             <th>Valor</th>
@@ -40,6 +61,7 @@
         <tr>
             <td>{{ t.descricao }}</td>
             <td style="color: {{ '#28a745' if t.tipo == 'Receber' else '#dc3545' }}">{{ t.tipo }}</td>
+            <td>{{ nome_entidade(t) or '—' }}</td>
             <td>{{ t.data_vencimento.strftime('%d/%m/%Y') }}</td>
             <td>{{ t.data_pagamento.strftime('%d/%m/%Y') if t.data_pagamento else '—' }}</td>
             <td>R$ {{ "%.2f"|format(t.valor) }}</td>
@@ -64,4 +86,5 @@
         {% endfor %}
     </tbody>
 </table>
+</div>
 {% endblock %}

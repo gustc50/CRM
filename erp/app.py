@@ -59,9 +59,16 @@ def migrar_schema():
     if 'transacao' not in inspector.get_table_names():
         return
     colunas = {c['name'] for c in inspector.get_columns('transacao')}
-    if 'data_pagamento' not in colunas:
+    comandos = {
+        'data_pagamento': 'ALTER TABLE transacao ADD COLUMN data_pagamento DATE',
+        'fornecedor_id': 'ALTER TABLE transacao ADD COLUMN fornecedor_id INTEGER',
+        'cliente_id': 'ALTER TABLE transacao ADD COLUMN cliente_id INTEGER',
+    }
+    pendentes = [sql for coluna, sql in comandos.items() if coluna not in colunas]
+    if pendentes:
         with db.engine.begin() as conn:
-            conn.execute(db.text('ALTER TABLE transacao ADD COLUMN data_pagamento DATE'))
+            for sql in pendentes:
+                conn.execute(db.text(sql))
 
 
 with app.app_context():
@@ -95,13 +102,45 @@ def validar_transacao(form):
     except (TypeError, ValueError):
         return None, 'Data de vencimento inválida.'
 
+    fornecedor_id = None
+    cliente_id = None
+
+    if tipo == 'Pagar':
+        fornecedor_id = _validar_id_existente(form.get('fornecedor_id', ''), Fornecedor)
+        if fornecedor_id is None:
+            return None, 'Selecione um fornecedor.'
+    else:
+        cliente_id = _validar_id_existente(form.get('cliente_id', ''), Cliente)
+        if cliente_id is None:
+            return None, 'Selecione um cliente.'
+
     dados = {
         'tipo': tipo,
         'descricao': descricao,
         'valor': valor,
         'data_vencimento': data_vencimento,
+        'fornecedor_id': fornecedor_id,
+        'cliente_id': cliente_id,
     }
     return dados, None
+
+
+def _validar_id_existente(valor, model):
+    """Confirma que o id recebido do <select> corresponde a um registro real."""
+    if not valor or not valor.isdigit():
+        return None
+    registro = model.query.get(int(valor))
+    return registro.id if registro else None
+
+
+def nome_entidade(transacao):
+    """Nome do fornecedor (contas a pagar) ou cliente (contas a receber) do lançamento."""
+    if transacao.tipo == 'Pagar':
+        return transacao.fornecedor.nome if transacao.fornecedor else ''
+    return transacao.cliente.nome if transacao.cliente else ''
+
+
+app.jinja_env.globals['nome_entidade'] = nome_entidade
 
 
 def validar_cadastro(form):
@@ -124,11 +163,15 @@ def validar_cadastro(form):
     return dados, None
 
 
-def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo):
+def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo, coluna_fk):
     """Registra as rotas de listar/adicionar/editar/excluir para um cadastro
     simples (CNPJ/CPF, nome, endereço). Fornecedores e clientes usam
     exatamente a mesma lógica, então as rotas são geradas uma única vez
     aqui e reaproveitadas para os dois.
+
+    `coluna_fk` é a coluna de Transacao que referencia esse cadastro
+    (Transacao.fornecedor_id ou Transacao.cliente_id), usada para impedir
+    a exclusão de um registro que já está vinculado a algum lançamento.
     """
 
     def listar():
@@ -176,6 +219,15 @@ def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo):
 
     def excluir(id):
         registro = model.query.get_or_404(id)
+
+        em_uso = Transacao.query.filter(coluna_fk == id).first() is not None
+        if em_uso:
+            flash(
+                f'Não é possível excluir: existem lançamentos vinculados a este {nome_singular.lower()}.',
+                'erro',
+            )
+            return redirect(url_for(f'{prefixo}_listar'))
+
         db.session.delete(registro)
         db.session.commit()
         flash(f'{nome_singular} excluído.', 'sucesso')
@@ -187,8 +239,8 @@ def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo):
     app.add_url_rule(f'/{prefixo}/excluir/<int:id>', f'{prefixo}_excluir', excluir, methods=['POST'])
 
 
-registrar_rotas_cadastro(Fornecedor, 'Fornecedor', 'Fornecedores', 'fornecedores')
-registrar_rotas_cadastro(Cliente, 'Cliente', 'Clientes', 'clientes')
+registrar_rotas_cadastro(Fornecedor, 'Fornecedor', 'Fornecedores', 'fornecedores', Transacao.fornecedor_id)
+registrar_rotas_cadastro(Cliente, 'Cliente', 'Clientes', 'clientes', Transacao.cliente_id)
 
 
 def parse_data(valor):
@@ -226,11 +278,20 @@ def transacoes_do_periodo(inicio, fim, status_filtro):
 @app.route('/')
 def index():
     transacoes = Transacao.query.order_by(Transacao.data_vencimento).all()
+    fornecedores = Fornecedor.query.order_by(Fornecedor.nome).all()
+    clientes = Cliente.query.order_by(Cliente.nome).all()
 
     total_receber = sum(t.valor for t in transacoes if t.tipo == 'Receber' and t.status == 'Pendente')
     total_pagar = sum(t.valor for t in transacoes if t.tipo == 'Pagar' and t.status == 'Pendente')
 
-    return render_template('index.html', transacoes=transacoes, total_receber=total_receber, total_pagar=total_pagar)
+    return render_template(
+        'index.html',
+        transacoes=transacoes,
+        total_receber=total_receber,
+        total_pagar=total_pagar,
+        fornecedores=fornecedores,
+        clientes=clientes,
+    )
 
 
 @app.route('/adicionar', methods=['POST'])
@@ -275,11 +336,15 @@ def editar(id):
         transacao.data_vencimento = dados['data_vencimento']
         transacao.status = status
         transacao.data_pagamento = data_pagamento
+        transacao.fornecedor_id = dados['fornecedor_id']
+        transacao.cliente_id = dados['cliente_id']
         db.session.commit()
         flash('Lançamento atualizado com sucesso.', 'sucesso')
         return redirect(url_for('index'))
 
-    return render_template('editar.html', t=transacao)
+    fornecedores = Fornecedor.query.order_by(Fornecedor.nome).all()
+    clientes = Cliente.query.order_by(Cliente.nome).all()
+    return render_template('editar.html', t=transacao, fornecedores=fornecedores, clientes=clientes)
 
 
 @app.route('/excluir/<int:id>', methods=['POST'])
@@ -338,11 +403,12 @@ def _exportar_csv(transacoes, nome_arquivo):
     buffer = io.StringIO()
     buffer.write('﻿')  # BOM para o Excel abrir acentos corretamente
     writer = csv.writer(buffer, delimiter=';')
-    writer.writerow(['Descrição', 'Tipo', 'Vencimento', 'Pagamento', 'Valor', 'Status'])
+    writer.writerow(['Descrição', 'Tipo', 'Fornecedor/Cliente', 'Vencimento', 'Pagamento', 'Valor', 'Status'])
     for t in transacoes:
         writer.writerow([
             t.descricao,
             t.tipo,
+            nome_entidade(t),
             t.data_vencimento.strftime('%d/%m/%Y'),
             t.data_pagamento.strftime('%d/%m/%Y') if t.data_pagamento else '',
             f'{t.valor:.2f}'.replace('.', ','),
@@ -361,7 +427,7 @@ def _exportar_xlsx(transacoes, nome_arquivo):
     ws = wb.active
     ws.title = 'Lançamentos'
 
-    ws.append(['Descrição', 'Tipo', 'Vencimento', 'Pagamento', 'Valor (R$)', 'Status'])
+    ws.append(['Descrição', 'Tipo', 'Fornecedor/Cliente', 'Vencimento', 'Pagamento', 'Valor (R$)', 'Status'])
     for celula in ws[1]:
         celula.font = Font(bold=True)
 
@@ -369,14 +435,15 @@ def _exportar_xlsx(transacoes, nome_arquivo):
         ws.append([
             t.descricao,
             t.tipo,
+            nome_entidade(t),
             t.data_vencimento.strftime('%d/%m/%Y'),
             t.data_pagamento.strftime('%d/%m/%Y') if t.data_pagamento else '',
             t.valor,
             t.status,
         ])
 
-    larguras = [30, 12, 14, 14, 14, 14]
-    for coluna, largura in zip('ABCDEF', larguras):
+    larguras = [30, 12, 24, 14, 14, 14, 14]
+    for coluna, largura in zip('ABCDEFG', larguras):
         ws.column_dimensions[coluna].width = largura
 
     buffer = io.BytesIO()

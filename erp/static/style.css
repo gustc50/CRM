@@ -174,3 +174,24 @@ th, td {
     align-items: center;
     margin-bottom: 20px;
 }
+
+.campo-oculto {
+    display: none;
+}
+
+.aviso-cadastro {
+    background: #cff4fc;
+    border: 1px solid #9eeaf9;
+    color: #055160;
+    padding: 10px 15px;
+    border-radius: 4px;
+    margin-bottom: 20px;
+}
+.aviso-cadastro a { color: #055160; font-weight: bold; }
+
+.table-scroll {
+    overflow-x: auto;
+}
+.table-scroll table {
+    min-width: 720px;
+}

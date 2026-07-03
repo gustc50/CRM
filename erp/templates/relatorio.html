@@ -46,11 +46,13 @@
        href="{{ url_for('exportar_relatorio', formato='xlsx', inicio=inicio.isoformat(), fim=fim.isoformat(), status=status_filtro) }}">Baixar Excel (XLSX)</a>
 </div>
 
+<div class="table-scroll">
 <table>
     <thead>
         <tr>
             <th>Descrição</th>
             <th>Tipo</th>
+            <th>Fornecedor/Cliente</th>
             <th>Vencimento</th>
             <th>Pagamento</th>
             <th>Valor</th>
@@ -62,6 +64,7 @@
         <tr>
             <td>{{ t.descricao }}</td>
             <td style="color: {{ '#28a745' if t.tipo == 'Receber' else '#dc3545' }}">{{ t.tipo }}</td>
+            <td>{{ nome_entidade(t) or '—' }}</td>
             <td>{{ t.data_vencimento.strftime('%d/%m/%Y') }}</td>
             <td>{{ t.data_pagamento.strftime('%d/%m/%Y') if t.data_pagamento else '—' }}</td>
             <td>R$ {{ "%.2f"|format(t.valor) }}</td>
@@ -69,9 +72,10 @@
         </tr>
         {% else %}
         <tr>
-            <td colspan="6">Nenhum lançamento encontrado no período selecionado.</td>
+            <td colspan="7">Nenhum lançamento encontrado no período selecionado.</td>
         </tr>
         {% endfor %}
     </tbody>
 </table>
+</div>
 {% endblock %}
