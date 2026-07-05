@@ -7,15 +7,26 @@
     <input type="text" name="cnpj_cpf" placeholder="CNPJ ou CPF" maxlength="20" required>
     <input type="text" name="nome" placeholder="Nome" maxlength="150" required>
     <input type="text" name="endereco" placeholder="Endereço" maxlength="200" required>
+    <input type="text" name="telefone" placeholder="Telefone (opcional)" maxlength="20">
+    <input type="email" name="email" placeholder="E-mail (opcional)" maxlength="150">
     <button type="submit">Adicionar {{ titulo_singular }}</button>
 </form>
 
+<div class="exportar">
+    <span>Exportar {{ titulo|lower }}:</span>
+    <a class="btn-acao btn-exportar" href="{{ url_for(prefixo + '_exportar', formato='csv') }}">Baixar CSV</a>
+    <a class="btn-acao btn-exportar" href="{{ url_for(prefixo + '_exportar', formato='xlsx') }}">Baixar Excel (XLSX)</a>
+</div>
+
+<div class="table-scroll">
 <table>
     <thead>
         <tr>
             <th>CNPJ/CPF</th>
             <th>Nome</th>
             <th>Endereço</th>
+            <th>Telefone</th>
+            <th>E-mail</th>
             <th>Ação</th>
         </tr>
     </thead>
@@ -25,6 +36,8 @@
             <td>{{ r.cnpj_cpf }}</td>
             <td>{{ r.nome }}</td>
             <td>{{ r.endereco }}</td>
+            <td>{{ r.telefone or '—' }}</td>
+            <td>{{ r.email or '—' }}</td>
             <td class="acoes">
                 <a href="{{ url_for(prefixo + '_editar', id=r.id) }}" class="btn-acao btn-editar">Editar</a>
                 <form action="{{ url_for(prefixo + '_excluir', id=r.id) }}" method="POST" class="form-inline"
@@ -35,9 +48,10 @@
         </tr>
         {% else %}
         <tr>
-            <td colspan="4">Nenhum {{ titulo_singular|lower }} cadastrado.</td>
+            <td colspan="6">Nenhum {{ titulo_singular|lower }} cadastrado.</td>
         </tr>
         {% endfor %}
     </tbody>
 </table>
+</div>
 {% endblock %}

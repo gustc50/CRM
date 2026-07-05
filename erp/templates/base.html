@@ -13,8 +13,11 @@
         <nav class="tabs">
             <a href="{{ url_for('index') }}" class="{{ 'active' if request.endpoint in ('index', 'editar') else '' }}">Lançamentos</a>
             <a href="{{ url_for('relatorio') }}" class="{{ 'active' if request.endpoint == 'relatorio' else '' }}">Relatório por Período</a>
+            <a href="{{ url_for('recorrentes_listar') }}" class="{{ 'active' if request.endpoint in ('recorrentes_listar', 'recorrentes_editar') else '' }}">Recorrentes</a>
             <a href="{{ url_for('fornecedores_listar') }}" class="{{ 'active' if request.endpoint in ('fornecedores_listar', 'fornecedores_editar') else '' }}">Fornecedores</a>
             <a href="{{ url_for('clientes_listar') }}" class="{{ 'active' if request.endpoint in ('clientes_listar', 'clientes_editar') else '' }}">Clientes</a>
+            <a href="{{ url_for('categorias_listar') }}" class="{{ 'active' if request.endpoint in ('categorias_listar', 'categorias_editar') else '' }}">Categorias</a>
+            <a href="{{ url_for('contas_listar') }}" class="{{ 'active' if request.endpoint in ('contas_listar', 'contas_editar') else '' }}">Contas</a>
         </nav>
 
         {% with messages = get_flashed_messages(with_categories=true) %}

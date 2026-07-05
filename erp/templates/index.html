@@ -36,10 +36,56 @@
         <option value="{{ c.id }}">{{ c.nome }}</option>
         {% endfor %}
     </select>
+    <select name="categoria_id">
+        <option value="">Sem categoria</option>
+        {% for c in categorias %}
+        <option value="{{ c.id }}">{{ c.nome }}</option>
+        {% endfor %}
+    </select>
+    <select name="conta_bancaria_id">
+        <option value="">Sem conta</option>
+        {% for c in contas_bancarias %}
+        <option value="{{ c.id }}">{{ c.nome }}</option>
+        {% endfor %}
+    </select>
     <input type="text" name="descricao" placeholder="Descrição (ex: Aluguel)" maxlength="100" required>
     <input type="number" step="0.01" min="0.01" name="valor" placeholder="Valor (R$)" required>
     <input type="date" name="data_vencimento" required>
     <button type="submit">Adicionar Lançamento</button>
+</form>
+
+<form action="{{ url_for('index') }}" method="GET" class="form-filtro">
+    <label>
+        Buscar
+        <input type="text" name="busca" value="{{ busca }}" placeholder="Descrição, fornecedor ou cliente...">
+    </label>
+    <label>
+        Tipo
+        <select name="filtro_tipo">
+            <option value="Todos" {{ 'selected' if filtro_tipo == 'Todos' else '' }}>Todos</option>
+            <option value="Receber" {{ 'selected' if filtro_tipo == 'Receber' else '' }}>Receber</option>
+            <option value="Pagar" {{ 'selected' if filtro_tipo == 'Pagar' else '' }}>Pagar</option>
+        </select>
+    </label>
+    <label>
+        Status
+        <select name="filtro_status">
+            <option value="Todos" {{ 'selected' if filtro_status == 'Todos' else '' }}>Todos</option>
+            <option value="Pendente" {{ 'selected' if filtro_status == 'Pendente' else '' }}>Pendente</option>
+            <option value="Concluído" {{ 'selected' if filtro_status == 'Concluído' else '' }}>Concluído</option>
+        </select>
+    </label>
+    <label>
+        Categoria
+        <select name="filtro_categoria">
+            <option value="">Todas</option>
+            {% for c in categorias %}
+            <option value="{{ c.id }}" {{ 'selected' if filtro_categoria == c.id|string else '' }}>{{ c.nome }}</option>
+            {% endfor %}
+        </select>
+    </label>
+    <button type="submit">Buscar</button>
+    <a href="{{ url_for('index') }}" class="btn-acao btn-cancelar">Limpar</a>
 </form>
 
 <div class="table-scroll">
@@ -49,6 +95,8 @@
             <th>Descrição</th>
             <th>Tipo</th>
             <th>Fornecedor/Cliente</th>
+            <th>Categoria</th>
+            <th>Conta</th>
             <th>Vencimento</th>
             <th>Pagamento</th>
             <th>Valor</th>
@@ -58,14 +106,19 @@
     </thead>
     <tbody>
         {% for t in transacoes %}
-        <tr>
+        <tr class="{{ 'atrasado' if t.status == 'Pendente' and t.data_vencimento < hoje else '' }}">
             <td>{{ t.descricao }}</td>
             <td style="color: {{ '#28a745' if t.tipo == 'Receber' else '#dc3545' }}">{{ t.tipo }}</td>
             <td>{{ nome_entidade(t) or '—' }}</td>
+            <td>{{ t.categoria.nome if t.categoria else '—' }}</td>
+            <td>{{ t.conta_bancaria.nome if t.conta_bancaria else '—' }}</td>
             <td>{{ t.data_vencimento.strftime('%d/%m/%Y') }}</td>
             <td>{{ t.data_pagamento.strftime('%d/%m/%Y') if t.data_pagamento else '—' }}</td>
             <td>R$ {{ "%.2f"|format(t.valor) }}</td>
-            <td>{{ t.status }}</td>
+            <td>
+                {{ t.status }}
+                {% if t.status == 'Pendente' and t.data_vencimento < hoje %}<span class="badge-atrasado">Atrasado</span>{% endif %}
+            </td>
             <td class="acoes">
                 {% if t.status == 'Pendente' %}
                 <button type="button" class="btn-acao btn-concluir" onclick="document.getElementById('dialogo-baixa-{{ t.id }}').showModal()">Dar Baixa</button>
@@ -88,11 +141,18 @@
                 </form>
                 {% endif %}
                 <a href="{{ url_for('editar', id=t.id) }}" class="btn-acao btn-editar">Editar</a>
+                {% if t.anexo_arquivo %}
+                <a href="{{ url_for('baixar_anexo', id=t.id) }}" class="btn-acao btn-anexo" target="_blank" title="Ver anexo">📎</a>
+                {% endif %}
                 <form action="{{ url_for('excluir', id=t.id) }}" method="POST" class="form-inline"
                       onsubmit="return confirm('Excluir o lançamento \'{{ t.descricao }}\'? Essa ação não pode ser desfeita.');">
                     <button type="submit" class="btn-acao btn-excluir">Excluir</button>
                 </form>
             </td>
+        </tr>
+        {% else %}
+        <tr>
+            <td colspan="10">Nenhum lançamento encontrado.</td>
         </tr>
         {% endfor %}
     </tbody>

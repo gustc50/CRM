@@ -15,6 +15,17 @@ function atualizarCampoEntidade() {
     clienteSelect.classList.toggle('campo-oculto', ehPagar);
     clienteSelect.disabled = ehPagar;
     clienteSelect.required = !ehPagar;
+
+    // Quando o <select> está dentro de um <label> próprio (telas de edição),
+    // esconde o rótulo inteiro para não deixar o texto "órfão" na tela.
+    var fornecedorCampo = document.getElementById('fornecedor-campo');
+    var clienteCampo = document.getElementById('cliente-campo');
+    if (fornecedorCampo) {
+        fornecedorCampo.classList.toggle('campo-oculto', !ehPagar);
+    }
+    if (clienteCampo) {
+        clienteCampo.classList.toggle('campo-oculto', ehPagar);
+    }
 }
 
 document.addEventListener('DOMContentLoaded', function () {

@@ -1,0 +1,17 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2>Editar {{ titulo_singular }}</h2>
+
+<form action="{{ url_for(prefixo + '_editar', id=registro.id) }}" method="POST" class="form-coluna">
+    <label>
+        Nome
+        <input type="text" name="nome" value="{{ registro.nome }}" maxlength="80" required>
+    </label>
+
+    <div class="form-acoes">
+        <button type="submit">Salvar Alterações</button>
+        <a href="{{ url_for(prefixo + '_listar') }}" class="btn-acao btn-cancelar">Cancelar</a>
+    </div>
+</form>
+{% endblock %}

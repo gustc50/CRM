@@ -6,7 +6,7 @@ body {
     color: #333;
 }
 .container {
-    max-width: 1000px;
+    max-width: 1200px;
     margin: auto;
 }
 .dashboard {
@@ -26,6 +26,7 @@ body {
 
 .tabs {
     display: flex;
+    flex-wrap: wrap;
     gap: 5px;
     margin-bottom: 20px;
     border-bottom: 2px solid #ddd;
@@ -176,7 +177,7 @@ th, td {
 }
 
 .campo-oculto {
-    display: none;
+    display: none !important;
 }
 
 .aviso-cadastro {
@@ -193,7 +194,74 @@ th, td {
     overflow-x: auto;
 }
 .table-scroll table {
-    min-width: 720px;
+    min-width: 900px;
+}
+
+tr.atrasado {
+    background: #fff5f5;
+}
+.badge-atrasado {
+    background: #dc3545;
+    color: #fff;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    margin-left: 4px;
+}
+
+.atalhos-periodo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 15px;
+}
+.btn-atalho {
+    background: #6c757d;
+    padding: 6px 12px;
+}
+.btn-atalho:hover {
+    background: #565e64;
+}
+
+.checkbox-inline {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+    color: #555;
+}
+.checkbox-inline input {
+    width: auto;
+    padding: 0;
+}
+
+.anexo-atual {
+    font-size: 14px;
+    color: #555;
+}
+
+.btn-anexo {
+    background: #6c757d;
+    padding: 5px 8px;
+}
+.btn-anexo:hover {
+    background: #565e64;
+}
+
+.form-inline-bloco {
+    display: block;
+    margin-bottom: 15px;
+}
+.form-inline-bloco button {
+    background: #17a2b8;
+}
+.form-inline-bloco button:hover {
+    background: #117a8b;
+}
+
+input[name="dia_vencimento"] {
+    min-width: 110px;
 }
 
 dialog.dialogo-baixa {

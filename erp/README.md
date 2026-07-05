@@ -1,16 +1,23 @@
 # ERP Financeiro (Contas a Pagar/Receber)
 
 Aplicação Flask simples para controle de contas a pagar e a receber, com
-quatro abas:
+seis abas:
 
-- **Lançamentos**: cadastro de contas a pagar/receber, com editar, excluir,
-  dar baixa e reabrir.
-- **Relatório por Período**: filtro por data inicial/final (e status),
-  mostrando total de entradas, saídas e o saldo do período, com exportação
-  em CSV ou Excel (XLSX).
-- **Fornecedores** e **Clientes**: cadastro simples (CNPJ/CPF, nome,
-  endereço) com editar e excluir. Cada lançamento de "Conta a Pagar" é
-  vinculado a um fornecedor, e cada "Conta a Receber" a um cliente.
+- **Lançamentos**: cadastro de contas a pagar/receber, com busca/filtro,
+  editar, excluir, dar baixa e reabrir. Contas vencidas e ainda pendentes
+  aparecem destacadas com um selo "Atrasado".
+- **Relatório por Período**: filtro por data inicial/final, status,
+  categoria e conta, mostrando total de entradas, saídas e o saldo do
+  período, com atalhos de fluxo de caixa projetado (7/15/30 dias) e
+  exportação em CSV ou Excel (XLSX).
+- **Recorrentes**: lançamentos que se repetem todo mês (aluguel, salários),
+  gerados automaticamente.
+- **Fornecedores** e **Clientes**: cadastro (CNPJ/CPF, nome, endereço,
+  telefone, e-mail) com editar, excluir e exportação em CSV/XLSX. Cada
+  lançamento de "Conta a Pagar" é vinculado a um fornecedor, e cada
+  "Conta a Receber" a um cliente.
+- **Categorias** e **Contas** (bancárias/caixa): cadastros simples usados
+  para classificar os lançamentos.
 
 ## Como gerar o executável (.exe) no Windows
 
@@ -32,6 +39,9 @@ Ao rodar o `.exe`:
 - Um arquivo `erp.db` (banco de dados SQLite) é criado **ao lado do .exe** na
   primeira execução. Esse arquivo guarda todos os lançamentos — faça backup
   dele periodicamente (ex.: copiar para um pendrive/nuvem) e não delete.
+- Uma pasta `anexos` também é criada ao lado do `.exe`, guardando os
+  comprovantes/notas fiscais anexados aos lançamentos. Inclua-a no backup
+  junto com o `erp.db`.
 
 ## Rodar em modo desenvolvimento (sem gerar .exe)
 
@@ -125,6 +135,44 @@ Bugs/riscos corrigidos em relação à versão original enviada:
 - A baixa só é registrada depois que essa data é confirmada; se o campo
   vier vazio ou inválido, o sistema recusa com uma mensagem de erro, sem
   marcar o lançamento como concluído.
+
+## Quinta rodada: Financeiro, Usabilidade e Cadastros
+
+**Financeiro**
+- **Categorias** (aba "Categorias"): classifique cada lançamento (Aluguel,
+  Salários, Vendas...). Campo opcional no formulário de lançamento; filtra
+  tanto a lista de Lançamentos quanto o Relatório por Período.
+- **Contas bancárias/caixa** (aba "Contas"): identifique de qual conta
+  saiu ou entrou o dinheiro. Também opcional e filtrável.
+- **Lançamentos recorrentes** (aba "Recorrentes"): cadastre uma conta que
+  se repete todo mês (tipo, fornecedor/cliente, categoria, valor e dia do
+  vencimento). O sistema gera o lançamento do mês automaticamente sempre
+  que o programa é aberto — e se ficar dias ou meses sem abrir, ele
+  "coloca em dia" gerando os meses que faltaram, sem duplicar nada. Também
+  dá para forçar a geração na hora pelo botão "Gerar Lançamentos Agora".
+- **Fluxo de caixa projetado**: na aba de Relatório, os atalhos "Próximos
+  7/15/30 dias" mostram o que está para vencer, com o saldo projetado.
+
+**Usabilidade no dia a dia**
+- **Busca e filtro** na aba Lançamentos: por texto (descrição, fornecedor
+  ou cliente), tipo, status e categoria — sem afetar os totais do
+  dashboard, que continuam somando tudo.
+- **Alerta de atraso**: lançamento Pendente com vencimento no passado
+  ganha destaque visual (linha rosada) e o selo "Atrasado" ao lado do status.
+- **Anexo de comprovante/nota fiscal**: na tela de Editar, anexe um PDF ou
+  imagem (até 10 MB) a qualquer lançamento; um ícone 📎 na tabela abre o
+  arquivo. Também é possível remover o anexo. Excluir o lançamento apaga
+  o arquivo correspondente do disco.
+
+**Cadastros**
+- **Telefone e e-mail** nos cadastros de Fornecedor e Cliente (opcionais;
+  e-mail é validado em formato básico).
+- **Exportar Fornecedores/Clientes** em CSV ou Excel (XLSX), com os mesmos
+  botões usados no Relatório.
+
+Bancos `erp.db` de versões anteriores continuam funcionando: todas as
+tabelas e colunas novas são criadas/migradas automaticamente na primeira
+vez que a nova versão roda, sem perda de nenhum dado já cadastrado.
 
 ## Limitações conhecidas (fora do escopo desta revisão)
 

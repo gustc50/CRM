@@ -19,6 +19,16 @@
         <input type="text" name="endereco" value="{{ registro.endereco }}" maxlength="200" required>
     </label>
 
+    <label>
+        Telefone (opcional)
+        <input type="text" name="telefone" value="{{ registro.telefone or '' }}" maxlength="20">
+    </label>
+
+    <label>
+        E-mail (opcional)
+        <input type="email" name="email" value="{{ registro.email or '' }}" maxlength="150">
+    </label>
+
     <div class="form-acoes">
         <button type="submit">Salvar Alterações</button>
         <a href="{{ url_for(prefixo + '_listar') }}" class="btn-acao btn-cancelar">Cancelar</a>

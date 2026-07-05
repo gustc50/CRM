@@ -1,9 +1,9 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<h2>Editar Lançamento</h2>
+<h2>Editar Lançamento Recorrente</h2>
 
-<form action="{{ url_for('editar', id=t.id) }}" method="POST" enctype="multipart/form-data" class="form-coluna">
+<form action="{{ url_for('recorrentes_editar', id=t.id) }}" method="POST" class="form-coluna">
     <label>
         Tipo
         <select name="tipo" id="tipo-select" required>
@@ -63,37 +63,17 @@
     </label>
 
     <label>
-        Vencimento
-        <input type="date" name="data_vencimento" value="{{ t.data_vencimento.isoformat() }}" required>
+        Dia do vencimento (1 a 31)
+        <input type="number" name="dia_vencimento" min="1" max="31" value="{{ t.dia_vencimento }}" required>
     </label>
 
-    <label>
-        Status
-        <select name="status" required>
-            <option value="Pendente" {{ 'selected' if t.status == 'Pendente' else '' }}>Pendente</option>
-            <option value="Concluído" {{ 'selected' if t.status == 'Concluído' else '' }}>Concluído</option>
-        </select>
+    <label class="checkbox-inline">
+        <input type="checkbox" name="ativo" {{ 'checked' if t.ativo else '' }}> Ativo
     </label>
-
-    <label>
-        Data de Pagamento (opcional)
-        <input type="date" name="data_pagamento" value="{{ t.data_pagamento.isoformat() if t.data_pagamento else '' }}">
-    </label>
-
-    <label>
-        Anexo (comprovante/nota fiscal — PDF, PNG, JPG, GIF ou WEBP, até 10 MB)
-        <input type="file" name="anexo" accept=".pdf,.png,.jpg,.jpeg,.gif,.webp">
-    </label>
-    {% if t.anexo_arquivo %}
-    <p class="anexo-atual">
-        Anexo atual: <a href="{{ url_for('baixar_anexo', id=t.id) }}" target="_blank">{{ t.anexo_nome_original }}</a><br>
-        <label class="checkbox-inline"><input type="checkbox" name="remover_anexo"> Remover anexo</label>
-    </p>
-    {% endif %}
 
     <div class="form-acoes">
         <button type="submit">Salvar Alterações</button>
-        <a href="{{ url_for('index') }}" class="btn-acao btn-cancelar">Cancelar</a>
+        <a href="{{ url_for('recorrentes_listar') }}" class="btn-acao btn-cancelar">Cancelar</a>
     </div>
 </form>
 {% endblock %}

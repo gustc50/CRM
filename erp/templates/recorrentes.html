@@ -1,0 +1,91 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2>Lançamentos Recorrentes</h2>
+<p class="aviso-cadastro">
+    Cadastre aqui contas que se repetem todo mês (aluguel, salários, mensalidades...).
+    O sistema gera automaticamente o lançamento do mês assim que o programa é aberto,
+    ou você pode forçar a geração agora pelo botão abaixo.
+</p>
+
+<form action="{{ url_for('recorrentes_gerar') }}" method="POST" class="form-inline-bloco">
+    <button type="submit">Gerar Lançamentos Agora</button>
+</form>
+
+<form action="{{ url_for('recorrentes_adicionar') }}" method="POST">
+    <select name="tipo" id="tipo-select" required>
+        <option value="Receber">Conta a Receber</option>
+        <option value="Pagar">Conta a Pagar</option>
+    </select>
+    <select name="fornecedor_id" id="fornecedor-select" class="campo-oculto" disabled>
+        <option value="">Selecione o fornecedor...</option>
+        {% for f in fornecedores %}
+        <option value="{{ f.id }}">{{ f.nome }}</option>
+        {% endfor %}
+    </select>
+    <select name="cliente_id" id="cliente-select" required>
+        <option value="">Selecione o cliente...</option>
+        {% for c in clientes %}
+        <option value="{{ c.id }}">{{ c.nome }}</option>
+        {% endfor %}
+    </select>
+    <select name="categoria_id">
+        <option value="">Sem categoria</option>
+        {% for c in categorias %}
+        <option value="{{ c.id }}">{{ c.nome }}</option>
+        {% endfor %}
+    </select>
+    <select name="conta_bancaria_id">
+        <option value="">Sem conta</option>
+        {% for c in contas_bancarias %}
+        <option value="{{ c.id }}">{{ c.nome }}</option>
+        {% endfor %}
+    </select>
+    <input type="text" name="descricao" placeholder="Descrição (ex: Aluguel)" maxlength="100" required>
+    <input type="number" step="0.01" min="0.01" name="valor" placeholder="Valor (R$)" required>
+    <input type="number" name="dia_vencimento" min="1" max="31" placeholder="Dia (1-31)" required>
+    <label class="checkbox-inline"><input type="checkbox" name="ativo" checked> Ativo</label>
+    <button type="submit">Adicionar Recorrência</button>
+</form>
+
+<div class="table-scroll">
+<table>
+    <thead>
+        <tr>
+            <th>Descrição</th>
+            <th>Tipo</th>
+            <th>Fornecedor/Cliente</th>
+            <th>Categoria</th>
+            <th>Dia Venc.</th>
+            <th>Valor</th>
+            <th>Ativo</th>
+            <th>Ação</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for r in registros %}
+        <tr>
+            <td>{{ r.descricao }}</td>
+            <td style="color: {{ '#28a745' if r.tipo == 'Receber' else '#dc3545' }}">{{ r.tipo }}</td>
+            <td>{{ r.fornecedor.nome if r.tipo == 'Pagar' and r.fornecedor else (r.cliente.nome if r.cliente else '—') }}</td>
+            <td>{{ r.categoria.nome if r.categoria else '—' }}</td>
+            <td>{{ r.dia_vencimento }}</td>
+            <td>R$ {{ "%.2f"|format(r.valor) }}</td>
+            <td>{{ 'Sim' if r.ativo else 'Não' }}</td>
+            <td class="acoes">
+                <a href="{{ url_for('recorrentes_editar', id=r.id) }}" class="btn-acao btn-editar">Editar</a>
+                <form action="{{ url_for('recorrentes_excluir', id=r.id) }}" method="POST" class="form-inline"
+                      onsubmit="return confirm('Excluir a recorrência \'{{ r.descricao }}\'? Essa ação não pode ser desfeita.');">
+                    <button type="submit" class="btn-acao btn-excluir">Excluir</button>
+                </form>
+            </td>
+        </tr>
+        {% else %}
+        <tr>
+            <td colspan="8">Nenhum lançamento recorrente cadastrado.</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endblock %}

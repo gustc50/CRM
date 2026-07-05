@@ -3,6 +3,13 @@
 {% block content %}
 <h2>Relatório por Período</h2>
 
+<div class="atalhos-periodo">
+    <span>Fluxo de caixa projetado:</span>
+    {% for a in atalhos %}
+    <a class="btn-acao btn-atalho" href="{{ url_for('relatorio', inicio=a.inicio.isoformat(), fim=a.fim.isoformat(), status='Pendente') }}">{{ a.label }}</a>
+    {% endfor %}
+</div>
+
 <form action="{{ url_for('relatorio') }}" method="GET" class="form-filtro">
     <label>
         De
@@ -18,6 +25,24 @@
             <option value="Todos" {{ 'selected' if status_filtro == 'Todos' else '' }}>Todos</option>
             <option value="Pendente" {{ 'selected' if status_filtro == 'Pendente' else '' }}>Pendente</option>
             <option value="Concluído" {{ 'selected' if status_filtro == 'Concluído' else '' }}>Concluído</option>
+        </select>
+    </label>
+    <label>
+        Categoria
+        <select name="categoria">
+            <option value="">Todas</option>
+            {% for c in categorias %}
+            <option value="{{ c.id }}" {{ 'selected' if categoria_filtro == c.id|string else '' }}>{{ c.nome }}</option>
+            {% endfor %}
+        </select>
+    </label>
+    <label>
+        Conta
+        <select name="conta">
+            <option value="">Todas</option>
+            {% for c in contas_bancarias %}
+            <option value="{{ c.id }}" {{ 'selected' if conta_filtro == c.id|string else '' }}>{{ c.nome }}</option>
+            {% endfor %}
         </select>
     </label>
     <button type="submit">Filtrar</button>
@@ -41,9 +66,9 @@
 <div class="exportar">
     <span>Exportar período selecionado:</span>
     <a class="btn-acao btn-exportar"
-       href="{{ url_for('exportar_relatorio', formato='csv', inicio=inicio.isoformat(), fim=fim.isoformat(), status=status_filtro) }}">Baixar CSV</a>
+       href="{{ url_for('exportar_relatorio', formato='csv', inicio=inicio.isoformat(), fim=fim.isoformat(), status=status_filtro, categoria=categoria_filtro, conta=conta_filtro) }}">Baixar CSV</a>
     <a class="btn-acao btn-exportar"
-       href="{{ url_for('exportar_relatorio', formato='xlsx', inicio=inicio.isoformat(), fim=fim.isoformat(), status=status_filtro) }}">Baixar Excel (XLSX)</a>
+       href="{{ url_for('exportar_relatorio', formato='xlsx', inicio=inicio.isoformat(), fim=fim.isoformat(), status=status_filtro, categoria=categoria_filtro, conta=conta_filtro) }}">Baixar Excel (XLSX)</a>
 </div>
 
 <div class="table-scroll">
@@ -53,6 +78,8 @@
             <th>Descrição</th>
             <th>Tipo</th>
             <th>Fornecedor/Cliente</th>
+            <th>Categoria</th>
+            <th>Conta</th>
             <th>Vencimento</th>
             <th>Pagamento</th>
             <th>Valor</th>
@@ -61,18 +88,23 @@
     </thead>
     <tbody>
         {% for t in transacoes %}
-        <tr>
+        <tr class="{{ 'atrasado' if t.status == 'Pendente' and t.data_vencimento < hoje else '' }}">
             <td>{{ t.descricao }}</td>
             <td style="color: {{ '#28a745' if t.tipo == 'Receber' else '#dc3545' }}">{{ t.tipo }}</td>
             <td>{{ nome_entidade(t) or '—' }}</td>
+            <td>{{ t.categoria.nome if t.categoria else '—' }}</td>
+            <td>{{ t.conta_bancaria.nome if t.conta_bancaria else '—' }}</td>
             <td>{{ t.data_vencimento.strftime('%d/%m/%Y') }}</td>
             <td>{{ t.data_pagamento.strftime('%d/%m/%Y') if t.data_pagamento else '—' }}</td>
             <td>R$ {{ "%.2f"|format(t.valor) }}</td>
-            <td>{{ t.status }}</td>
+            <td>
+                {{ t.status }}
+                {% if t.status == 'Pendente' and t.data_vencimento < hoje %}<span class="badge-atrasado">Atrasado</span>{% endif %}
+            </td>
         </tr>
         {% else %}
         <tr>
-            <td colspan="7">Nenhum lançamento encontrado no período selecionado.</td>
+            <td colspan="9">Nenhum lançamento encontrado no período selecionado.</td>
         </tr>
         {% endfor %}
     </tbody>
