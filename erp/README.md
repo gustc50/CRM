@@ -116,6 +116,16 @@ Bugs/riscos corrigidos em relação à versão original enviada:
   lançamentos antigos, criados antes dessa integração, ficam sem
   fornecedor/cliente vinculado e mostram "—" nas telas.
 
+## Quarta rodada: confirmação da data de pagamento ao dar baixa
+
+- Antes, "Dar Baixa" gravava a data de hoje automaticamente. Agora, ao
+  clicar em "Dar Baixa", abre uma janela pedindo para informar a data em
+  que o pagamento foi efetivamente realizado (já vem preenchida com a
+  data de hoje, mas pode ser alterada antes de confirmar).
+- A baixa só é registrada depois que essa data é confirmada; se o campo
+  vier vazio ou inválido, o sistema recusa com uma mensagem de erro, sem
+  marcar o lançamento como concluído.
+
 ## Limitações conhecidas (fora do escopo desta revisão)
 
 - Não há autenticação/login — qualquer pessoa com acesso à máquina/rede onde

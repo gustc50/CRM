@@ -291,6 +291,7 @@ def index():
         total_pagar=total_pagar,
         fornecedores=fornecedores,
         clientes=clientes,
+        hoje=datetime.now().date(),
     )
 
 
@@ -359,8 +360,14 @@ def excluir(id):
 @app.route('/concluir/<int:id>', methods=['POST'])
 def concluir(id):
     transacao = Transacao.query.get_or_404(id)
+
+    data_pagamento = parse_data(request.form.get('data_pagamento', '').strip())
+    if not data_pagamento:
+        flash('Informe a data em que o pagamento foi realizado para dar baixa.', 'erro')
+        return redirect(url_for('index'))
+
     transacao.status = 'Concluído'
-    transacao.data_pagamento = datetime.now().date()
+    transacao.data_pagamento = data_pagamento
     db.session.commit()
     return redirect(url_for('index'))
 

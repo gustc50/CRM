@@ -68,9 +68,20 @@
             <td>{{ t.status }}</td>
             <td class="acoes">
                 {% if t.status == 'Pendente' %}
-                <form action="{{ url_for('concluir', id=t.id) }}" method="POST" class="form-inline">
-                    <button type="submit" class="btn-acao btn-concluir">Dar Baixa</button>
-                </form>
+                <button type="button" class="btn-acao btn-concluir" onclick="document.getElementById('dialogo-baixa-{{ t.id }}').showModal()">Dar Baixa</button>
+                <dialog id="dialogo-baixa-{{ t.id }}" class="dialogo-baixa">
+                    <form action="{{ url_for('concluir', id=t.id) }}" method="POST">
+                        <p>Em que data o pagamento de <strong>{{ t.descricao }}</strong> foi realizado?</p>
+                        <label>
+                            Data do pagamento
+                            <input type="date" name="data_pagamento" value="{{ hoje.isoformat() }}" required>
+                        </label>
+                        <div class="form-acoes">
+                            <button type="submit">Confirmar Baixa</button>
+                            <button type="button" class="btn-acao btn-cancelar" onclick="document.getElementById('dialogo-baixa-{{ t.id }}').close()">Cancelar</button>
+                        </div>
+                    </form>
+                </dialog>
                 {% else %}
                 <form action="{{ url_for('reabrir', id=t.id) }}" method="POST" class="form-inline">
                     <button type="submit" class="btn-acao btn-reabrir">Reabrir</button>
