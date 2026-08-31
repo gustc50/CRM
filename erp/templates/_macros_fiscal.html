@@ -1,0 +1,55 @@
+{# Macros compartilhados pelos painéis de NFS-e e NF-e #}
+
+{% macro celula_lancamento(nota, url_gerar, voltar, hoje, cancelada) %}
+    {% if nota.transacao %}
+        {% if nota.transacao.status == 'Concluído' %}
+        <span class="badge-baixado">Baixado{% if nota.transacao.data_pagamento %} em {{ nota.transacao.data_pagamento.strftime('%d/%m/%Y') }}{% endif %}</span>
+        {% else %}
+        <span class="badge-pendente">Pendente</span>
+        <button type="button" class="btn-acao btn-concluir"
+                onclick="document.getElementById('dialogo-baixa-{{ nota.__tablename__ }}-{{ nota.id }}').showModal()">Dar Baixa</button>
+        <dialog id="dialogo-baixa-{{ nota.__tablename__ }}-{{ nota.id }}" class="dialogo-baixa">
+            <form action="{{ url_for('concluir', id=nota.transacao_id) }}" method="POST">
+                <input type="hidden" name="voltar" value="{{ voltar }}">
+                <p>Em que data o pagamento de <strong>{{ nota.transacao.descricao }}</strong> foi realizado?</p>
+                <label>
+                    Data do pagamento
+                    <input type="date" name="data_pagamento" value="{{ hoje.isoformat() }}" required>
+                </label>
+                <div class="form-acoes">
+                    <button type="submit">Confirmar Baixa</button>
+                    <button type="button" class="btn-acao btn-cancelar"
+                            onclick="document.getElementById('dialogo-baixa-{{ nota.__tablename__ }}-{{ nota.id }}').close()">Cancelar</button>
+                </div>
+            </form>
+        </dialog>
+        {% endif %}
+    {% elif cancelada %}
+        —
+    {% else %}
+        <form action="{{ url_gerar }}" method="POST" class="form-inline">
+            <input type="hidden" name="voltar" value="{{ voltar }}">
+            <button type="submit" class="btn-acao btn-gerar">Gerar Lançamento</button>
+        </form>
+    {% endif %}
+{% endmacro %}
+
+{% macro barra_sincronizacao(url_sincronizar, url_status, sync, ultima_sync, ultimo_status, rotulo) %}
+<div class="sync-fiscal" id="sync-fiscal" data-url="{{ url_status }}" data-estado="{{ sync.estado }}">
+    <form action="{{ url_sincronizar }}" method="POST" class="form-inline">
+        <button type="submit" class="btn-sincronizar" {{ 'disabled' if sync.estado == 'executando' else '' }}>
+            {{ 'Sincronizando...' if sync.estado == 'executando' else '⟳ ' + rotulo }}
+        </button>
+    </form>
+    <div class="sync-info">
+        {% if sync.estado == 'executando' %}
+        <span id="sync-mensagem">{{ sync.mensagem }}</span>
+        {% else %}
+        <span>
+            {% if ultima_sync %}Última sincronização: {{ ultima_sync }}.{% else %}Nenhuma sincronização feita ainda.{% endif %}
+            {% if ultimo_status %}<br><small>{{ ultimo_status }}</small>{% endif %}
+        </span>
+        {% endif %}
+    </div>
+</div>
+{% endmacro %}

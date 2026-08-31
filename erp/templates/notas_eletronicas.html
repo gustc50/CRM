@@ -1,0 +1,128 @@
+{% extends 'base.html' %}
+{% import '_macros_fiscal.html' as fiscal %}
+
+{% block content %}
+<h2>Notas Fiscais Eletrônicas (NF-e)</h2>
+
+{% set voltar = request.path ~ '?inicio=' ~ inicio.isoformat() ~ '&fim=' ~ fim.isoformat() %}
+
+{% if not cert_ok %}
+<p class="aviso-cadastro">
+    Para baixar as notas automaticamente, configure o certificado digital A1 na aba
+    <a href="{{ url_for('configuracoes') }}">⚙ Configurações</a>.
+</p>
+{% else %}
+{{ fiscal.barra_sincronizacao(url_for('nfe_sincronizar'), url_for('nfe_status_sincronizacao'), sync, ultima_sync, ultimo_status, 'Sincronizar NF-e') }}
+{% if minutos_espera > 0 and sync.estado != 'executando' %}
+<div class="aviso-cadastro aviso-espera">
+    <span>A SEFAZ exige intervalo de 1 hora entre consultas sem novidade — próxima consulta liberada em ~{{ minutos_espera }} min.</span>
+    <form action="{{ url_for('nfe_sincronizar') }}" method="POST" class="form-inline">
+        <input type="hidden" name="forcar" value="1">
+        <button type="submit" class="btn-acao btn-cancelar">Forçar mesmo assim</button>
+    </form>
+</div>
+{% endif %}
+{% endif %}
+
+<form action="{{ url_for('notas_eletronicas') }}" method="GET" class="form-filtro">
+    <label>
+        De
+        <input type="date" name="inicio" value="{{ inicio.isoformat() }}">
+    </label>
+    <label>
+        Até
+        <input type="date" name="fim" value="{{ fim.isoformat() }}">
+    </label>
+    <button type="submit">Filtrar</button>
+</form>
+
+<h3 class="titulo-secao receber">📤 A Receber — notas emitidas pela empresa</h3>
+<p class="totais-fiscais">
+    {{ totais_emitidas.qtde }} nota(s) ·
+    Total: R$ {{ "%.2f"|format(totais_emitidas.valor) }}
+</p>
+<div class="table-scroll">
+<table>
+    <thead>
+        <tr>
+            <th>Chave de Acesso</th>
+            <th>Destinatário (cliente)</th>
+            <th>Emissão</th>
+            <th>Valor</th>
+            <th>Situação</th>
+            <th>Tipo</th>
+            <th>Lançamento</th>
+            <th>Arquivos</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for n in emitidas %}
+        <tr class="{{ 'nota-cancelada' if n.situacao|string == '3' else '' }}">
+            <td class="chave-nfe" title="{{ n.chave }}">...{{ n.chave[-12:] }}</td>
+            <td>{{ n.dest_nome or n.dest_doc or '—' }}</td>
+            <td>{{ n.data_emissao.strftime('%d/%m/%Y') if n.data_emissao else '—' }}</td>
+            <td>R$ {{ "%.2f"|format(n.valor_total or 0) }}</td>
+            <td>
+                {% if n.situacao|string == '3' %}<span class="badge-cancelada">Cancelada</span>
+                {% else %}{{ situacao_nfe_texto(n.situacao) }}{% endif %}
+            </td>
+            <td>{{ 'Completa' if n.tipo_doc == 'nfeProc' else 'Resumo' }}</td>
+            <td class="acoes">
+                {{ fiscal.celula_lancamento(n, url_for('nfe_gerar_lancamento', id=n.id), voltar, hoje, n.situacao|string == '3') }}
+            </td>
+            <td class="acoes">
+                <a href="{{ url_for('nfe_baixar_xml', id=n.id) }}" class="btn-acao btn-arquivo">XML</a>
+            </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8">Nenhuma nota emitida no período selecionado.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
+<h3 class="titulo-secao pagar">📥 A Pagar — notas emitidas contra a empresa (compras)</h3>
+<p class="totais-fiscais">
+    {{ totais_recebidas.qtde }} nota(s) ·
+    Total: R$ {{ "%.2f"|format(totais_recebidas.valor) }}
+</p>
+<div class="table-scroll">
+<table>
+    <thead>
+        <tr>
+            <th>Chave de Acesso</th>
+            <th>Emitente (fornecedor)</th>
+            <th>Emissão</th>
+            <th>Valor</th>
+            <th>Situação</th>
+            <th>Tipo</th>
+            <th>Lançamento</th>
+            <th>Arquivos</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for n in recebidas %}
+        <tr class="{{ 'nota-cancelada' if n.situacao|string == '3' else '' }}">
+            <td class="chave-nfe" title="{{ n.chave }}">...{{ n.chave[-12:] }}</td>
+            <td>{{ n.emitente_nome or n.emitente_doc or '—' }}</td>
+            <td>{{ n.data_emissao.strftime('%d/%m/%Y') if n.data_emissao else '—' }}</td>
+            <td>R$ {{ "%.2f"|format(n.valor_total or 0) }}</td>
+            <td>
+                {% if n.situacao|string == '3' %}<span class="badge-cancelada">Cancelada</span>
+                {% else %}{{ situacao_nfe_texto(n.situacao) }}{% endif %}
+            </td>
+            <td>{{ 'Completa' if n.tipo_doc == 'nfeProc' else 'Resumo' }}</td>
+            <td class="acoes">
+                {{ fiscal.celula_lancamento(n, url_for('nfe_gerar_lancamento', id=n.id), voltar, hoje, n.situacao|string == '3') }}
+            </td>
+            <td class="acoes">
+                <a href="{{ url_for('nfe_baixar_xml', id=n.id) }}" class="btn-acao btn-arquivo">XML</a>
+            </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8">Nenhuma nota recebida no período selecionado.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endblock %}

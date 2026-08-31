@@ -1,0 +1,123 @@
+{% extends 'base.html' %}
+{% import '_macros_fiscal.html' as fiscal %}
+
+{% block content %}
+<h2>Notas Fiscais de Serviço (NFS-e)</h2>
+
+{% set voltar = request.path ~ '?inicio=' ~ inicio.isoformat() ~ '&fim=' ~ fim.isoformat() %}
+
+{% if not cert_ok %}
+<p class="aviso-cadastro">
+    Para baixar as notas automaticamente, configure o certificado digital A1 na aba
+    <a href="{{ url_for('configuracoes') }}">⚙ Configurações</a>.
+</p>
+{% else %}
+{{ fiscal.barra_sincronizacao(url_for('nfse_sincronizar'), url_for('nfse_status_sincronizacao'), sync, ultima_sync, ultimo_status, 'Sincronizar NFS-e') }}
+{% endif %}
+
+<form action="{{ url_for('notas_servico') }}" method="GET" class="form-filtro">
+    <label>
+        De
+        <input type="date" name="inicio" value="{{ inicio.isoformat() }}">
+    </label>
+    <label>
+        Até
+        <input type="date" name="fim" value="{{ fim.isoformat() }}">
+    </label>
+    <button type="submit">Filtrar</button>
+</form>
+
+<h3 class="titulo-secao receber">📤 A Receber — serviços prestados (notas emitidas)</h3>
+<p class="totais-fiscais">
+    {{ totais_emitidas.qtde }} nota(s) ativa(s) ·
+    Serviços: R$ {{ "%.2f"|format(totais_emitidas.valor) }} ·
+    ISS: R$ {{ "%.2f"|format(totais_emitidas.iss) }}
+</p>
+<div class="table-scroll">
+<table>
+    <thead>
+        <tr>
+            <th>Nº</th>
+            <th>Tomador (cliente)</th>
+            <th>Emissão</th>
+            <th>Valor Serviço</th>
+            <th>Líquido</th>
+            <th>Situação</th>
+            <th>Lançamento</th>
+            <th>Arquivos</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for n in emitidas %}
+        <tr class="{{ 'nota-cancelada' if n.situacao != 'ATIVA' else '' }}">
+            <td>{{ n.numero or '—' }}</td>
+            <td>{{ n.tomador_nome or n.tomador_doc or '—' }}</td>
+            <td>{{ n.data_emissao.strftime('%d/%m/%Y') if n.data_emissao else '—' }}</td>
+            <td>R$ {{ "%.2f"|format(n.valor_servico or 0) }}</td>
+            <td>R$ {{ "%.2f"|format(n.valor_liquido or 0) }}</td>
+            <td>
+                {% if n.situacao == 'ATIVA' %}Ativa
+                {% else %}<span class="badge-cancelada">{{ n.situacao|capitalize }}</span>{% endif %}
+            </td>
+            <td class="acoes">
+                {{ fiscal.celula_lancamento(n, url_for('nfse_gerar_lancamento', id=n.id), voltar, hoje, n.situacao != 'ATIVA') }}
+            </td>
+            <td class="acoes">
+                <a href="{{ url_for('nfse_baixar_xml', id=n.id) }}" class="btn-acao btn-arquivo">XML</a>
+                <a href="{{ url_for('nfse_baixar_danfse', id=n.id) }}" class="btn-acao btn-arquivo">PDF</a>
+            </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8">Nenhuma nota emitida no período selecionado.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
+<h3 class="titulo-secao pagar">📥 A Pagar — serviços tomados (notas recebidas)</h3>
+<p class="totais-fiscais">
+    {{ totais_recebidas.qtde }} nota(s) ativa(s) ·
+    Serviços: R$ {{ "%.2f"|format(totais_recebidas.valor) }} ·
+    ISS: R$ {{ "%.2f"|format(totais_recebidas.iss) }}
+</p>
+<div class="table-scroll">
+<table>
+    <thead>
+        <tr>
+            <th>Nº</th>
+            <th>Prestador (fornecedor)</th>
+            <th>Emissão</th>
+            <th>Valor Serviço</th>
+            <th>Líquido</th>
+            <th>Situação</th>
+            <th>Lançamento</th>
+            <th>Arquivos</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for n in recebidas %}
+        <tr class="{{ 'nota-cancelada' if n.situacao != 'ATIVA' else '' }}">
+            <td>{{ n.numero or '—' }}</td>
+            <td>{{ n.prestador_nome or n.prestador_doc or '—' }}</td>
+            <td>{{ n.data_emissao.strftime('%d/%m/%Y') if n.data_emissao else '—' }}</td>
+            <td>R$ {{ "%.2f"|format(n.valor_servico or 0) }}</td>
+            <td>R$ {{ "%.2f"|format(n.valor_liquido or 0) }}</td>
+            <td>
+                {% if n.situacao == 'ATIVA' %}Ativa
+                {% else %}<span class="badge-cancelada">{{ n.situacao|capitalize }}</span>{% endif %}
+            </td>
+            <td class="acoes">
+                {{ fiscal.celula_lancamento(n, url_for('nfse_gerar_lancamento', id=n.id), voltar, hoje, n.situacao != 'ATIVA') }}
+            </td>
+            <td class="acoes">
+                <a href="{{ url_for('nfse_baixar_xml', id=n.id) }}" class="btn-acao btn-arquivo">XML</a>
+                <a href="{{ url_for('nfse_baixar_danfse', id=n.id) }}" class="btn-acao btn-arquivo">PDF</a>
+            </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8">Nenhuma nota recebida no período selecionado.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endblock %}

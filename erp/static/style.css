@@ -295,3 +295,87 @@ dialog.dialogo-baixa label {
     font-size: 14px;
     color: #555;
 }
+
+/* ---- Notas fiscais (NFS-e / NF-e) e Configurações ---- */
+
+.sync-fiscal {
+    display: flex;
+    gap: 15px;
+    align-items: center;
+    background: #fff;
+    padding: 15px 20px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+.btn-sincronizar {
+    background: #17a2b8;
+    padding: 10px 18px;
+    font-size: 14px;
+    white-space: nowrap;
+}
+.btn-sincronizar:hover { background: #117a8b; }
+.btn-sincronizar:disabled { background: #8fd3dd; cursor: wait; }
+.sync-info { font-size: 13px; color: #555; }
+.sync-info small { color: #888; }
+
+.titulo-secao {
+    margin: 25px 0 5px;
+    padding-bottom: 5px;
+    border-bottom: 2px solid #ddd;
+}
+.titulo-secao.receber { color: #28a745; border-color: #28a745; }
+.titulo-secao.pagar { color: #dc3545; border-color: #dc3545; }
+
+.totais-fiscais {
+    color: #555;
+    font-size: 14px;
+    margin: 5px 0 10px;
+}
+
+tr.nota-cancelada td { color: #999; }
+tr.nota-cancelada { background: #fafafa; }
+
+.badge-cancelada {
+    background: #6c757d;
+    color: #fff;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+}
+.badge-pendente {
+    background: #ffc107;
+    color: #333;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+}
+.badge-baixado {
+    background: #28a745;
+    color: #fff;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+}
+
+.btn-gerar { background: #6f42c1; }
+.btn-gerar:hover { background: #59359a; }
+.btn-arquivo { background: #6c757d; }
+.btn-arquivo:hover { background: #565e64; }
+
+.chave-nfe {
+    font-family: monospace;
+    font-size: 12px;
+}
+
+.aviso-espera {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+}
+
+.form-config {
+    max-width: 560px;
+}

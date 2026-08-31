@@ -6,3 +6,6 @@ dist/
 *.spec
 erp.db
 anexos/
+certificados/
+.chave_secreta
+ca_extra.pem

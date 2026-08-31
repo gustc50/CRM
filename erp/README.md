@@ -18,6 +18,11 @@ seis abas:
   "Conta a Receber" a um cliente.
 - **Categorias** e **Contas** (bancárias/caixa): cadastros simples usados
   para classificar os lançamentos.
+- **NFS-e** e **NF-e**: notas fiscais baixadas automaticamente pelo
+  certificado digital A1, divididas em "A Receber" e "A Pagar", com
+  geração de lançamento em um clique.
+- **⚙ Configurações**: certificado digital, ambientes e controle de
+  sincronização.
 
 ## Como gerar o executável (.exe) no Windows
 
@@ -174,9 +179,83 @@ Bancos `erp.db` de versões anteriores continuam funcionando: todas as
 tabelas e colunas novas são criadas/migradas automaticamente na primeira
 vez que a nova versão roda, sem perda de nenhum dado já cadastrado.
 
+## Sexta rodada: Notas Fiscais (NFS-e e NF-e) com certificado digital
+
+As funcionalidades dos sistemas "NFS-e Monitor" e "Consulta de NFe" foram
+portadas para dentro do ERP, integradas ao fluxo de contas a pagar/receber.
+
+### Configurações (aba ⚙ Configurações)
+
+- **Certificado digital A1** (.pfx/.p12): envie o arquivo pelo navegador
+  (ele é copiado para a pasta `certificados`, ao lado do programa) ou
+  informe o caminho para deixá-lo onde já está. Ao salvar, o certificado é
+  validado e o sistema extrai sozinho **CNPJ/CPF, razão social, validade e
+  UF** — inclusive avisando se está vencido ou vence em menos de 30 dias.
+- A **senha fica criptografada** (Fernet/AES) no banco; a chave é gerada na
+  primeira execução e gravada em `.chave_secreta`, ao lado do programa.
+  Proteja essa pasta — quem tem acesso a ela tem acesso ao certificado.
+- Escolha do **ambiente** (Produção / Produção Restrita para NFS-e;
+  Produção / Homologação para NF-e) e da UF da empresa.
+- **Zerar cursor (NSU)**: se alguma nota conhecida não apareceu, zere o
+  cursor para re-baixar tudo o que os servidores nacionais ainda guardam.
+  As notas já salvas não são duplicadas nem apagadas.
+
+### Aba NFS-e (Notas Fiscais de Serviço)
+
+- Baixa as notas do **Portal Nacional da NFS-e** (Ambiente de Dados
+  Nacional) por conexão autenticada com o certificado (mTLS), paginando
+  por NSU e continuando de onde parou na vez anterior.
+- Divide em **📤 A Receber** (notas em que a empresa é a prestadora) e
+  **📥 A Pagar** (notas em que a empresa é a tomadora), com totais de
+  quantidade, valor dos serviços e ISS.
+- **Cancelamentos e substituições** chegam como eventos e são aplicados
+  automaticamente — a nota aparece esmaecida com o selo correspondente e
+  não permite gerar lançamento.
+- Download do **XML** e do **DANFSe (PDF)** de cada nota.
+
+### Aba NF-e (Notas Fiscais Eletrônicas)
+
+- Consulta o webservice oficial **NFeDistribuicaoDFe** do Ambiente
+  Nacional da SEFAZ (Nota Técnica 2014.002) — uma única consulta cobre
+  notas de qualquer estado.
+- Divide em **📤 A Receber** (notas emitidas pela empresa) e **📥 A Pagar**
+  (compras: notas emitidas contra o CNPJ da empresa).
+- Quando a nota completa (`nfeProc`) chega depois do resumo (`resNFe`), ela
+  **substitui** o resumo — a lista nunca mostra a mesma nota duas vezes.
+- **Regra de 1 hora da SEFAZ**: depois de uma consulta sem novidade
+  (cStat 137), novas consultas ficam bloqueadas por ~1h para não gerar o
+  bloqueio por consumo indevido (656). A tela mostra quanto falta e
+  permite forçar, por conta e risco.
+
+### Integração com as baixas do sistema
+
+- Cada nota tem o botão **Gerar Lançamento**: cria a conta a pagar/receber
+  já com valor, data e a contraparte certa. O **fornecedor ou cliente é
+  localizado pelo CNPJ/CPF e, se ainda não existir, é cadastrado
+  automaticamente** a partir dos dados da nota.
+- Depois de gerado, a própria linha da nota mostra **Pendente** com o botão
+  **Dar Baixa** (pedindo a data do pagamento, como no resto do sistema) ou
+  **Baixado em dd/mm/aaaa** quando já quitado.
+- O lançamento aparece normalmente na aba Lançamentos, entra nos totais do
+  dashboard, nos relatórios e nas exportações. Excluir o lançamento libera
+  a nota para gerar um novo.
+
+### Privacidade
+
+O certificado e a senha ficam **apenas no seu computador**. As conexões são
+feitas diretamente com os servidores oficiais do governo (Portal Nacional
+da NFS-e e SEFAZ) — nada é enviado para servidores de terceiros.
+
 ## Limitações conhecidas (fora do escopo desta revisão)
 
 - Não há autenticação/login — qualquer pessoa com acesso à máquina/rede onde
   o programa roda pode ver e editar os lançamentos. Adequado para uso local
   de um único usuário; não exponha essa porta na internet.
 - Banco de dados local (SQLite), sem sincronização entre computadores.
+- A sincronização de notas é disparada por botão (ou ao abrir a aba). Para
+  uso intenso, o ideal seria uma rotina agendada de 1x por hora.
+- Não é enviado o evento de **manifestação do destinatário**: antes de se
+  manifestar, a SEFAZ libera apenas o *resumo* da NF-e de compra, não o XML
+  completo — por isso algumas notas aparecem como "Resumo".
+- Certificados A1 valem 1 ano: quando renovar, envie o novo arquivo na aba
+  Configurações.

@@ -9,12 +9,26 @@ import uuid
 import webbrowser
 from datetime import date, datetime, timedelta
 
-from flask import Flask, Response, flash, redirect, render_template, request, send_from_directory, url_for
+from flask import Flask, Response, flash, jsonify, redirect, render_template, request, send_from_directory, url_for
 from openpyxl import Workbook
 from openpyxl.styles import Font
 from werkzeug.utils import secure_filename
 
-from models import Categoria, Cliente, ContaBancaria, Fornecedor, LancamentoRecorrente, Transacao, db
+import fiscal_certificado
+import fiscal_nfe
+import fiscal_nfse
+import fiscal_sync
+from models import (
+    Categoria,
+    Cliente,
+    ContaBancaria,
+    Fornecedor,
+    LancamentoRecorrente,
+    NotaEletronica,
+    NotaServico,
+    Transacao,
+    db,
+)
 
 TIPOS_VALIDOS = {'Receber', 'Pagar'}
 STATUS_VALIDOS = {'Pendente', 'Concluído'}
@@ -123,6 +137,13 @@ def migrar_schema():
 with app.app_context():
     db.create_all()
     migrar_schema()
+
+# Sincronização de documentos fiscais (NFS-e / NF-e) via certificado digital
+sync_fiscal = fiscal_sync.SyncFiscal(
+    app,
+    caminho_chave_fernet=data_path('.chave_secreta'),
+    ca_extra_path=data_path('ca_extra.pem'),
+)
 
 
 def _validar_id_existente(valor, model):
@@ -732,10 +753,21 @@ def excluir(id):
     transacao = Transacao.query.get_or_404(id)
     if transacao.anexo_arquivo:
         _apagar_anexo(transacao.anexo_arquivo)
+    # Uma nota fiscal vinculada a este lançamento volta a permitir "Gerar Lançamento"
+    NotaServico.query.filter_by(transacao_id=id).update({'transacao_id': None})
+    NotaEletronica.query.filter_by(transacao_id=id).update({'transacao_id': None})
     db.session.delete(transacao)
     db.session.commit()
     flash('Lançamento excluído.', 'sucesso')
     return redirect(url_for('index'))
+
+
+def _destino_voltar():
+    """Rota de retorno pós-ação (permite dar baixa a partir dos painéis de notas)."""
+    voltar = request.form.get('voltar', '')
+    if voltar.startswith('/') and not voltar.startswith('//'):
+        return voltar
+    return url_for('index')
 
 
 @app.route('/concluir/<int:id>', methods=['POST'])
@@ -745,12 +777,12 @@ def concluir(id):
     data_pagamento = parse_data(request.form.get('data_pagamento', '').strip())
     if not data_pagamento:
         flash('Informe a data em que o pagamento foi realizado para dar baixa.', 'erro')
-        return redirect(url_for('index'))
+        return redirect(_destino_voltar())
 
     transacao.status = 'Concluído'
     transacao.data_pagamento = data_pagamento
     db.session.commit()
-    return redirect(url_for('index'))
+    return redirect(_destino_voltar())
 
 
 @app.route('/reabrir/<int:id>', methods=['POST'])
@@ -971,6 +1003,440 @@ def recorrentes_gerar():
     else:
         flash('Nenhum lançamento novo para gerar no momento.', 'sucesso')
     return redirect(url_for('recorrentes_listar'))
+
+
+# ------------------------------------------------------------------ #
+# Notas fiscais (NFS-e / NF-e) e Configurações
+# ------------------------------------------------------------------ #
+
+SITUACOES_NFE = {
+    '1': 'Autorizada',
+    '2': 'Denegada',
+    '3': 'Cancelada',
+    'completa': 'Autorizada',
+}
+
+
+def situacao_nfe_texto(situacao):
+    return SITUACOES_NFE.get(str(situacao or ''), situacao or '—')
+
+
+app.jinja_env.globals['situacao_nfe_texto'] = situacao_nfe_texto
+
+
+def _periodo_simples(args):
+    """Filtro de período (inicio/fim) dos painéis de notas, padrão = mês atual."""
+    hoje = datetime.now().date()
+    inicio = parse_data(args.get('inicio', '')) or hoje.replace(day=1)
+    fim = parse_data(args.get('fim', '')) or hoje
+    if inicio > fim:
+        inicio, fim = fim, inicio
+    return inicio, fim
+
+
+def _contexto_fiscal_comum():
+    return {
+        'cert_ok': fiscal_sync.certificado_configurado(),
+        'hoje': datetime.now().date(),
+    }
+
+
+@app.route('/notas-servico')
+def notas_servico():
+    inicio, fim = _periodo_simples(request.args)
+
+    query = NotaServico.query.filter(
+        NotaServico.data_emissao >= inicio,
+        NotaServico.data_emissao <= fim,
+    ).order_by(NotaServico.data_emissao.desc(), NotaServico.id.desc())
+    notas = query.all()
+
+    emitidas = [n for n in notas if n.papel == 'emitida']
+    recebidas = [n for n in notas if n.papel != 'emitida']
+
+    def _totais(lista):
+        ativas = [n for n in lista if n.situacao == 'ATIVA']
+        return {
+            'qtde': len(ativas),
+            'valor': sum(n.valor_servico or 0 for n in ativas),
+            'iss': sum(n.valor_iss or 0 for n in ativas),
+        }
+
+    return render_template(
+        'notas_servico.html',
+        inicio=inicio,
+        fim=fim,
+        emitidas=emitidas,
+        recebidas=recebidas,
+        totais_emitidas=_totais(emitidas),
+        totais_recebidas=_totais(recebidas),
+        sync=sync_fiscal.status('nfse'),
+        ultima_sync=fiscal_sync.config_get('nfse_ultima_sync'),
+        ultimo_status=fiscal_sync.config_get('nfse_ultimo_status'),
+        **_contexto_fiscal_comum(),
+    )
+
+
+@app.route('/notas-eletronicas')
+def notas_eletronicas():
+    inicio, fim = _periodo_simples(request.args)
+
+    # Notas sem data de emissão sempre aparecem (não dá para saber o período)
+    query = NotaEletronica.query.filter(
+        db.or_(
+            NotaEletronica.data_emissao.is_(None),
+            db.and_(
+                NotaEletronica.data_emissao >= inicio,
+                NotaEletronica.data_emissao <= fim,
+            ),
+        )
+    ).order_by(NotaEletronica.data_emissao.desc(), NotaEletronica.id.desc())
+    notas = query.all()
+
+    emitidas = [n for n in notas if n.papel == 'emitida']
+    recebidas = [n for n in notas if n.papel != 'emitida']
+
+    def _totais(lista):
+        validas = [n for n in lista if str(n.situacao or '') != '3']
+        return {
+            'qtde': len(validas),
+            'valor': sum(n.valor_total or 0 for n in validas),
+        }
+
+    return render_template(
+        'notas_eletronicas.html',
+        inicio=inicio,
+        fim=fim,
+        emitidas=emitidas,
+        recebidas=recebidas,
+        totais_emitidas=_totais(emitidas),
+        totais_recebidas=_totais(recebidas),
+        sync=sync_fiscal.status('nfe'),
+        ultima_sync=fiscal_sync.config_get('nfe_ultima_sync'),
+        ultimo_status=fiscal_sync.config_get('nfe_ultimo_status'),
+        minutos_espera=sync_fiscal.nfe_minutos_de_espera(),
+        **_contexto_fiscal_comum(),
+    )
+
+
+@app.route('/notas-servico/sincronizar', methods=['POST'])
+def nfse_sincronizar():
+    if not fiscal_sync.certificado_configurado():
+        flash('Configure o certificado digital na aba Configurações antes de sincronizar.', 'erro')
+        return redirect(url_for('configuracoes'))
+    if sync_fiscal.iniciar('nfse'):
+        flash('Sincronização das NFS-e iniciada.', 'sucesso')
+    else:
+        flash('Já existe uma sincronização de NFS-e em andamento.', 'erro')
+    return redirect(url_for('notas_servico'))
+
+
+@app.route('/notas-eletronicas/sincronizar', methods=['POST'])
+def nfe_sincronizar():
+    if not fiscal_sync.certificado_configurado():
+        flash('Configure o certificado digital na aba Configurações antes de sincronizar.', 'erro')
+        return redirect(url_for('configuracoes'))
+
+    forcar = request.form.get('forcar') == '1'
+    espera = sync_fiscal.nfe_minutos_de_espera()
+    if espera > 0 and not forcar:
+        flash(
+            f'A SEFAZ exige intervalo de 1 hora entre consultas sem novidade. '
+            f'Aguarde ~{espera} min — as notas já baixadas continuam disponíveis abaixo.',
+            'erro',
+        )
+        return redirect(url_for('notas_eletronicas'))
+
+    if sync_fiscal.iniciar('nfe'):
+        flash('Sincronização das NF-e iniciada.', 'sucesso')
+    else:
+        flash('Já existe uma sincronização de NF-e em andamento.', 'erro')
+    return redirect(url_for('notas_eletronicas'))
+
+
+@app.route('/notas-servico/sincronizacao')
+def nfse_status_sincronizacao():
+    return jsonify(sync_fiscal.status('nfse'))
+
+
+@app.route('/notas-eletronicas/sincronizacao')
+def nfe_status_sincronizacao():
+    return jsonify(sync_fiscal.status('nfe'))
+
+
+@app.route('/notas-servico/<int:id>/xml')
+def nfse_baixar_xml(id):
+    nota = NotaServico.query.get_or_404(id)
+    if not nota.xml_gzip:
+        flash('XML desta nota não está disponível.', 'erro')
+        return redirect(url_for('notas_servico'))
+    import gzip as _gzip
+    return Response(
+        _gzip.decompress(nota.xml_gzip),
+        mimetype='application/xml',
+        headers={'Content-Disposition': f'attachment; filename="NFSe_{nota.chave_acesso}.xml"'},
+    )
+
+
+@app.route('/notas-eletronicas/<int:id>/xml')
+def nfe_baixar_xml(id):
+    nota = NotaEletronica.query.get_or_404(id)
+    if not nota.xml_gzip:
+        flash('XML desta nota não está disponível.', 'erro')
+        return redirect(url_for('notas_eletronicas'))
+    import gzip as _gzip
+    return Response(
+        _gzip.decompress(nota.xml_gzip),
+        mimetype='application/xml',
+        headers={'Content-Disposition': f'attachment; filename="NFe_{nota.chave}.xml"'},
+    )
+
+
+@app.route('/notas-servico/<int:id>/danfse')
+def nfse_baixar_danfse(id):
+    nota = NotaServico.query.get_or_404(id)
+    if not fiscal_sync.certificado_configurado():
+        flash('Configure o certificado digital na aba Configurações.', 'erro')
+        return redirect(url_for('notas_servico'))
+    try:
+        caminho = fiscal_sync.config_get('cert_caminho')
+        senha = fiscal_certificado.descriptografar_senha(
+            fiscal_sync.config_get('cert_senha_cripto'), data_path('.chave_secreta')
+        )
+        ambiente = fiscal_sync.config_get('nfse_ambiente', 'producao')
+        with fiscal_certificado.CertificadoContext(caminho, senha) as ctx:
+            cliente = fiscal_nfse.AdnClient(
+                ambiente,
+                ctx.cert_pair,
+                base_adn=os.environ.get('ERP_ADN_BASE'),
+                base_sefin=os.environ.get('ERP_SEFIN_BASE'),
+                verify=data_path('ca_extra.pem') if os.path.exists(data_path('ca_extra.pem')) else True,
+            )
+            with cliente:
+                pdf = cliente.baixar_danfse(nota.chave_acesso)
+    except (fiscal_nfse.AdnErro, fiscal_certificado.CertificadoInvalido) as exc:
+        flash(f'Não foi possível baixar o DANFSe: {exc}', 'erro')
+        return redirect(url_for('notas_servico'))
+    return Response(
+        pdf,
+        mimetype='application/pdf',
+        headers={'Content-Disposition': f'attachment; filename="DANFSe_{nota.chave_acesso}.pdf"'},
+    )
+
+
+def _vincular_contraparte(tipo, doc, nome, endereco_padrao):
+    """Localiza (pelo CNPJ/CPF) ou cria o fornecedor/cliente da nota.
+
+    Retorna (fornecedor_id, cliente_id) para o lançamento gerado.
+    """
+    docd = re.sub(r'\D', '', doc or '')
+    if not docd or not nome:
+        return None, None
+
+    modelo = Fornecedor if tipo == 'Pagar' else Cliente
+    registro = None
+    for candidato in modelo.query.all():
+        if re.sub(r'\D', '', candidato.cnpj_cpf or '') == docd:
+            registro = candidato
+            break
+    if registro is None:
+        registro = modelo(
+            cnpj_cpf=docd,
+            nome=(nome or '')[:150],
+            endereco=(endereco_padrao or '(não informado)')[:200],
+        )
+        db.session.add(registro)
+        db.session.flush()
+
+    if tipo == 'Pagar':
+        return registro.id, None
+    return None, registro.id
+
+
+def _criar_lancamento_de_nota(nota, tipo, contraparte_doc, contraparte_nome,
+                              valor, descricao, endereco_padrao):
+    if nota.transacao_id and Transacao.query.get(nota.transacao_id):
+        return None, 'Esta nota já possui um lançamento vinculado.'
+    if not valor or valor <= 0:
+        return None, 'A nota não possui valor válido para gerar o lançamento.'
+
+    fornecedor_id, cliente_id = _vincular_contraparte(
+        tipo, contraparte_doc, contraparte_nome, endereco_padrao
+    )
+    transacao = Transacao(
+        tipo=tipo,
+        descricao=descricao[:100],
+        valor=float(valor),
+        data_vencimento=nota.data_emissao or datetime.now().date(),
+        fornecedor_id=fornecedor_id,
+        cliente_id=cliente_id,
+    )
+    db.session.add(transacao)
+    db.session.flush()
+    nota.transacao_id = transacao.id
+    db.session.commit()
+    return transacao, None
+
+
+@app.route('/notas-servico/<int:id>/gerar-lancamento', methods=['POST'])
+def nfse_gerar_lancamento(id):
+    nota = NotaServico.query.get_or_404(id)
+    if nota.situacao != 'ATIVA':
+        flash('Não é possível gerar lançamento de uma nota cancelada/substituída.', 'erro')
+        return redirect(_destino_voltar())
+
+    tipo = 'Receber' if nota.papel == 'emitida' else 'Pagar'
+    contraparte_doc = nota.tomador_doc if tipo == 'Receber' else nota.prestador_doc
+    contraparte_nome = nota.tomador_nome if tipo == 'Receber' else nota.prestador_nome
+    descricao = f"NFS-e {nota.numero or nota.chave_acesso[-8:]} - {contraparte_nome or 'sem identificação'}"
+
+    _, erro = _criar_lancamento_de_nota(
+        nota, tipo, contraparte_doc, contraparte_nome,
+        nota.valor_liquido or nota.valor_servico, descricao, nota.municipio,
+    )
+    if erro:
+        flash(erro, 'erro')
+    else:
+        flash(f'Lançamento ({tipo}) gerado com sucesso a partir da NFS-e.', 'sucesso')
+    return redirect(_destino_voltar())
+
+
+@app.route('/notas-eletronicas/<int:id>/gerar-lancamento', methods=['POST'])
+def nfe_gerar_lancamento(id):
+    nota = NotaEletronica.query.get_or_404(id)
+    if str(nota.situacao or '') == '3':
+        flash('Não é possível gerar lançamento de uma nota cancelada.', 'erro')
+        return redirect(_destino_voltar())
+
+    tipo = 'Receber' if nota.papel == 'emitida' else 'Pagar'
+    if tipo == 'Receber':
+        contraparte_doc, contraparte_nome = nota.dest_doc, nota.dest_nome
+    else:
+        contraparte_doc, contraparte_nome = nota.emitente_doc, nota.emitente_nome
+    descricao = f"NF-e {nota.chave[25:34].lstrip('0') or nota.chave[-8:]} - {contraparte_nome or nota.emitente_nome or 'sem identificação'}"
+
+    _, erro = _criar_lancamento_de_nota(
+        nota, tipo, contraparte_doc, contraparte_nome,
+        nota.valor_total, descricao, None,
+    )
+    if erro:
+        flash(erro, 'erro')
+    else:
+        flash(f'Lançamento ({tipo}) gerado com sucesso a partir da NF-e.', 'sucesso')
+    return redirect(_destino_voltar())
+
+
+@app.route('/configuracoes', methods=['GET', 'POST'])
+def configuracoes():
+    caminho_chave = data_path('.chave_secreta')
+
+    if request.method == 'POST':
+        caminho = request.form.get('cert_caminho', '').strip()
+        senha = request.form.get('cert_senha', '')
+
+        # Enviar o .pfx pelo navegador evita ter que digitar o caminho completo:
+        # o arquivo é copiado para a pasta "certificados", ao lado do programa.
+        arquivo = request.files.get('cert_arquivo')
+        if arquivo and arquivo.filename:
+            nome = secure_filename(arquivo.filename)
+            if not nome.lower().endswith(('.pfx', '.p12')):
+                flash('O certificado deve ser um arquivo .pfx ou .p12.', 'erro')
+                return redirect(url_for('configuracoes'))
+            pasta = data_path('certificados')
+            os.makedirs(pasta, exist_ok=True)
+            caminho = os.path.join(pasta, nome)
+            arquivo.save(caminho)
+            try:
+                os.chmod(caminho, 0o600)
+            except OSError:
+                pass  # Windows não suporta chmod POSIX
+
+        nfse_ambiente = request.form.get('nfse_ambiente', 'producao')
+        nfe_ambiente = request.form.get('nfe_ambiente', 'producao')
+        uf = request.form.get('uf', '').strip().upper()
+
+        if nfse_ambiente not in fiscal_nfse.AMBIENTES_NFSE:
+            nfse_ambiente = 'producao'
+        if nfe_ambiente not in fiscal_nfe.URLS_NFE:
+            nfe_ambiente = 'homologacao' if nfe_ambiente == 'homologacao' else 'producao'
+
+        fiscal_sync.config_set('nfse_ambiente', nfse_ambiente)
+        fiscal_sync.config_set('nfe_ambiente', nfe_ambiente)
+        if uf in fiscal_certificado.UF_PARA_CODIGO:
+            fiscal_sync.config_set('cert_uf', uf)
+            fiscal_sync.config_set('nfe_uf_autor', fiscal_certificado.UF_PARA_CODIGO[uf])
+
+        if caminho:
+            fiscal_sync.config_set('cert_caminho', caminho)
+            senha_valida = senha or (
+                fiscal_certificado.descriptografar_senha(
+                    fiscal_sync.config_get('cert_senha_cripto'), caminho_chave
+                ) if fiscal_sync.config_get('cert_senha_cripto') else ''
+            )
+            if senha_valida:
+                try:
+                    info = fiscal_certificado.inspecionar_pfx(caminho, senha_valida)
+                except fiscal_certificado.CertificadoInvalido as exc:
+                    flash(f'Certificado não validado: {exc}', 'erro')
+                    return redirect(url_for('configuracoes'))
+
+                fiscal_sync.config_set(
+                    'cert_senha_cripto',
+                    fiscal_certificado.criptografar_senha(senha_valida, caminho_chave),
+                )
+                fiscal_sync.config_set('cert_documento', info.documento)
+                fiscal_sync.config_set('cert_titular', info.titular)
+                fiscal_sync.config_set('cert_validade', info.valido_ate)
+                if info.uf and not uf:
+                    fiscal_sync.config_set('cert_uf', info.uf)
+                    fiscal_sync.config_set(
+                        'nfe_uf_autor', fiscal_certificado.UF_PARA_CODIGO.get(info.uf, '35')
+                    )
+                aviso = ''
+                if info.expirado:
+                    aviso = ' ATENÇÃO: o certificado está VENCIDO.'
+                elif info.dias_para_vencer <= 30:
+                    aviso = f' Atenção: o certificado vence em {info.dias_para_vencer} dia(s).'
+                flash(
+                    f'Certificado validado: {info.titular} '
+                    f'({info.tipo_documento} {info.documento}), válido até {info.valido_ate}.{aviso}',
+                    'sucesso',
+                )
+            else:
+                flash('Caminho salvo. Informe a senha do certificado para validá-lo.', 'erro')
+        else:
+            flash('Configurações salvas.', 'sucesso')
+        return redirect(url_for('configuracoes'))
+
+    return render_template(
+        'configuracoes.html',
+        cert_caminho=fiscal_sync.config_get('cert_caminho'),
+        cert_documento=fiscal_sync.config_get('cert_documento'),
+        cert_titular=fiscal_sync.config_get('cert_titular'),
+        cert_validade=fiscal_sync.config_get('cert_validade'),
+        cert_uf=fiscal_sync.config_get('cert_uf'),
+        senha_salva=bool(fiscal_sync.config_get('cert_senha_cripto')),
+        nfse_ambiente=fiscal_sync.config_get('nfse_ambiente', 'producao'),
+        nfe_ambiente=fiscal_sync.config_get('nfe_ambiente', 'producao'),
+        nfse_ultimo_nsu=fiscal_sync.config_get('nfse_ultimo_nsu', '0'),
+        nfe_ultimo_nsu=fiscal_sync.config_get('nfe_ultimo_nsu', '000000000000000'),
+        ufs=sorted(fiscal_certificado.UF_PARA_CODIGO.keys()),
+        ambientes_nfse=fiscal_nfse.AMBIENTES_NFSE,
+    )
+
+
+@app.route('/configuracoes/resetar-nsu/<qual>', methods=['POST'])
+def configuracoes_resetar_nsu(qual):
+    if qual == 'nfse':
+        fiscal_sync.config_set('nfse_ultimo_nsu', '0')
+        flash('Cursor de NFS-e zerado: a próxima sincronização baixa tudo de novo (sem duplicar).', 'sucesso')
+    elif qual == 'nfe':
+        fiscal_sync.config_set('nfe_ultimo_nsu', '000000000000000')
+        fiscal_sync.config_set('nfe_ultimo_cstat', '')
+        flash('Cursor de NF-e zerado: a próxima sincronização re-baixa o que a SEFAZ ainda guarda (~90 dias).', 'sucesso')
+    else:
+        flash('Opção inválida.', 'erro')
+    return redirect(url_for('configuracoes'))
 
 
 with app.app_context():

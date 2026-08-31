@@ -1,0 +1,114 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2>⚙ Configurações</h2>
+
+<h3 class="titulo-secao">Certificado Digital A1 (.pfx / .p12)</h3>
+<p class="aviso-cadastro">
+    O certificado digital da empresa é usado para baixar automaticamente as
+    NFS-e (Portal Nacional) e as NF-e (SEFAZ) por conexão segura (mTLS).
+    A senha fica criptografada no seu computador — nada é enviado para
+    servidores de terceiros, apenas para os serviços oficiais do governo.
+</p>
+
+<form action="{{ url_for('configuracoes') }}" method="POST" enctype="multipart/form-data" class="form-coluna form-config">
+    <label>
+        Selecionar o certificado (.pfx ou .p12) do seu computador
+        <input type="file" name="cert_arquivo" accept=".pfx,.p12">
+        <small>O arquivo é copiado para a pasta <code>certificados</code>, ao lado do programa.</small>
+    </label>
+
+    <label>
+        Ou informe o caminho do arquivo, para deixá-lo onde já está
+        <input type="text" name="cert_caminho" value="{{ cert_caminho }}"
+               placeholder="Ex.: C:\certificados\empresa.pfx">
+    </label>
+
+    <label>
+        Senha do certificado {{ '(já salva — preencha só para trocar)' if senha_salva else '' }}
+        <input type="password" name="cert_senha" value="" placeholder="{{ '********' if senha_salva else 'Senha do .pfx' }}">
+    </label>
+
+    <label>
+        Estado (UF) da empresa
+        <select name="uf">
+            <option value="">Detectar do certificado</option>
+            {% for sigla in ufs %}
+            <option value="{{ sigla }}" {{ 'selected' if cert_uf == sigla else '' }}>{{ sigla }}</option>
+            {% endfor %}
+        </select>
+    </label>
+
+    <label>
+        Ambiente NFS-e (Portal Nacional)
+        <select name="nfse_ambiente">
+            {% for codigo, amb in ambientes_nfse.items() %}
+            <option value="{{ codigo }}" {{ 'selected' if nfse_ambiente == codigo else '' }}>{{ amb.nome }}</option>
+            {% endfor %}
+        </select>
+    </label>
+
+    <label>
+        Ambiente NF-e (SEFAZ)
+        <select name="nfe_ambiente">
+            <option value="producao" {{ 'selected' if nfe_ambiente == 'producao' else '' }}>Produção</option>
+            <option value="homologacao" {{ 'selected' if nfe_ambiente == 'homologacao' else '' }}>Homologação (testes)</option>
+        </select>
+    </label>
+
+    <div class="form-acoes">
+        <button type="submit">Salvar e Validar Certificado</button>
+    </div>
+</form>
+
+{% if cert_documento %}
+<h3 class="titulo-secao">Certificado validado</h3>
+<div class="table-scroll">
+<table>
+    <tbody>
+        <tr><th>Titular</th><td>{{ cert_titular or '—' }}</td></tr>
+        <tr><th>CNPJ/CPF</th><td>{{ cert_documento }}</td></tr>
+        <tr><th>Válido até</th><td>{{ cert_validade or '—' }}</td></tr>
+        <tr><th>UF</th><td>{{ cert_uf or '—' }}</td></tr>
+    </tbody>
+</table>
+</div>
+{% endif %}
+
+<h3 class="titulo-secao">Sincronização (avançado)</h3>
+<p class="aviso-cadastro">
+    O sistema controla até onde já baixou usando um "cursor" (NSU). Se alguma
+    nota conhecida não apareceu, zere o cursor para re-baixar tudo o que os
+    servidores nacionais ainda guardam — as notas já salvas não são
+    duplicadas nem apagadas.
+</p>
+<div class="table-scroll">
+<table>
+    <thead>
+        <tr><th>Serviço</th><th>Último NSU</th><th>Ação</th></tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>NFS-e (Portal Nacional)</td>
+            <td>{{ nfse_ultimo_nsu }}</td>
+            <td class="acoes">
+                <form action="{{ url_for('configuracoes_resetar_nsu', qual='nfse') }}" method="POST" class="form-inline"
+                      onsubmit="return confirm('Zerar o cursor da NFS-e? A próxima sincronização baixará tudo de novo (sem duplicar).');">
+                    <button type="submit" class="btn-acao btn-cancelar">Zerar cursor</button>
+                </form>
+            </td>
+        </tr>
+        <tr>
+            <td>NF-e (SEFAZ)</td>
+            <td>{{ nfe_ultimo_nsu }}</td>
+            <td class="acoes">
+                <form action="{{ url_for('configuracoes_resetar_nsu', qual='nfe') }}" method="POST" class="form-inline"
+                      onsubmit="return confirm('Zerar o cursor da NF-e? A próxima sincronização re-baixará o que a SEFAZ ainda guarda (~90 dias).');">
+                    <button type="submit" class="btn-acao btn-cancelar">Zerar cursor</button>
+                </form>
+            </td>
+        </tr>
+    </tbody>
+</table>
+</div>
+{% endblock %}
