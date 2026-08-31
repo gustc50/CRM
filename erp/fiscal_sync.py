@@ -14,10 +14,13 @@ import threading
 import time
 
 from models import (
+    Cliente,
     Configuracao,
+    Fornecedor,
     NotaEletronica,
     NotaServico,
     NotaServicoEvento,
+    Transacao,
     db,
 )
 import fiscal_certificado
@@ -99,6 +102,122 @@ def classificar_papel_nfe(doc_empresa: str, emitente_doc: str | None) -> str:
     if doc and emitente and (emitente == doc or (doc[:8] and emitente.startswith(doc[:8]))):
         return 'emitida'
     return 'recebida'
+
+
+# ------------------------------------------------------------------ #
+# Geração automática de lançamento a partir de uma nota fiscal
+# ------------------------------------------------------------------ #
+
+def vincular_contraparte(tipo: str, doc: str | None, nome: str | None, endereco_padrao: str | None = None):
+    """Localiza (pelo CNPJ/CPF) ou cria o fornecedor/cliente da nota.
+
+    Retorna (fornecedor_id, cliente_id) para o lançamento gerado.
+    """
+    docd = _digitos(doc)
+    if not docd or not nome:
+        return None, None
+
+    modelo = Fornecedor if tipo == 'Pagar' else Cliente
+    registro = None
+    for candidato in modelo.query.all():
+        if _digitos(candidato.cnpj_cpf) == docd:
+            registro = candidato
+            break
+    if registro is None:
+        registro = modelo(
+            cnpj_cpf=docd,
+            nome=(nome or '')[:150],
+            endereco=(endereco_padrao or '(não informado)')[:200],
+        )
+        db.session.add(registro)
+        db.session.flush()
+
+    if tipo == 'Pagar':
+        return registro.id, None
+    return None, registro.id
+
+
+def gerar_lancamento_para_nota(nota, tipo: str, contraparte_doc, contraparte_nome,
+                                valor, descricao: str, endereco_padrao=None):
+    """Cria a Transacao vinculada a uma nota fiscal (NFS-e ou NF-e), se ela
+    ainda não tiver uma. Usada tanto pela geração automática (ao sincronizar)
+    quanto pelo botão manual "Gerar Lançamento" (fallback para notas puladas
+    por falta de valor, ou cujo lançamento foi excluído depois).
+
+    Retorna (transacao, erro): em caso de sucesso, ``erro`` é None; se a nota
+    já tinha lançamento ou não tem valor válido, ``transacao`` é None e
+    ``erro`` traz o motivo (ignorado pela geração em lote).
+    """
+    if nota.transacao_id:
+        return None, 'Esta nota já possui um lançamento vinculado.'
+    if not valor or valor <= 0:
+        return None, 'A nota não possui valor válido para gerar o lançamento.'
+
+    fornecedor_id, cliente_id = vincular_contraparte(tipo, contraparte_doc, contraparte_nome, endereco_padrao)
+    transacao = Transacao(
+        tipo=tipo,
+        descricao=descricao[:100],
+        valor=float(valor),
+        data_vencimento=nota.data_emissao or dt.datetime.now().date(),
+        fornecedor_id=fornecedor_id,
+        cliente_id=cliente_id,
+    )
+    db.session.add(transacao)
+    db.session.flush()
+    nota.transacao_id = transacao.id
+    return transacao, None
+
+
+def _descricao_nfse(nota, tipo: str) -> str:
+    contraparte_nome = nota.tomador_nome if tipo == 'Receber' else nota.prestador_nome
+    return f"NFS-e {nota.numero or nota.chave_acesso[-8:]} - {contraparte_nome or 'sem identificação'}"
+
+
+def _descricao_nfe(nota, tipo: str) -> str:
+    contraparte_nome = nota.dest_nome if tipo == 'Receber' else nota.emitente_nome
+    chave_num = (nota.chave or '')[25:34].lstrip('0') or (nota.chave or '')[-8:]
+    return f"NF-e {chave_num} - {contraparte_nome or nota.emitente_nome or 'sem identificação'}"
+
+
+def gerar_lancamentos_pendentes() -> int:
+    """Gera automaticamente o lançamento de toda nota fiscal ativa que ainda
+    não tem um vinculado. Chamada ao final de cada sincronização e na
+    inicialização do programa (cobre notas já sincronizadas antes desta
+    função existir, e qualquer nota que tenha ficado pendente por algum
+    motivo). Idempotente: nota que já tem lançamento é ignorada.
+    """
+    total = 0
+
+    for nota in NotaServico.query.filter_by(transacao_id=None, situacao='ATIVA').all():
+        tipo = 'Receber' if nota.papel == 'emitida' else 'Pagar'
+        contraparte_doc = nota.tomador_doc if tipo == 'Receber' else nota.prestador_doc
+        contraparte_nome = nota.tomador_nome if tipo == 'Receber' else nota.prestador_nome
+        transacao, _ = gerar_lancamento_para_nota(
+            nota, tipo, contraparte_doc, contraparte_nome,
+            nota.valor_liquido or nota.valor_servico, _descricao_nfse(nota, tipo), nota.municipio,
+        )
+        if transacao:
+            total += 1
+
+    for nota in NotaEletronica.query.filter(
+        NotaEletronica.transacao_id.is_(None),
+        NotaEletronica.situacao != '3',
+    ).all():
+        tipo = 'Receber' if nota.papel == 'emitida' else 'Pagar'
+        if tipo == 'Receber':
+            contraparte_doc, contraparte_nome = nota.dest_doc, nota.dest_nome
+        else:
+            contraparte_doc, contraparte_nome = nota.emitente_doc, nota.emitente_nome
+        transacao, _ = gerar_lancamento_para_nota(
+            nota, tipo, contraparte_doc, contraparte_nome,
+            nota.valor_total, _descricao_nfe(nota, tipo),
+        )
+        if transacao:
+            total += 1
+
+    if total:
+        db.session.commit()
+    return total
 
 
 # ------------------------------------------------------------------ #
@@ -206,12 +325,15 @@ class SyncFiscal:
                             time.sleep(PAUSA_ENTRE_LOTES)
 
                 self._aplicar_eventos_nfse()
+                lancamentos_gerados = gerar_lancamentos_pendentes()
                 config_set('nfse_ultimo_nsu', str(ultimo_nsu))
                 config_set('nfse_ultima_sync', _agora())
 
                 mensagem = (
                     f'Sincronização concluída: {notas_novas} nota(s) e '
-                    f'{eventos_novos} evento(s) novos. Último NSU: {ultimo_nsu}.'
+                    f'{eventos_novos} evento(s) novos'
+                    + (f' ({lancamentos_gerados} lançamento(s) gerado(s) automaticamente)' if lancamentos_gerados else '')
+                    + f'. Último NSU: {ultimo_nsu}.'
                 )
                 config_set('nfse_ultimo_status', mensagem)
                 self._atualizar('nfse', estado='concluido', mensagem=mensagem, novos=notas_novas)
@@ -374,6 +496,7 @@ class SyncFiscal:
                             break
                         time.sleep(PAUSA_ENTRE_LOTES)
 
+                lancamentos_gerados = gerar_lancamentos_pendentes()
                 config_set('nfe_ultimo_cstat', cstat)
                 config_set('nfe_ultima_consulta_em', dt.datetime.now().isoformat())
                 config_set('nfe_ultima_sync', _agora())
@@ -381,6 +504,7 @@ class SyncFiscal:
                 mensagem = (
                     f'Sincronização concluída: {novos} nota(s) nova(s)'
                     + (f' e {eventos} evento(s)' if eventos else '')
+                    + (f' ({lancamentos_gerados} lançamento(s) gerado(s) automaticamente)' if lancamentos_gerados else '')
                     + f'. SEFAZ: [{cstat}] {xmotivo}'
                 )
                 config_set('nfe_ultimo_status', mensagem)

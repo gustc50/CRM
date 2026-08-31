@@ -229,16 +229,31 @@ portadas para dentro do ERP, integradas ao fluxo de contas a pagar/receber.
 
 ### Integração com as baixas do sistema
 
-- Cada nota tem o botão **Gerar Lançamento**: cria a conta a pagar/receber
-  já com valor, data e a contraparte certa. O **fornecedor ou cliente é
-  localizado pelo CNPJ/CPF e, se ainda não existir, é cadastrado
-  automaticamente** a partir dos dados da nota.
-- Depois de gerado, a própria linha da nota mostra **Pendente** com o botão
-  **Dar Baixa** (pedindo a data do pagamento, como no resto do sistema) ou
-  **Baixado em dd/mm/aaaa** quando já quitado.
+- **Toda nota ativa (não cancelada) já vem com o lançamento gerado
+  sozinho**, assim que aparece no sistema — ao final de cada
+  sincronização, e também ao abrir o programa (cobrindo notas de antes
+  desta funcionalidade existir). Não é preciso clicar em nada: a nota
+  já nasce com valor, data de vencimento e a contraparte certa.
+- O **fornecedor ou cliente é localizado pelo CNPJ/CPF e, se ainda não
+  existir, é cadastrado automaticamente** a partir dos dados da nota
+  (nome e, para NFS-e, o município como endereço provisório).
+- Se algo estiver errado ou incompleto (ex.: uma nota NF-e resumida sem
+  o nome do destinatário), **edite o lançamento pelo botão "Editar"**,
+  igual a qualquer outro lançamento — a origem fiscal não trava a edição.
+- A própria linha da nota mostra **Pendente** com o botão **Dar Baixa**
+  (pedindo a data do pagamento, como no resto do sistema) ou **Baixado em
+  dd/mm/aaaa** quando já quitado.
+- O botão **Gerar Lançamento** continua existindo como reforço manual —
+  aparece só nas exceções: nota sem valor no momento da sincronização, ou
+  cujo lançamento vinculado foi excluído depois.
 - O lançamento aparece normalmente na aba Lançamentos, entra nos totais do
   dashboard, nos relatórios e nas exportações. Excluir o lançamento libera
-  a nota para gerar um novo.
+  a nota para gerar um novo (automaticamente na próxima sincronização, ou
+  pelo botão manual).
+- Se uma nota for **cancelada depois** de já ter gerado um lançamento
+  automático, a linha mostra um aviso "⚠ nota cancelada após gerar o
+  lançamento — revise" para você decidir se exclui ou ajusta manualmente
+  (o sistema não apaga lançamentos sozinho).
 
 ### Privacidade
 

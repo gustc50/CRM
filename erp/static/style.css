@@ -379,3 +379,8 @@ tr.nota-cancelada { background: #fafafa; }
 .form-config {
     max-width: 560px;
 }
+
+.aviso-nota-cancelada {
+    color: #b02a37;
+    font-size: 11px;
+}

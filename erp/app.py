@@ -1224,62 +1224,11 @@ def nfse_baixar_danfse(id):
     )
 
 
-def _vincular_contraparte(tipo, doc, nome, endereco_padrao):
-    """Localiza (pelo CNPJ/CPF) ou cria o fornecedor/cliente da nota.
-
-    Retorna (fornecedor_id, cliente_id) para o lançamento gerado.
-    """
-    docd = re.sub(r'\D', '', doc or '')
-    if not docd or not nome:
-        return None, None
-
-    modelo = Fornecedor if tipo == 'Pagar' else Cliente
-    registro = None
-    for candidato in modelo.query.all():
-        if re.sub(r'\D', '', candidato.cnpj_cpf or '') == docd:
-            registro = candidato
-            break
-    if registro is None:
-        registro = modelo(
-            cnpj_cpf=docd,
-            nome=(nome or '')[:150],
-            endereco=(endereco_padrao or '(não informado)')[:200],
-        )
-        db.session.add(registro)
-        db.session.flush()
-
-    if tipo == 'Pagar':
-        return registro.id, None
-    return None, registro.id
-
-
-def _criar_lancamento_de_nota(nota, tipo, contraparte_doc, contraparte_nome,
-                              valor, descricao, endereco_padrao):
-    if nota.transacao_id and Transacao.query.get(nota.transacao_id):
-        return None, 'Esta nota já possui um lançamento vinculado.'
-    if not valor or valor <= 0:
-        return None, 'A nota não possui valor válido para gerar o lançamento.'
-
-    fornecedor_id, cliente_id = _vincular_contraparte(
-        tipo, contraparte_doc, contraparte_nome, endereco_padrao
-    )
-    transacao = Transacao(
-        tipo=tipo,
-        descricao=descricao[:100],
-        valor=float(valor),
-        data_vencimento=nota.data_emissao or datetime.now().date(),
-        fornecedor_id=fornecedor_id,
-        cliente_id=cliente_id,
-    )
-    db.session.add(transacao)
-    db.session.flush()
-    nota.transacao_id = transacao.id
-    db.session.commit()
-    return transacao, None
-
-
 @app.route('/notas-servico/<int:id>/gerar-lancamento', methods=['POST'])
 def nfse_gerar_lancamento(id):
+    """Fallback manual: normalmente o lançamento já foi gerado sozinho na
+    sincronização. Serve para notas puladas por falta de valor, ou cujo
+    lançamento vinculado foi excluído depois."""
     nota = NotaServico.query.get_or_404(id)
     if nota.situacao != 'ATIVA':
         flash('Não é possível gerar lançamento de uma nota cancelada/substituída.', 'erro')
@@ -1290,19 +1239,21 @@ def nfse_gerar_lancamento(id):
     contraparte_nome = nota.tomador_nome if tipo == 'Receber' else nota.prestador_nome
     descricao = f"NFS-e {nota.numero or nota.chave_acesso[-8:]} - {contraparte_nome or 'sem identificação'}"
 
-    _, erro = _criar_lancamento_de_nota(
+    _, erro = fiscal_sync.gerar_lancamento_para_nota(
         nota, tipo, contraparte_doc, contraparte_nome,
         nota.valor_liquido or nota.valor_servico, descricao, nota.municipio,
     )
     if erro:
         flash(erro, 'erro')
     else:
+        db.session.commit()
         flash(f'Lançamento ({tipo}) gerado com sucesso a partir da NFS-e.', 'sucesso')
     return redirect(_destino_voltar())
 
 
 @app.route('/notas-eletronicas/<int:id>/gerar-lancamento', methods=['POST'])
 def nfe_gerar_lancamento(id):
+    """Fallback manual (ver nfse_gerar_lancamento)."""
     nota = NotaEletronica.query.get_or_404(id)
     if str(nota.situacao or '') == '3':
         flash('Não é possível gerar lançamento de uma nota cancelada.', 'erro')
@@ -1315,13 +1266,14 @@ def nfe_gerar_lancamento(id):
         contraparte_doc, contraparte_nome = nota.emitente_doc, nota.emitente_nome
     descricao = f"NF-e {nota.chave[25:34].lstrip('0') or nota.chave[-8:]} - {contraparte_nome or nota.emitente_nome or 'sem identificação'}"
 
-    _, erro = _criar_lancamento_de_nota(
+    _, erro = fiscal_sync.gerar_lancamento_para_nota(
         nota, tipo, contraparte_doc, contraparte_nome,
-        nota.valor_total, descricao, None,
+        nota.valor_total, descricao,
     )
     if erro:
         flash(erro, 'erro')
     else:
+        db.session.commit()
         flash(f'Lançamento ({tipo}) gerado com sucesso a partir da NF-e.', 'sucesso')
     return redirect(_destino_voltar())
 
@@ -1441,6 +1393,8 @@ def configuracoes_resetar_nsu(qual):
 
 with app.app_context():
     gerar_lancamentos_recorrentes()
+    # Cobre notas fiscais sincronizadas antes de a geração automática existir
+    fiscal_sync.gerar_lancamentos_pendentes()
 
 
 def _abrir_navegador():

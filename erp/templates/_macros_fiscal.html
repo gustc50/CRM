@@ -24,6 +24,9 @@
             </form>
         </dialog>
         {% endif %}
+        {% if cancelada %}
+        <br><small class="aviso-nota-cancelada">⚠ nota cancelada após gerar o lançamento — revise</small>
+        {% endif %}
     {% elif cancelada %}
         —
     {% else %}
