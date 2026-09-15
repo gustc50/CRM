@@ -1,0 +1,5 @@
+* text=auto
+
+# O cmd.exe exige CRLF: com LF o .bat falha de formas confusas.
+*.bat text eol=crlf
+*.sh text eol=lf

@@ -1,0 +1,13 @@
+venv/
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
+
+# Banco local: contem XMLs de NFe reais dos clientes. Nunca versionar.
+data/
+
+# Certificados digitais dos clientes.
+*.pfx
+*.p12

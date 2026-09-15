@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<title>Consulta de NFe</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <div class="app">
+    <!-- Barra lateral: lista de empresas cadastradas -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <span class="mark">NF</span>
+        <div>
+          <h1>Distribuição&nbsp;DFe</h1>
+          <p class="subtitle">consulta via certificado local</p>
+        </div>
+      </div>
+
+      <button id="btn-nova-empresa" class="btn-nova">+ Nova empresa</button>
+
+      <nav id="lista-empresas" class="lista-empresas">
+        <!-- preenchido via JS -->
+      </nav>
+    </aside>
+
+    <!-- Área principal -->
+    <main class="main">
+
+      <!-- Estado vazio -->
+      <section id="tela-vazia" class="tela-vazia">
+        <p class="eyebrow">Nenhuma empresa selecionada</p>
+        <h2>Cadastre um cliente pra começar</h2>
+        <p class="hint">O certificado (.pfx) fica só na máquina — o app lê ele na hora da consulta e não guarda a senha em nenhum lugar.</p>
+      </section>
+
+      <!-- Formulário de cadastro -->
+      <section id="tela-cadastro" class="tela hidden">
+        <p class="eyebrow">Novo cliente</p>
+        <h2>Cadastrar empresa</h2>
+
+        <form id="form-cadastro" class="form">
+          <label>
+            Razão social
+            <input type="text" id="f-razao" required placeholder="Empresa Exemplo LTDA">
+          </label>
+
+          <label>
+            CNPJ
+            <input type="text" id="f-cnpj" required placeholder="00.000.000/0000-00" maxlength="18">
+          </label>
+
+          <label>
+            Certificado digital (.pfx)
+            <div class="row-arquivo">
+              <input type="text" id="f-cert-path" readonly placeholder="Nenhum arquivo selecionado">
+              <button type="button" id="btn-escolher-cert" class="btn-secundario">Escolher…</button>
+            </div>
+          </label>
+
+          <label>
+            Senha do certificado <span class="tag-info">só usada agora, pra validar — não é salva</span>
+            <input type="password" id="f-cert-senha" placeholder="••••••••">
+          </label>
+
+          <div class="grid-2">
+            <label>
+              Ambiente
+              <select id="f-ambiente">
+                <option value="producao">Produção</option>
+                <option value="homologacao">Homologação (testes)</option>
+              </select>
+            </label>
+            <label>
+              Estado da empresa <span class="tag-info">detectado do certificado ao validar — a busca traz notas de todas as UFs</span>
+              <select id="f-uf">
+                <option value="12">Acre</option>
+                <option value="27">Alagoas</option>
+                <option value="16">Amapá</option>
+                <option value="13">Amazonas</option>
+                <option value="29">Bahia</option>
+                <option value="23">Ceará</option>
+                <option value="53">Distrito Federal</option>
+                <option value="32">Espírito Santo</option>
+                <option value="52">Goiás</option>
+                <option value="21">Maranhão</option>
+                <option value="51">Mato Grosso</option>
+                <option value="50">Mato Grosso do Sul</option>
+                <option value="31">Minas Gerais</option>
+                <option value="15">Pará</option>
+                <option value="25">Paraíba</option>
+                <option value="41">Paraná</option>
+                <option value="26">Pernambuco</option>
+                <option value="22">Piauí</option>
+                <option value="33">Rio de Janeiro</option>
+                <option value="24">Rio Grande do Norte</option>
+                <option value="43">Rio Grande do Sul</option>
+                <option value="11">Rondônia</option>
+                <option value="14">Roraima</option>
+                <option value="42">Santa Catarina</option>
+                <option value="35" selected>São Paulo</option>
+                <option value="28">Sergipe</option>
+                <option value="17">Tocantins</option>
+              </select>
+            </label>
+          </div>
+
+          <div id="cert-status" class="cert-status hidden"></div>
+
+          <div class="acoes-form">
+            <button type="button" id="btn-validar-cert" class="btn-secundario">Validar certificado</button>
+            <button type="submit" id="btn-salvar-empresa" class="btn-primario" disabled>Salvar cliente</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Detalhe de uma empresa: consulta + lista de notas -->
+      <section id="tela-empresa" class="tela hidden">
+        <div class="topo-empresa">
+          <div>
+            <p class="eyebrow" id="e-cnpj"></p>
+            <h2 id="e-razao"></h2>
+          </div>
+          <button id="btn-excluir-empresa" class="btn-perigo-ghost">Remover cliente</button>
+        </div>
+
+        <div class="painel-consulta">
+          <button id="btn-consultar" class="btn-primario">Buscar novas notas</button>
+          <button id="btn-resync" class="btn-secundario" title="Re-baixa tudo que a SEFAZ ainda guarda (~90 dias). Use se uma nota conhecida não apareceu.">↻ Re-sincronizar do zero</button>
+          <span id="status-consulta" class="status-consulta"></span>
+        </div>
+
+        <div id="info-espera" class="info-espera hidden"></div>
+
+        <div id="log-consulta" class="log-consulta hidden"></div>
+
+        <div class="painel-filtro">
+          <div class="filtro-tipo" id="filtro-tipo">
+            <button type="button" data-tipo="todas" class="ativo">Todas</button>
+            <button type="button" data-tipo="recebidas">Recebidas</button>
+            <button type="button" data-tipo="emitidas">Emitidas</button>
+          </div>
+          <label>
+            De
+            <input type="date" id="f-data-inicio">
+          </label>
+          <label>
+            Até
+            <input type="date" id="f-data-fim">
+          </label>
+          <span class="tag-info">mostrando até 5 anos por padrão — filtra as notas já baixadas neste app</span>
+          <button type="button" id="btn-baixar-sel" class="btn-secundario btn-baixar" disabled>Baixar selecionadas</button>
+          <span id="status-download" class="status-consulta"></span>
+        </div>
+
+        <div id="aviso-filtro-data" class="aviso-filtro hidden"></div>
+
+        <table class="tabela-notas">
+          <thead>
+            <tr>
+              <th class="col-sel"><input type="checkbox" id="sel-todas" title="Selecionar todas"></th>
+              <th>Chave de acesso</th>
+              <th>UF</th>
+              <th>Emitente</th>
+              <th>Emissão</th>
+              <th>Valor</th>
+              <th>Situação</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="corpo-tabela-notas">
+            <tr><td colspan="8" class="vazio">Nenhuma nota baixada ainda.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Modal: pede a senha do certificado só quando necessario (1x por sessao) -->
+  <div id="modal-senha" class="modal-overlay hidden">
+    <div class="modal-box">
+      <h3>Senha do certificado</h3>
+      <p class="hint">Necessária pra consultar a SEFAZ. Fica só em memória enquanto o app estiver aberto — não é gravada em disco, e não será pedida de novo até você fechar o app.</p>
+      <input type="password" id="modal-senha-input" placeholder="••••••••">
+      <p id="modal-senha-erro" class="cert-status erro hidden"></p>
+      <div class="modal-acoes">
+        <button type="button" id="modal-senha-cancelar" class="btn-secundario">Cancelar</button>
+        <button type="button" id="modal-senha-confirmar" class="btn-primario">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
