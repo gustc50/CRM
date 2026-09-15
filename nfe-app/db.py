@@ -107,10 +107,25 @@ def obter_empresa(empresa_id):
 
 
 def atualizar_ultimo_nsu(empresa_id, nsu):
+    """O cursor só anda pra frente. A SEFAZ às vezes responde 137 com ultNSU
+    zerado (ou sem a tag), e gravar isso jogava o cursor de volta pro início:
+    a consulta seguinte re-baixava ~90 dias em vários lotes seguidos, o que
+    queima a cota de consumo e acaba gerando 656. Retroceder de propósito é
+    só via resetar_nsu() (o botão de re-sincronizar)."""
     conn = get_conn()
-    conn.execute("UPDATE empresas SET ultimo_nsu = ? WHERE id = ?", (nsu, empresa_id))
-    conn.commit()
-    conn.close()
+    try:
+        atual = conn.execute(
+            "SELECT ultimo_nsu FROM empresas WHERE id = ?", (empresa_id,)
+        ).fetchone()
+        try:
+            if atual is not None and int(nsu) < int(atual["ultimo_nsu"]):
+                return
+        except (TypeError, ValueError):
+            pass  # valor não numérico: deixa o UPDATE seguir
+        conn.execute("UPDATE empresas SET ultimo_nsu = ? WHERE id = ?", (nsu, empresa_id))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def resetar_nsu(empresa_id):
