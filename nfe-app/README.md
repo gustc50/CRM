@@ -98,8 +98,26 @@ nfe-app/
 │   ├── index.html
 │   ├── style.css
 │   └── app.js
+├── tests/               # suíte de regressão (não vai no zip do cliente)
 └── data/app.db          # criado automaticamente na 1ª execução
 ```
+
+## Testes
+
+```
+cd tests
+python -m unittest discover -s . -t .
+```
+
+Só biblioteca padrão — não precisa instalar nada além do que já está no
+`requirements.txt`, e nem do certificado real (o `certificado.py` é
+substituído por um dublê). O banco usado é temporário, então rodar os
+testes nunca toca no `data/app.db` com as notas dos clientes.
+
+A suíte cobre principalmente as regras que já causaram bloqueio de 1 hora
+do CNPJ em produção (cStat 656): o cursor NSU só andar pra frente, o
+re-sincronizar não disparar consulta forçada, e o `tpAmb` nunca divergir do
+endpoint. Ao mexer nessas partes, rode os testes antes de gerar um zip novo.
 
 ## Sobre o .exe gerado
 

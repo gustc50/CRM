@@ -11,3 +11,6 @@ data/
 # Certificados digitais dos clientes.
 *.pfx
 *.p12
+
+# Cache de testes
+.pytest_cache/
