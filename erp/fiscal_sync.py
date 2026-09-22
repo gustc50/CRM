@@ -155,15 +155,18 @@ def gerar_lancamento_para_nota(nota, tipo: str, contraparte_doc, contraparte_nom
 
     fornecedor_id, cliente_id = vincular_contraparte(tipo, contraparte_doc, contraparte_nome, endereco_padrao)
 
-    # Se o fornecedor/cliente já tem uma categoria padrão cadastrada, o
-    # lançamento gerado sozinho já nasce classificado com ela.
+    # Se o fornecedor/cliente já tem categoria e/ou conta bancária padrão
+    # cadastradas, o lançamento gerado sozinho já nasce classificado com elas.
     categoria_id = None
+    conta_bancaria_id = None
+    contraparte = None
     if fornecedor_id:
         contraparte = Fornecedor.query.get(fornecedor_id)
-        categoria_id = contraparte.categoria_id if contraparte else None
     elif cliente_id:
         contraparte = Cliente.query.get(cliente_id)
-        categoria_id = contraparte.categoria_id if contraparte else None
+    if contraparte:
+        categoria_id = contraparte.categoria_id
+        conta_bancaria_id = contraparte.conta_bancaria_id
 
     transacao = Transacao(
         tipo=tipo,
@@ -173,6 +176,7 @@ def gerar_lancamento_para_nota(nota, tipo: str, contraparte_doc, contraparte_nom
         fornecedor_id=fornecedor_id,
         cliente_id=cliente_id,
         categoria_id=categoria_id,
+        conta_bancaria_id=conta_bancaria_id,
     )
     db.session.add(transacao)
     db.session.flush()

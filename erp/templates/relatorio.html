@@ -31,6 +31,7 @@
         Categoria
         <select name="categoria">
             <option value="">Todas</option>
+            <option value="sem" {{ 'selected' if categoria_filtro == 'sem' else '' }}>Sem categoria</option>
             {% for c in categorias %}
             <option value="{{ c.id }}" {{ 'selected' if categoria_filtro == c.id|string else '' }}>{{ c.nome }}</option>
             {% endfor %}
@@ -92,7 +93,7 @@
             <td>{{ t.descricao }}</td>
             <td style="color: {{ '#28a745' if t.tipo == 'Receber' else '#dc3545' }}">{{ t.tipo }}</td>
             <td>{{ nome_entidade(t) or '—' }}</td>
-            <td>{{ t.categoria.nome if t.categoria else '—' }}</td>
+            <td>{{ t.categoria.nome if t.categoria else '' }}{% if not t.categoria %}<span class="badge-sem-categoria">sem categoria</span>{% endif %}</td>
             <td>{{ t.conta_bancaria.nome if t.conta_bancaria else '—' }}</td>
             <td>{{ t.data_vencimento.strftime('%d/%m/%Y') }}</td>
             <td>{{ t.data_pagamento.strftime('%d/%m/%Y') if t.data_pagamento else '—' }}</td>

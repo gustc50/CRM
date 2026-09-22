@@ -37,6 +37,19 @@
     {% endif %}
 {% endmacro %}
 
+{% macro badge_origem(t) %}
+    {% if t.nota_servico %}
+    <a href="{{ url_for('nfse_baixar_xml', id=t.nota_servico.id) }}" class="badge-origem" target="_blank"
+       title="Gerado automaticamente pela NFS-e nº {{ t.nota_servico.numero or t.nota_servico.chave_acesso }} — clique para baixar o XML">🧾</a>
+    {% elif t.nota_eletronica %}
+    <a href="{{ url_for('nfe_baixar_xml', id=t.nota_eletronica.id) }}" class="badge-origem" target="_blank"
+       title="Gerado automaticamente por uma NF-e — clique para baixar o XML">🧾</a>
+    {% elif t.recorrente_id %}
+    <a href="{{ url_for('recorrentes_editar', id=t.recorrente_id) }}" class="badge-origem"
+       title="Gerado automaticamente por um lançamento recorrente — clique para ver a recorrência">🔁</a>
+    {% endif %}
+{% endmacro %}
+
 {% macro barra_sincronizacao(url_sincronizar, url_status, sync, ultima_sync, ultimo_status, rotulo) %}
 <div class="sync-fiscal" id="sync-fiscal" data-url="{{ url_status }}" data-estado="{{ sync.estado }}">
     <form action="{{ url_sincronizar }}" method="POST" class="form-inline">

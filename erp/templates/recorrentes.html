@@ -20,13 +20,13 @@
     <select name="fornecedor_id" id="fornecedor-select" class="campo-oculto" disabled>
         <option value="">Selecione o fornecedor...</option>
         {% for f in fornecedores %}
-        <option value="{{ f.id }}" data-categoria="{{ f.categoria_id or '' }}">{{ f.nome }}</option>
+        <option value="{{ f.id }}" data-categoria="{{ f.categoria_id or '' }}" data-conta="{{ f.conta_bancaria_id or '' }}">{{ f.nome }}</option>
         {% endfor %}
     </select>
     <select name="cliente_id" id="cliente-select" required>
         <option value="">Selecione o cliente...</option>
         {% for c in clientes %}
-        <option value="{{ c.id }}" data-categoria="{{ c.categoria_id or '' }}">{{ c.nome }}</option>
+        <option value="{{ c.id }}" data-categoria="{{ c.categoria_id or '' }}" data-conta="{{ c.conta_bancaria_id or '' }}">{{ c.nome }}</option>
         {% endfor %}
     </select>
     <select name="categoria_id" id="categoria-pagar-select" class="campo-oculto" disabled>
@@ -41,7 +41,7 @@
         <option value="{{ c.id }}">{{ c.nome }}</option>
         {% endfor %}
     </select>
-    <select name="conta_bancaria_id">
+    <select name="conta_bancaria_id" id="conta-bancaria-select">
         <option value="">Sem conta</option>
         {% for c in contas_bancarias %}
         <option value="{{ c.id }}">{{ c.nome }}</option>
@@ -62,6 +62,7 @@
             <th>Tipo</th>
             <th>Fornecedor/Cliente</th>
             <th>Categoria</th>
+            <th>Conta</th>
             <th>Dia Venc.</th>
             <th>Valor</th>
             <th>Ativo</th>
@@ -75,6 +76,7 @@
             <td style="color: {{ '#28a745' if r.tipo == 'Receber' else '#dc3545' }}">{{ r.tipo }}</td>
             <td>{{ r.fornecedor.nome if r.tipo == 'Pagar' and r.fornecedor else (r.cliente.nome if r.cliente else '—') }}</td>
             <td>{{ r.categoria.nome if r.categoria else '—' }}{% if r.categoria and r.categoria.centro_custo %} <small>({{ r.categoria.centro_custo }})</small>{% endif %}</td>
+            <td>{{ r.conta_bancaria.nome if r.conta_bancaria else '—' }}</td>
             <td>{{ r.dia_vencimento }}</td>
             <td>R$ {{ "%.2f"|format(r.valor) }}</td>
             <td>{{ 'Sim' if r.ativo else 'Não' }}</td>
@@ -88,7 +90,7 @@
         </tr>
         {% else %}
         <tr>
-            <td colspan="8">Nenhum lançamento recorrente cadastrado.</td>
+            <td colspan="9">Nenhum lançamento recorrente cadastrado.</td>
         </tr>
         {% endfor %}
     </tbody>

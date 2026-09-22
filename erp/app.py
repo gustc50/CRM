@@ -166,6 +166,8 @@ def migrar_schema():
             pendentes_tabela.append(f'ALTER TABLE {tabela} ADD COLUMN email VARCHAR(150)')
         if 'categoria_id' not in colunas_tabela:
             pendentes_tabela.append(f'ALTER TABLE {tabela} ADD COLUMN categoria_id INTEGER')
+        if 'conta_bancaria_id' not in colunas_tabela:
+            pendentes_tabela.append(f'ALTER TABLE {tabela} ADD COLUMN conta_bancaria_id INTEGER')
         if pendentes_tabela:
             with db.engine.begin() as conn:
                 for sql in pendentes_tabela:
@@ -199,6 +201,34 @@ def migrar_schema():
             with db.engine.begin() as conn:
                 for sql in pendentes_conta:
                     conn.execute(db.text(sql))
+
+    if 'conta_movimentacao' in tabelas:
+        colunas_mov = {c['name'] for c in inspector.get_columns('conta_movimentacao')}
+        if 'transacao_id' not in colunas_mov:
+            with db.engine.begin() as conn:
+                conn.execute(db.text('ALTER TABLE conta_movimentacao ADD COLUMN transacao_id INTEGER'))
+
+    _normalizar_cnpj_cpf_existentes()
+
+
+def _normalizar_cnpj_cpf_existentes():
+    """Reescreve CNPJ/CPF já cadastrados para conter só dígitos.
+
+    Cadastros feitos pela tela sempre gravaram o texto exatamente como
+    digitado (podendo ter pontuação); os criados automaticamente a partir de
+    notas fiscais sempre gravam só dígitos. Uniformiza os dois formatos para
+    que a coluna fique consistente na listagem — idempotente, então rodar de
+    novo em bancos já normalizados não faz nada.
+    """
+    for modelo in (Fornecedor, Cliente):
+        alterados = False
+        for registro in modelo.query.all():
+            normalizado = re.sub(r'\D', '', registro.cnpj_cpf or '')
+            if normalizado and normalizado != registro.cnpj_cpf:
+                registro.cnpj_cpf = normalizado
+                alterados = True
+        if alterados:
+            db.session.commit()
 
 
 with app.app_context():
@@ -327,6 +357,19 @@ app.jinja_env.globals['nome_banco'] = nome_banco
 app.jinja_env.globals['BANCOS_BRASIL'] = BANCOS_BRASIL
 
 
+def formatar_cnpj_cpf(valor):
+    """Formata um CNPJ/CPF (gravado só com dígitos) para exibição."""
+    digitos = re.sub(r'\D', '', valor or '')
+    if len(digitos) == 14:
+        return f'{digitos[0:2]}.{digitos[2:5]}.{digitos[5:8]}/{digitos[8:12]}-{digitos[12:14]}'
+    if len(digitos) == 11:
+        return f'{digitos[0:3]}.{digitos[3:6]}.{digitos[6:9]}-{digitos[9:11]}'
+    return valor or ''
+
+
+app.jinja_env.globals['formatar_cnpj_cpf'] = formatar_cnpj_cpf
+
+
 def validar_cadastro(form, tipo_categoria):
     """Valida os campos comuns ao cadastro de fornecedor/cliente.
 
@@ -359,13 +402,18 @@ def validar_cadastro(form, tipo_categoria):
     if not categoria_ok:
         return None, 'Categoria padrão inválida.'
 
+    conta_bancaria_id, conta_ok = _validar_id_opcional(form.get('conta_bancaria_id', ''), ContaBancaria)
+    if not conta_ok:
+        return None, 'Conta bancária padrão inválida.'
+
     dados = {
-        'cnpj_cpf': cnpj_cpf,
+        'cnpj_cpf': digitos,
         'nome': nome,
         'endereco': endereco,
         'telefone': telefone or None,
         'email': email or None,
         'categoria_id': categoria_id,
+        'conta_bancaria_id': conta_bancaria_id,
     }
     return dados, None
 
@@ -427,6 +475,9 @@ def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo, coluna_
     def _categorias():
         return Categoria.query.filter_by(tipo=tipo_categoria).order_by(Categoria.nome).all()
 
+    def _contas_bancarias():
+        return ContaBancaria.query.order_by(ContaBancaria.nome).all()
+
     def listar():
         registros = model.query.order_by(model.nome).all()
         return render_template(
@@ -436,6 +487,7 @@ def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo, coluna_
             titulo_singular=nome_singular,
             prefixo=prefixo,
             categorias=_categorias(),
+            contas_bancarias=_contas_bancarias(),
         )
 
     def adicionar():
@@ -463,6 +515,7 @@ def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo, coluna_
             registro.telefone = dados['telefone']
             registro.email = dados['email']
             registro.categoria_id = dados['categoria_id']
+            registro.conta_bancaria_id = dados['conta_bancaria_id']
             db.session.commit()
             flash(f'{nome_singular} atualizado com sucesso.', 'sucesso')
             return redirect(url_for(f'{prefixo}_listar'))
@@ -473,6 +526,7 @@ def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo, coluna_
             titulo_singular=nome_singular,
             prefixo=prefixo,
             categorias=_categorias(),
+            contas_bancarias=_contas_bancarias(),
         )
 
     def excluir(id):
@@ -493,9 +547,13 @@ def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo, coluna_
 
     def exportar():
         registros = model.query.order_by(model.nome).all()
-        cabecalho = ['CNPJ/CPF', 'Nome', 'Endereço', 'Telefone', 'E-mail', 'Categoria Padrão']
+        cabecalho = ['CNPJ/CPF', 'Nome', 'Endereço', 'Telefone', 'E-mail', 'Categoria Padrão', 'Conta Padrão']
         linhas = [
-            [r.cnpj_cpf, r.nome, r.endereco, r.telefone or '', r.email or '', r.categoria.nome if r.categoria else '']
+            [
+                r.cnpj_cpf, r.nome, r.endereco, r.telefone or '', r.email or '',
+                r.categoria.nome if r.categoria else '',
+                r.conta_bancaria.nome if r.conta_bancaria else '',
+            ]
             for r in registros
         ]
         formato = request.args.get('formato', 'csv')
@@ -679,6 +737,33 @@ def _movimentacoes_do_periodo(conta_id, inicio, fim):
     ).order_by(ContaMovimentacao.data, ContaMovimentacao.id).all()
 
 
+def _transacoes_conciliaveis(tipo):
+    """Lançamentos Pendentes desse tipo ainda não vinculados a nenhuma
+    movimentação bancária — candidatos a conciliação."""
+    vinculadas = db.session.query(ContaMovimentacao.transacao_id).filter(
+        ContaMovimentacao.transacao_id.isnot(None)
+    )
+    return Transacao.query.filter(
+        Transacao.tipo == tipo,
+        Transacao.status == 'Pendente',
+        ~Transacao.id.in_(vinculadas),
+    ).order_by(Transacao.data_vencimento).all()
+
+
+def _sugerir_transacao(mov, candidatas):
+    """Sugere o lançamento mais provável para um movimento importado: exige
+    o mesmo valor (tolerância de 1 centavo, por causa de arredondamento) e,
+    entre os que baterem, prefere o vencimento mais próximo da data do
+    movimento. Sem valor batendo, não há sugestão — o usuário escolhe na mão.
+    """
+    valor_mov = abs(mov.valor)
+    compativeis = [t for t in candidatas if abs(t.valor - valor_mov) < 0.01]
+    if not compativeis:
+        return None
+    compativeis.sort(key=lambda t: abs((t.data_vencimento - mov.data).days))
+    return compativeis[0]
+
+
 @app.route('/contas/<int:id>/movimentacoes')
 def contas_movimentacoes(id):
     conta = ContaBancaria.query.get_or_404(id)
@@ -687,6 +772,18 @@ def contas_movimentacoes(id):
 
     total_creditos = sum(m.valor for m in movimentos if m.tipo == 'CREDITO')
     total_debitos = sum(-m.valor for m in movimentos if m.tipo == 'DEBITO')
+
+    candidatas_pagar = _transacoes_conciliaveis('Pagar')
+    candidatas_receber = _transacoes_conciliaveis('Receber')
+    conciliacao = {}
+    for m in movimentos:
+        if m.transacao_id:
+            continue
+        candidatas = candidatas_receber if m.tipo == 'CREDITO' else candidatas_pagar
+        conciliacao[m.id] = {
+            'candidatas': candidatas,
+            'sugerida': _sugerir_transacao(m, candidatas),
+        }
 
     return render_template(
         'conta_movimentacoes.html',
@@ -697,7 +794,60 @@ def contas_movimentacoes(id):
         total_creditos=total_creditos,
         total_debitos=total_debitos,
         saldo_periodo=total_creditos - total_debitos,
+        conciliacao=conciliacao,
     )
+
+
+@app.route('/contas/<int:id>/movimentacoes/<int:mov_id>/vincular', methods=['POST'])
+def contas_movimentacoes_vincular(id, mov_id):
+    mov = ContaMovimentacao.query.filter_by(id=mov_id, conta_bancaria_id=id).first_or_404()
+    destino = url_for('contas_movimentacoes', id=id, inicio=request.args.get('inicio', ''), fim=request.args.get('fim', ''))
+
+    transacao_id = request.form.get('transacao_id', '')
+    if not transacao_id.isdigit():
+        flash('Selecione um lançamento para vincular a esta movimentação.', 'erro')
+        return redirect(destino)
+
+    transacao = Transacao.query.get(int(transacao_id))
+    if not transacao:
+        flash('Lançamento não encontrado.', 'erro')
+        return redirect(destino)
+
+    tipo_esperado = 'Receber' if mov.tipo == 'CREDITO' else 'Pagar'
+    if transacao.tipo != tipo_esperado:
+        flash('Esse lançamento não é compatível com o tipo do movimento (crédito → Receber, débito → Pagar).', 'erro')
+        return redirect(destino)
+
+    outra_movimentacao = ContaMovimentacao.query.filter(
+        ContaMovimentacao.transacao_id == transacao.id,
+        ContaMovimentacao.id != mov.id,
+    ).first()
+    if outra_movimentacao:
+        flash('Esse lançamento já está vinculado a outra movimentação do extrato.', 'erro')
+        return redirect(destino)
+
+    mov.transacao_id = transacao.id
+    baixado_agora = transacao.status == 'Pendente'
+    if baixado_agora:
+        transacao.status = 'Concluído'
+        transacao.data_pagamento = mov.data
+    if not transacao.conta_bancaria_id:
+        transacao.conta_bancaria_id = id
+    db.session.commit()
+
+    mensagem = f'Movimentação vinculada ao lançamento "{transacao.descricao}"'
+    mensagem += ' — baixa dada automaticamente com a data do extrato.' if baixado_agora else '.'
+    flash(mensagem, 'sucesso')
+    return redirect(destino)
+
+
+@app.route('/contas/<int:id>/movimentacoes/<int:mov_id>/desvincular', methods=['POST'])
+def contas_movimentacoes_desvincular(id, mov_id):
+    mov = ContaMovimentacao.query.filter_by(id=mov_id, conta_bancaria_id=id).first_or_404()
+    mov.transacao_id = None
+    db.session.commit()
+    flash('Vínculo removido. O lançamento mantém o status atual — reabra-o manualmente se necessário.', 'sucesso')
+    return redirect(url_for('contas_movimentacoes', id=id, inicio=request.args.get('inicio', ''), fim=request.args.get('fim', '')))
 
 
 @app.route('/contas/<int:id>/importar-ofx', methods=['POST'])
@@ -935,11 +1085,17 @@ def index():
     todas_transacoes = Transacao.query.all()
     total_receber = sum(t.valor for t in todas_transacoes if t.tipo == 'Receber' and t.status == 'Pendente')
     total_pagar = sum(t.valor for t in todas_transacoes if t.tipo == 'Pagar' and t.status == 'Pendente')
+    sem_categoria_count = sum(1 for t in todas_transacoes if t.categoria_id is None)
+
+    contas_com_saldo = ContaBancaria.query.filter(ContaBancaria.saldo.isnot(None)).all()
+    saldo_contas = sum(c.saldo for c in contas_com_saldo) if contas_com_saldo else None
+    saldo_contas_data = max((c.saldo_data for c in contas_com_saldo if c.saldo_data), default=None)
 
     busca = request.args.get('busca', '').strip()
     filtro_tipo = request.args.get('filtro_tipo', 'Todos')
     filtro_status = request.args.get('filtro_status', 'Todos')
     filtro_categoria = request.args.get('filtro_categoria', '')
+    filtro_conta = request.args.get('filtro_conta', '')
 
     query = Transacao.query
     if busca:
@@ -953,8 +1109,12 @@ def index():
         query = query.filter(Transacao.tipo == filtro_tipo)
     if filtro_status in STATUS_VALIDOS:
         query = query.filter(Transacao.status == filtro_status)
-    if filtro_categoria.isdigit():
+    if filtro_categoria == 'sem':
+        query = query.filter(Transacao.categoria_id.is_(None))
+    elif filtro_categoria.isdigit():
         query = query.filter(Transacao.categoria_id == int(filtro_categoria))
+    if filtro_conta.isdigit():
+        query = query.filter(Transacao.conta_bancaria_id == int(filtro_conta))
 
     transacoes = query.order_by(Transacao.data_vencimento).all()
 
@@ -963,6 +1123,9 @@ def index():
         transacoes=transacoes,
         total_receber=total_receber,
         total_pagar=total_pagar,
+        sem_categoria_count=sem_categoria_count,
+        saldo_contas=saldo_contas,
+        saldo_contas_data=saldo_contas_data,
         fornecedores=Fornecedor.query.order_by(Fornecedor.nome).all(),
         clientes=Cliente.query.order_by(Cliente.nome).all(),
         categorias=Categoria.query.order_by(Categoria.nome).all(),
@@ -974,6 +1137,7 @@ def index():
         filtro_tipo=filtro_tipo,
         filtro_status=filtro_status,
         filtro_categoria=filtro_categoria,
+        filtro_conta=filtro_conta,
     )
 
 
@@ -1131,7 +1295,7 @@ def periodo_dos_parametros(args):
         status_filtro = 'Todos'
 
     categoria_filtro = args.get('categoria', '')
-    if not categoria_filtro.isdigit():
+    if categoria_filtro != 'sem' and not categoria_filtro.isdigit():
         categoria_filtro = ''
 
     conta_filtro = args.get('conta', '')
@@ -1148,7 +1312,9 @@ def transacoes_do_periodo(inicio, fim, status_filtro, categoria_filtro='', conta
     )
     if status_filtro in STATUS_VALIDOS:
         query = query.filter(Transacao.status == status_filtro)
-    if categoria_filtro:
+    if categoria_filtro == 'sem':
+        query = query.filter(Transacao.categoria_id.is_(None))
+    elif categoria_filtro:
         query = query.filter(Transacao.categoria_id == int(categoria_filtro))
     if conta_filtro:
         query = query.filter(Transacao.conta_bancaria_id == int(conta_filtro))

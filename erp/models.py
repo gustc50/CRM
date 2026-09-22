@@ -22,6 +22,10 @@ class Fornecedor(db.Model):
     categoria_id = db.Column(db.Integer, db.ForeignKey('categoria.id'), nullable=True)
     categoria = db.relationship('Categoria')
 
+    # Conta bancária sugerida automaticamente ao lançar uma conta a pagar para este fornecedor
+    conta_bancaria_id = db.Column(db.Integer, db.ForeignKey('conta_bancaria.id'), nullable=True)
+    conta_bancaria = db.relationship('ContaBancaria')
+
 
 class Cliente(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -34,6 +38,10 @@ class Cliente(db.Model):
     # Categoria sugerida automaticamente ao lançar uma conta a receber deste cliente
     categoria_id = db.Column(db.Integer, db.ForeignKey('categoria.id'), nullable=True)
     categoria = db.relationship('Categoria')
+
+    # Conta bancária sugerida automaticamente ao lançar uma conta a receber deste cliente
+    conta_bancaria_id = db.Column(db.Integer, db.ForeignKey('conta_bancaria.id'), nullable=True)
+    conta_bancaria = db.relationship('ContaBancaria')
 
 
 class ContaBancaria(db.Model):
@@ -57,6 +65,12 @@ class ContaMovimentacao(db.Model):
     valor = db.Column(db.Float, nullable=False)
     tipo = db.Column(db.String(10), nullable=False)  # 'CREDITO' | 'DEBITO'
     __table_args__ = (db.UniqueConstraint('conta_bancaria_id', 'fitid'),)
+
+    # Conciliação: lançamento (Transacao) confirmado como correspondente a
+    # este movimento do extrato. Preenchido pela sugestão automática ou pela
+    # escolha manual do usuário na tela de Movimentações.
+    transacao_id = db.Column(db.Integer, db.ForeignKey('transacao.id'), nullable=True)
+    transacao = db.relationship('Transacao')
 
 
 class Transacao(db.Model):
@@ -144,7 +158,7 @@ class NotaServico(db.Model):
     xml_gzip = db.Column(db.LargeBinary)
 
     transacao_id = db.Column(db.Integer, db.ForeignKey('transacao.id'), nullable=True)
-    transacao = db.relationship('Transacao')
+    transacao = db.relationship('Transacao', backref=db.backref('nota_servico', uselist=False))
 
 
 class NotaServicoEvento(db.Model):
@@ -176,4 +190,4 @@ class NotaEletronica(db.Model):
     baixado_em = db.Column(db.String(30))
 
     transacao_id = db.Column(db.Integer, db.ForeignKey('transacao.id'), nullable=True)
-    transacao = db.relationship('Transacao')
+    transacao = db.relationship('Transacao', backref=db.backref('nota_eletronica', uselist=False))

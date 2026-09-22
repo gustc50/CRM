@@ -17,7 +17,7 @@
         <select name="fornecedor_id" id="fornecedor-select" {{ '' if t.tipo == 'Pagar' else 'disabled' }}>
             <option value="">Selecione o fornecedor...</option>
             {% for f in fornecedores %}
-            <option value="{{ f.id }}" data-categoria="{{ f.categoria_id or '' }}" {{ 'selected' if t.fornecedor_id == f.id else '' }}>{{ f.nome }}</option>
+            <option value="{{ f.id }}" data-categoria="{{ f.categoria_id or '' }}" data-conta="{{ f.conta_bancaria_id or '' }}" {{ 'selected' if t.fornecedor_id == f.id else '' }}>{{ f.nome }}</option>
             {% endfor %}
         </select>
     </label>
@@ -27,7 +27,7 @@
         <select name="cliente_id" id="cliente-select" {{ '' if t.tipo == 'Receber' else 'disabled' }}>
             <option value="">Selecione o cliente...</option>
             {% for c in clientes %}
-            <option value="{{ c.id }}" data-categoria="{{ c.categoria_id or '' }}" {{ 'selected' if t.cliente_id == c.id else '' }}>{{ c.nome }}</option>
+            <option value="{{ c.id }}" data-categoria="{{ c.categoria_id or '' }}" data-conta="{{ c.conta_bancaria_id or '' }}" {{ 'selected' if t.cliente_id == c.id else '' }}>{{ c.nome }}</option>
             {% endfor %}
         </select>
     </label>
@@ -54,7 +54,7 @@
 
     <label>
         Conta bancária
-        <select name="conta_bancaria_id">
+        <select name="conta_bancaria_id" id="conta-bancaria-select">
             <option value="">Sem conta</option>
             {% for c in contas_bancarias %}
             <option value="{{ c.id }}" {{ 'selected' if t.conta_bancaria_id == c.id else '' }}>{{ c.nome }}</option>

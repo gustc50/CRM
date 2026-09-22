@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% import '_macros_fiscal.html' as fiscal %}
 
 {% block content %}
 <div class="dashboard">
@@ -10,12 +11,29 @@
         <h3>A Pagar (Pendentes)</h3>
         <h2>R$ {{ "%.2f"|format(total_pagar) }}</h2>
     </div>
+    <div class="card">
+        <h3>Saldo em Contas</h3>
+        {% if saldo_contas is not none %}
+        <h2>R$ {{ "%.2f"|format(saldo_contas) }}</h2>
+        {% if saldo_contas_data %}<small>Atualizado pelo último OFX importado em {{ saldo_contas_data.strftime('%d/%m/%Y') }}</small>{% endif %}
+        {% else %}
+        <h2>—</h2>
+        <small><a href="{{ url_for('contas_listar') }}">Importe um OFX</a> para ver o saldo real das contas.</small>
+        {% endif %}
+    </div>
 </div>
 
 {% if not fornecedores or not clientes %}
 <p class="aviso-cadastro">
     {% if not fornecedores %}Cadastre pelo menos um <a href="{{ url_for('fornecedores_listar') }}">fornecedor</a> para lançar contas a pagar.{% endif %}
     {% if not clientes %}Cadastre pelo menos um <a href="{{ url_for('clientes_listar') }}">cliente</a> para lançar contas a receber.{% endif %}
+</p>
+{% endif %}
+
+{% if sem_categoria_count %}
+<p class="aviso-cadastro">
+    ⚠ {{ sem_categoria_count }} lançamento(s) sem categoria.
+    <a href="{{ url_for('index', filtro_categoria='sem') }}">Ver todos</a>
 </p>
 {% endif %}
 
@@ -27,13 +45,13 @@
     <select name="fornecedor_id" id="fornecedor-select" class="campo-oculto" disabled>
         <option value="">Selecione o fornecedor...</option>
         {% for f in fornecedores %}
-        <option value="{{ f.id }}" data-categoria="{{ f.categoria_id or '' }}">{{ f.nome }}</option>
+        <option value="{{ f.id }}" data-categoria="{{ f.categoria_id or '' }}" data-conta="{{ f.conta_bancaria_id or '' }}">{{ f.nome }}</option>
         {% endfor %}
     </select>
     <select name="cliente_id" id="cliente-select" required>
         <option value="">Selecione o cliente...</option>
         {% for c in clientes %}
-        <option value="{{ c.id }}" data-categoria="{{ c.categoria_id or '' }}">{{ c.nome }}</option>
+        <option value="{{ c.id }}" data-categoria="{{ c.categoria_id or '' }}" data-conta="{{ c.conta_bancaria_id or '' }}">{{ c.nome }}</option>
         {% endfor %}
     </select>
     <select name="categoria_id" id="categoria-pagar-select" class="campo-oculto" disabled>
@@ -48,7 +66,7 @@
         <option value="{{ c.id }}">{{ c.nome }}</option>
         {% endfor %}
     </select>
-    <select name="conta_bancaria_id">
+    <select name="conta_bancaria_id" id="conta-bancaria-select">
         <option value="">Sem conta</option>
         {% for c in contas_bancarias %}
         <option value="{{ c.id }}">{{ c.nome }}</option>
@@ -85,8 +103,18 @@
         Categoria
         <select name="filtro_categoria">
             <option value="">Todas</option>
+            <option value="sem" {{ 'selected' if filtro_categoria == 'sem' else '' }}>Sem categoria</option>
             {% for c in categorias %}
             <option value="{{ c.id }}" {{ 'selected' if filtro_categoria == c.id|string else '' }}>{{ c.nome }} ({{ c.tipo }})</option>
+            {% endfor %}
+        </select>
+    </label>
+    <label>
+        Conta
+        <select name="filtro_conta">
+            <option value="">Todas</option>
+            {% for c in contas_bancarias %}
+            <option value="{{ c.id }}" {{ 'selected' if filtro_conta == c.id|string else '' }}>{{ c.nome }}</option>
             {% endfor %}
         </select>
     </label>
@@ -113,10 +141,16 @@
     <tbody>
         {% for t in transacoes %}
         <tr class="{{ 'atrasado' if t.status == 'Pendente' and t.data_vencimento < hoje else '' }}">
-            <td>{{ t.descricao }}</td>
+            <td>{{ t.descricao }} {{ fiscal.badge_origem(t) }}</td>
             <td style="color: {{ '#28a745' if t.tipo == 'Receber' else '#dc3545' }}">{{ t.tipo }}</td>
             <td>{{ nome_entidade(t) or '—' }}</td>
-            <td>{{ t.categoria.nome if t.categoria else '—' }}{% if t.categoria and t.categoria.centro_custo %} <small>({{ t.categoria.centro_custo }})</small>{% endif %}</td>
+            <td>
+                {% if t.categoria %}
+                {{ t.categoria.nome }}{% if t.categoria.centro_custo %} <small>({{ t.categoria.centro_custo }})</small>{% endif %}
+                {% else %}
+                <span class="badge-sem-categoria">sem categoria</span>
+                {% endif %}
+            </td>
             <td>{{ t.conta_bancaria.nome if t.conta_bancaria else '—' }}</td>
             <td>{{ t.data_vencimento.strftime('%d/%m/%Y') }}</td>
             <td>{{ t.data_pagamento.strftime('%d/%m/%Y') if t.data_pagamento else '—' }}</td>

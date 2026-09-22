@@ -309,6 +309,63 @@ nova versão roda, sem perda de nenhum dado já cadastrado (categorias
 antigas viram "Contas a Pagar" por padrão, e contas antigas ficam sem
 banco/agência/conta até serem editadas ou até a primeira importação de OFX).
 
+## Oitava rodada: integração entre abas e automações
+
+Revisão de como Categorias, Contas, Fornecedores/Clientes, Recorrentes e
+Notas Fiscais se conectam entre si, fechando lacunas encontradas e
+automatizando passos que antes exigiam ação manual.
+
+**Conciliação bancária (Contas → Movimentações)**
+- Ao importar um extrato OFX, cada movimento sem vínculo já vem com uma
+  **sugestão automática** do lançamento pendente correspondente (mesmo
+  valor — tolerância de 1 centavo — e vencimento mais próximo da data do
+  movimento), pré-selecionada num menu.
+- Um clique em "Vincular e Dar Baixa" confirma o vínculo **e já dá baixa no
+  lançamento com a data real informada pelo banco**, preenchendo também a
+  conta bancária dele se ainda estivesse em branco — antes, "Dar Baixa"
+  sempre pedia a data manualmente, mesmo quando o extrato já mostrava
+  exatamente quando o dinheiro entrou ou saiu.
+- "Desvincular" remove a associação sem mexer no status do lançamento
+  (evita reabrir por engano um lançamento que também foi editado depois).
+- Um lançamento só pode ficar vinculado a **um** movimento por vez, e o
+  tipo é sempre validado (crédito → Receber, débito → Pagar).
+
+**Conta bancária padrão no Fornecedor/Cliente**
+- Mesmo padrão já existente para categoria: agora dá para escolher uma
+  conta bancária padrão no cadastro de Fornecedor/Cliente. Ela é
+  pré-selecionada automaticamente ao escolher esse fornecedor/cliente num
+  novo lançamento, e também é herdada pelos lançamentos gerados sozinhos a
+  partir de notas fiscais.
+
+**CNPJ/CPF consistente**
+- Cadastros feitos pela tela agora gravam o CNPJ/CPF só com dígitos — igual
+  já acontecia com os cadastros criados automaticamente por uma nota fiscal
+  — e a exibição em tela é sempre formatada (`00.000.000/0000-00` ou
+  `000.000.000-00`), independente de como foi digitado. Bancos antigos são
+  normalizados automaticamente na migração, sem duplicar nenhum cadastro.
+
+**Rastreabilidade da origem do lançamento**
+- Lançamentos gerados automaticamente por uma nota fiscal (NFS-e/NF-e)
+  mostram um ícone 🧾 com link direto para baixar o XML, sem precisar
+  voltar para a aba de Notas. Os gerados por uma recorrência mostram 🔁
+  com link para a recorrência de origem.
+
+**Lançamentos sem categoria**
+- O dashboard avisa quando existem lançamentos sem categoria e tem um
+  atalho para ver todos; a lista de Lançamentos também aceita filtrar por
+  "Sem categoria" (disponível no Relatório também).
+
+**Saldo bancário real no dashboard**
+- Novo card "Saldo em Contas" somando o saldo mais recente de todas as
+  contas com OFX já importado, com a data da última atualização.
+
+**Pequenos ajustes de paridade**
+- A aba Lançamentos ganhou filtro por Conta bancária (já existia no
+  Relatório). A lista de Recorrentes passou a mostrar a coluna Conta.
+
+Bancos `erp.db` de versões anteriores continuam funcionando: as colunas
+novas são migradas automaticamente, sem perda de dados.
+
 ## Limitações conhecidas (fora do escopo desta revisão)
 
 - Não há autenticação/login — qualquer pessoa com acesso à máquina/rede onde

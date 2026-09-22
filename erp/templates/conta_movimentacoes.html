@@ -57,6 +57,12 @@
     </form>
 </div>
 
+<p class="aviso-cadastro">
+    <strong>Conciliação:</strong> quando um movimento tem um lançamento pendente com o mesmo valor,
+    o sistema já sugere o vínculo pré-selecionado — confira e clique em "Vincular e Dar Baixa" para confirmar.
+    Isso dá baixa no lançamento automaticamente com a data que veio do banco.
+</p>
+
 <div class="table-scroll">
 <table>
     <thead>
@@ -65,6 +71,7 @@
             <th>Descrição</th>
             <th>Tipo</th>
             <th>Valor</th>
+            <th>Lançamento</th>
         </tr>
     </thead>
     <tbody>
@@ -74,10 +81,32 @@
             <td>{{ m.descricao }}</td>
             <td style="color: {{ '#28a745' if m.tipo == 'CREDITO' else '#dc3545' }}">{{ 'Crédito' if m.tipo == 'CREDITO' else 'Débito' }}</td>
             <td>R$ {{ "%.2f"|format(m.valor) }}</td>
+            <td class="acoes">
+                {% if m.transacao %}
+                <span class="badge-baixado">{{ m.transacao.descricao }}</span>
+                <form action="{{ url_for('contas_movimentacoes_desvincular', id=conta.id, mov_id=m.id, inicio=inicio.isoformat(), fim=fim.isoformat()) }}" method="POST" class="form-inline"
+                      onsubmit="return confirm('Desvincular esta movimentação do lançamento? O status do lançamento não é alterado.');">
+                    <button type="submit" class="btn-acao btn-cancelar">Desvincular</button>
+                </form>
+                {% elif conciliacao[m.id].candidatas %}
+                <form action="{{ url_for('contas_movimentacoes_vincular', id=conta.id, mov_id=m.id, inicio=inicio.isoformat(), fim=fim.isoformat()) }}" method="POST" class="form-inline">
+                    <select name="transacao_id">
+                        {% for t in conciliacao[m.id].candidatas %}
+                        <option value="{{ t.id }}" {{ 'selected' if conciliacao[m.id].sugerida and conciliacao[m.id].sugerida.id == t.id else '' }}>
+                            {{ t.descricao }} (R$ {{ "%.2f"|format(t.valor) }}, venc. {{ t.data_vencimento.strftime('%d/%m/%Y') }})
+                        </option>
+                        {% endfor %}
+                    </select>
+                    <button type="submit" class="btn-acao btn-concluir">{{ 'Vincular e Dar Baixa' if conciliacao[m.id].sugerida else 'Vincular' }}</button>
+                </form>
+                {% else %}
+                <small>Nenhum lançamento pendente compatível</small>
+                {% endif %}
+            </td>
         </tr>
         {% else %}
         <tr>
-            <td colspan="4">Nenhuma movimentação encontrada no período selecionado.</td>
+            <td colspan="5">Nenhuma movimentação encontrada no período selecionado.</td>
         </tr>
         {% endfor %}
     </tbody>
