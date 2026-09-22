@@ -1,0 +1,86 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2>Movimentações — {{ conta.nome }}</h2>
+<p class="aviso-cadastro">
+    {{ nome_banco(conta.banco) if conta.banco else 'Banco não informado' }}
+    {% if conta.agencia %} · Agência {{ conta.agencia }}{% endif %}
+    {% if conta.conta_numero %} · Conta {{ conta.conta_numero }}{% endif %}
+    {% if conta.saldo is not none %} · Saldo: R$ {{ "%.2f"|format(conta.saldo) }}{% if conta.saldo_data %} em {{ conta.saldo_data.strftime('%d/%m/%Y') }}{% endif %}{% endif %}
+</p>
+
+<form action="{{ url_for('contas_importar_ofx', id=conta.id) }}" method="POST" enctype="multipart/form-data" class="form-inline-bloco">
+    <label>
+        Inserir OFX
+        <input type="file" name="ofx_arquivo" accept=".ofx,.qfx" required>
+    </label>
+    <button type="submit">Importar Extrato</button>
+</form>
+
+<form action="{{ url_for('contas_movimentacoes', id=conta.id) }}" method="GET" class="form-filtro">
+    <label>
+        De
+        <input type="date" name="inicio" value="{{ inicio.isoformat() }}">
+    </label>
+    <label>
+        Até
+        <input type="date" name="fim" value="{{ fim.isoformat() }}">
+    </label>
+    <button type="submit">Filtrar</button>
+    <a href="{{ url_for('contas_listar') }}" class="btn-acao btn-cancelar">Voltar às Contas</a>
+</form>
+
+<div class="dashboard">
+    <div class="card receber">
+        <h3>Créditos no Período</h3>
+        <h2>R$ {{ "%.2f"|format(total_creditos) }}</h2>
+    </div>
+    <div class="card pagar">
+        <h3>Débitos no Período</h3>
+        <h2>R$ {{ "%.2f"|format(total_debitos) }}</h2>
+    </div>
+    <div class="card {{ 'receber' if saldo_periodo >= 0 else 'pagar' }}">
+        <h3>Saldo do Período</h3>
+        <h2>R$ {{ "%.2f"|format(saldo_periodo) }}</h2>
+    </div>
+</div>
+
+<div class="exportar">
+    <span>Exportar período selecionado:</span>
+    <a class="btn-acao btn-exportar"
+       href="{{ url_for('contas_movimentacoes_exportar', id=conta.id, formato='csv', inicio=inicio.isoformat(), fim=fim.isoformat()) }}">Baixar CSV</a>
+    <a class="btn-acao btn-exportar"
+       href="{{ url_for('contas_movimentacoes_exportar', id=conta.id, formato='xlsx', inicio=inicio.isoformat(), fim=fim.isoformat()) }}">Baixar Excel (XLSX)</a>
+    <form action="{{ url_for('contas_limpar_movimentacoes', id=conta.id) }}" method="POST" class="form-inline"
+          onsubmit="return confirm('Remover todas as movimentações importadas desta conta? Essa ação não pode ser desfeita.');">
+        <button type="submit" class="btn-acao btn-excluir">Limpar Movimentações</button>
+    </form>
+</div>
+
+<div class="table-scroll">
+<table>
+    <thead>
+        <tr>
+            <th>Data</th>
+            <th>Descrição</th>
+            <th>Tipo</th>
+            <th>Valor</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for m in movimentos %}
+        <tr>
+            <td>{{ m.data.strftime('%d/%m/%Y') }}</td>
+            <td>{{ m.descricao }}</td>
+            <td style="color: {{ '#28a745' if m.tipo == 'CREDITO' else '#dc3545' }}">{{ 'Crédito' if m.tipo == 'CREDITO' else 'Débito' }}</td>
+            <td>R$ {{ "%.2f"|format(m.valor) }}</td>
+        </tr>
+        {% else %}
+        <tr>
+            <td colspan="4">Nenhuma movimentação encontrada no período selecionado.</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endblock %}

@@ -384,3 +384,14 @@ tr.nota-cancelada { background: #fafafa; }
     color: #b02a37;
     font-size: 11px;
 }
+
+/* ---- Categorias e Contas Bancárias ---- */
+
+select[name="banco"] {
+    min-width: 200px;
+}
+
+input[type="file"] {
+    background: #fff;
+    padding: 8px;
+}

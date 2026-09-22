@@ -1,0 +1,51 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2>Categorias</h2>
+<p class="aviso-cadastro">
+    Categorias organizam seus lançamentos e podem ter um centro de custo opcional.
+    Cada categoria é exclusiva de Contas a Pagar ou de Contas a Receber.
+</p>
+
+<form action="{{ url_for('categorias_adicionar') }}" method="POST">
+    <input type="text" name="nome" placeholder="Nome da categoria" maxlength="50" required>
+    <select name="tipo" required>
+        <option value="">Tipo...</option>
+        <option value="Pagar">Contas a Pagar</option>
+        <option value="Receber">Contas a Receber</option>
+    </select>
+    <input type="text" name="centro_custo" placeholder="Centro de custo (opcional)" maxlength="80">
+    <button type="submit">Adicionar Categoria</button>
+</form>
+
+<table>
+    <thead>
+        <tr>
+            <th>Nome</th>
+            <th>Tipo</th>
+            <th>Centro de Custo</th>
+            <th>Ação</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for r in registros %}
+        <tr>
+            <td>{{ r.nome }}</td>
+            <td style="color: {{ '#28a745' if r.tipo == 'Receber' else '#dc3545' }}">{{ 'Contas a Receber' if r.tipo == 'Receber' else 'Contas a Pagar' }}</td>
+            <td>{{ r.centro_custo or '—' }}</td>
+            <td class="acoes">
+                <a href="{{ url_for('categorias_editar', id=r.id) }}" class="btn-acao btn-editar">Editar</a>
+                <form action="{{ url_for('categorias_excluir', id=r.id) }}" method="POST" class="form-inline"
+                      onsubmit="return confirm('Excluir a categoria \'{{ r.nome }}\'? Essa ação não pode ser desfeita.');">
+                    <button type="submit" class="btn-acao btn-excluir">Excluir</button>
+                </form>
+            </td>
+        </tr>
+        {% else %}
+        <tr>
+            <td colspan="4">Nenhuma categoria cadastrada.</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

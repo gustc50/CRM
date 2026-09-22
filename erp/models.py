@@ -3,6 +3,13 @@ from flask_sqlalchemy import SQLAlchemy
 db = SQLAlchemy()
 
 
+class Categoria(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    nome = db.Column(db.String(50), nullable=False)
+    tipo = db.Column(db.String(20), nullable=False, default='Pagar')  # 'Receber' | 'Pagar'
+    centro_custo = db.Column(db.String(80), nullable=True)
+
+
 class Fornecedor(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     cnpj_cpf = db.Column(db.String(20), nullable=False)
@@ -10,6 +17,10 @@ class Fornecedor(db.Model):
     endereco = db.Column(db.String(200), nullable=False)
     telefone = db.Column(db.String(20), nullable=True)
     email = db.Column(db.String(150), nullable=True)
+
+    # Categoria sugerida automaticamente ao lançar uma conta a pagar para este fornecedor
+    categoria_id = db.Column(db.Integer, db.ForeignKey('categoria.id'), nullable=True)
+    categoria = db.relationship('Categoria')
 
 
 class Cliente(db.Model):
@@ -20,15 +31,32 @@ class Cliente(db.Model):
     telefone = db.Column(db.String(20), nullable=True)
     email = db.Column(db.String(150), nullable=True)
 
-
-class Categoria(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    nome = db.Column(db.String(50), nullable=False)
+    # Categoria sugerida automaticamente ao lançar uma conta a receber deste cliente
+    categoria_id = db.Column(db.Integer, db.ForeignKey('categoria.id'), nullable=True)
+    categoria = db.relationship('Categoria')
 
 
 class ContaBancaria(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(80), nullable=False)
+    banco = db.Column(db.String(10), nullable=True)  # código Febraban (ou vazio p/ caixa/dinheiro)
+    agencia = db.Column(db.String(20), nullable=True)
+    conta_numero = db.Column(db.String(30), nullable=True)
+    saldo = db.Column(db.Float, nullable=True)  # saldo informado no último OFX importado
+    saldo_data = db.Column(db.Date, nullable=True)
+
+
+class ContaMovimentacao(db.Model):
+    """Lançamento do extrato bancário, importado de um arquivo OFX."""
+    id = db.Column(db.Integer, primary_key=True)
+    conta_bancaria_id = db.Column(db.Integer, db.ForeignKey('conta_bancaria.id'), nullable=False)
+    conta_bancaria = db.relationship('ContaBancaria')
+    fitid = db.Column(db.String(80), nullable=False)  # id único do banco (evita importar 2x)
+    data = db.Column(db.Date, nullable=False)
+    descricao = db.Column(db.String(200), nullable=False)
+    valor = db.Column(db.Float, nullable=False)
+    tipo = db.Column(db.String(10), nullable=False)  # 'CREDITO' | 'DEBITO'
+    __table_args__ = (db.UniqueConstraint('conta_bancaria_id', 'fitid'),)
 
 
 class Transacao(db.Model):

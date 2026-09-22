@@ -27,18 +27,24 @@
     <select name="fornecedor_id" id="fornecedor-select" class="campo-oculto" disabled>
         <option value="">Selecione o fornecedor...</option>
         {% for f in fornecedores %}
-        <option value="{{ f.id }}">{{ f.nome }}</option>
+        <option value="{{ f.id }}" data-categoria="{{ f.categoria_id or '' }}">{{ f.nome }}</option>
         {% endfor %}
     </select>
     <select name="cliente_id" id="cliente-select" required>
         <option value="">Selecione o cliente...</option>
         {% for c in clientes %}
+        <option value="{{ c.id }}" data-categoria="{{ c.categoria_id or '' }}">{{ c.nome }}</option>
+        {% endfor %}
+    </select>
+    <select name="categoria_id" id="categoria-pagar-select" class="campo-oculto" disabled>
+        <option value="">Sem categoria (Pagar)</option>
+        {% for c in categorias_pagar %}
         <option value="{{ c.id }}">{{ c.nome }}</option>
         {% endfor %}
     </select>
-    <select name="categoria_id">
-        <option value="">Sem categoria</option>
-        {% for c in categorias %}
+    <select name="categoria_id" id="categoria-receber-select">
+        <option value="">Sem categoria (Receber)</option>
+        {% for c in categorias_receber %}
         <option value="{{ c.id }}">{{ c.nome }}</option>
         {% endfor %}
     </select>
@@ -80,7 +86,7 @@
         <select name="filtro_categoria">
             <option value="">Todas</option>
             {% for c in categorias %}
-            <option value="{{ c.id }}" {{ 'selected' if filtro_categoria == c.id|string else '' }}>{{ c.nome }}</option>
+            <option value="{{ c.id }}" {{ 'selected' if filtro_categoria == c.id|string else '' }}>{{ c.nome }} ({{ c.tipo }})</option>
             {% endfor %}
         </select>
     </label>
@@ -110,7 +116,7 @@
             <td>{{ t.descricao }}</td>
             <td style="color: {{ '#28a745' if t.tipo == 'Receber' else '#dc3545' }}">{{ t.tipo }}</td>
             <td>{{ nome_entidade(t) or '—' }}</td>
-            <td>{{ t.categoria.nome if t.categoria else '—' }}</td>
+            <td>{{ t.categoria.nome if t.categoria else '—' }}{% if t.categoria and t.categoria.centro_custo %} <small>({{ t.categoria.centro_custo }})</small>{% endif %}</td>
             <td>{{ t.conta_bancaria.nome if t.conta_bancaria else '—' }}</td>
             <td>{{ t.data_vencimento.strftime('%d/%m/%Y') }}</td>
             <td>{{ t.data_pagamento.strftime('%d/%m/%Y') if t.data_pagamento else '—' }}</td>

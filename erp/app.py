@@ -18,10 +18,12 @@ import fiscal_certificado
 import fiscal_nfe
 import fiscal_nfse
 import fiscal_sync
+import ofx_parser
 from models import (
     Categoria,
     Cliente,
     ContaBancaria,
+    ContaMovimentacao,
     Fornecedor,
     LancamentoRecorrente,
     NotaEletronica,
@@ -33,6 +35,40 @@ from models import (
 TIPOS_VALIDOS = {'Receber', 'Pagar'}
 STATUS_VALIDOS = {'Pendente', 'Concluído'}
 EXTENSOES_ANEXO_PERMITIDAS = {'pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp'}
+EXTENSOES_OFX_PERMITIDAS = {'ofx', 'qfx'}
+
+# Bancos brasileiros mais comuns (código Febraban de compensação). "000" é
+# usado para contas sem banco (caixa/dinheiro em espécie).
+BANCOS_BRASIL = [
+    ('000', 'Caixa / Dinheiro (sem banco)'),
+    ('001', 'Banco do Brasil'),
+    ('033', 'Santander'),
+    ('041', 'Banrisul'),
+    ('070', 'BRB - Banco de Brasília'),
+    ('077', 'Banco Inter'),
+    ('104', 'Caixa Econômica Federal'),
+    ('197', 'Stone'),
+    ('208', 'BTG Pactual'),
+    ('212', 'Banco Original'),
+    ('218', 'Banco BS2'),
+    ('237', 'Bradesco'),
+    ('260', 'Nubank'),
+    ('290', 'PagBank (PagSeguro)'),
+    ('318', 'Banco BMG'),
+    ('323', 'Mercado Pago'),
+    ('336', 'C6 Bank'),
+    ('341', 'Itaú Unibanco'),
+    ('380', 'PicPay'),
+    ('403', 'Cora'),
+    ('422', 'Banco Safra'),
+    ('623', 'Banco Pan'),
+    ('637', 'Banco Sofisa'),
+    ('735', 'Banco Neon'),
+    ('748', 'Sicredi'),
+    ('756', 'Sicoob'),
+]
+BANCOS_BRASIL_MAPA = dict(BANCOS_BRASIL)
+
 HOST = '127.0.0.1'
 PORT = 5000
 
@@ -128,9 +164,40 @@ def migrar_schema():
             pendentes_tabela.append(f'ALTER TABLE {tabela} ADD COLUMN telefone VARCHAR(20)')
         if 'email' not in colunas_tabela:
             pendentes_tabela.append(f'ALTER TABLE {tabela} ADD COLUMN email VARCHAR(150)')
+        if 'categoria_id' not in colunas_tabela:
+            pendentes_tabela.append(f'ALTER TABLE {tabela} ADD COLUMN categoria_id INTEGER')
         if pendentes_tabela:
             with db.engine.begin() as conn:
                 for sql in pendentes_tabela:
+                    conn.execute(db.text(sql))
+
+    if 'categoria' in tabelas:
+        colunas_categoria = {c['name'] for c in inspector.get_columns('categoria')}
+        pendentes_categoria = []
+        if 'tipo' not in colunas_categoria:
+            # Categorias criadas antes desta coluna existir viram "Pagar" por
+            # padrão; o usuário pode corrigir depois em Categorias > Editar.
+            pendentes_categoria.append("ALTER TABLE categoria ADD COLUMN tipo VARCHAR(20) NOT NULL DEFAULT 'Pagar'")
+        if 'centro_custo' not in colunas_categoria:
+            pendentes_categoria.append('ALTER TABLE categoria ADD COLUMN centro_custo VARCHAR(80)')
+        if pendentes_categoria:
+            with db.engine.begin() as conn:
+                for sql in pendentes_categoria:
+                    conn.execute(db.text(sql))
+
+    if 'conta_bancaria' in tabelas:
+        colunas_conta = {c['name'] for c in inspector.get_columns('conta_bancaria')}
+        comandos_conta = {
+            'banco': 'ALTER TABLE conta_bancaria ADD COLUMN banco VARCHAR(10)',
+            'agencia': 'ALTER TABLE conta_bancaria ADD COLUMN agencia VARCHAR(20)',
+            'conta_numero': 'ALTER TABLE conta_bancaria ADD COLUMN conta_numero VARCHAR(30)',
+            'saldo': 'ALTER TABLE conta_bancaria ADD COLUMN saldo FLOAT',
+            'saldo_data': 'ALTER TABLE conta_bancaria ADD COLUMN saldo_data DATE',
+        }
+        pendentes_conta = [sql for coluna, sql in comandos_conta.items() if coluna not in colunas_conta]
+        if pendentes_conta:
+            with db.engine.begin() as conn:
+                for sql in pendentes_conta:
                     conn.execute(db.text(sql))
 
 
@@ -171,6 +238,18 @@ def _validar_id_opcional(valor, model):
     return registro.id, True
 
 
+def _validar_categoria_opcional(valor, tipo_esperado):
+    """Como `_validar_id_opcional`, mas também confere se o tipo da
+    categoria (Pagar/Receber) bate com o tipo do lançamento."""
+    categoria_id, ok = _validar_id_opcional(valor, Categoria)
+    if not ok or categoria_id is None:
+        return categoria_id, ok
+    categoria = Categoria.query.get(categoria_id)
+    if categoria.tipo != tipo_esperado:
+        return None, False
+    return categoria_id, True
+
+
 def validar_transacao(form):
     """Valida os campos comuns a criação/edição de um lançamento."""
     tipo = form.get('tipo', '')
@@ -209,9 +288,9 @@ def validar_transacao(form):
         if cliente_id is None:
             return None, 'Selecione um cliente.'
 
-    categoria_id, categoria_ok = _validar_id_opcional(form.get('categoria_id', ''), Categoria)
+    categoria_id, categoria_ok = _validar_categoria_opcional(form.get('categoria_id', ''), tipo)
     if not categoria_ok:
-        return None, 'Categoria inválida.'
+        return None, 'Categoria inválida (verifique se ela é do tipo certo: Pagar/Receber).'
 
     conta_bancaria_id, conta_ok = _validar_id_opcional(form.get('conta_bancaria_id', ''), ContaBancaria)
     if not conta_ok:
@@ -240,8 +319,20 @@ def nome_entidade(transacao):
 app.jinja_env.globals['nome_entidade'] = nome_entidade
 
 
-def validar_cadastro(form):
-    """Valida os campos comuns ao cadastro de fornecedor/cliente."""
+def nome_banco(codigo):
+    return BANCOS_BRASIL_MAPA.get(codigo or '', codigo or '—')
+
+
+app.jinja_env.globals['nome_banco'] = nome_banco
+app.jinja_env.globals['BANCOS_BRASIL'] = BANCOS_BRASIL
+
+
+def validar_cadastro(form, tipo_categoria):
+    """Valida os campos comuns ao cadastro de fornecedor/cliente.
+
+    `tipo_categoria` é 'Pagar' (fornecedor) ou 'Receber' (cliente): restringe
+    quais categorias podem ser escolhidas como padrão para este cadastro.
+    """
     cnpj_cpf = form.get('cnpj_cpf', '').strip()
     nome = form.get('nome', '').strip()
     endereco = form.get('endereco', '').strip()
@@ -264,12 +355,17 @@ def validar_cadastro(form):
     if email and (len(email) > 150 or not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email)):
         return None, 'E-mail inválido.'
 
+    categoria_id, categoria_ok = _validar_categoria_opcional(form.get('categoria_id', ''), tipo_categoria)
+    if not categoria_ok:
+        return None, 'Categoria padrão inválida.'
+
     dados = {
         'cnpj_cpf': cnpj_cpf,
         'nome': nome,
         'endereco': endereco,
         'telefone': telefone or None,
         'email': email or None,
+        'categoria_id': categoria_id,
     }
     return dados, None
 
@@ -315,16 +411,21 @@ def _exportar_xlsx_generico(cabecalho, linhas, nome_arquivo, titulo_aba='Dados')
     )
 
 
-def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo, coluna_fk):
+def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo, coluna_fk, tipo_categoria):
     """Registra as rotas de listar/adicionar/editar/excluir/exportar para um
-    cadastro completo (CNPJ/CPF, nome, endereço, telefone, e-mail).
-    Fornecedores e clientes usam exatamente a mesma lógica, então as rotas
-    são geradas uma única vez aqui e reaproveitadas para os dois.
+    cadastro completo (CNPJ/CPF, nome, endereço, telefone, e-mail, categoria
+    padrão). Fornecedores e clientes usam exatamente a mesma lógica, então
+    as rotas são geradas uma única vez aqui e reaproveitadas para os dois.
 
     `coluna_fk` é a coluna de Transacao que referencia esse cadastro
     (Transacao.fornecedor_id ou Transacao.cliente_id), usada para impedir
     a exclusão de um registro que já está vinculado a algum lançamento.
+    `tipo_categoria` é 'Pagar' ou 'Receber' — restringe a lista de
+    categorias oferecidas como "padrão" para este cadastro.
     """
+
+    def _categorias():
+        return Categoria.query.filter_by(tipo=tipo_categoria).order_by(Categoria.nome).all()
 
     def listar():
         registros = model.query.order_by(model.nome).all()
@@ -334,10 +435,11 @@ def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo, coluna_
             titulo=nome_plural,
             titulo_singular=nome_singular,
             prefixo=prefixo,
+            categorias=_categorias(),
         )
 
     def adicionar():
-        dados, erro = validar_cadastro(request.form)
+        dados, erro = validar_cadastro(request.form, tipo_categoria)
         if erro:
             flash(erro, 'erro')
         else:
@@ -350,7 +452,7 @@ def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo, coluna_
         registro = model.query.get_or_404(id)
 
         if request.method == 'POST':
-            dados, erro = validar_cadastro(request.form)
+            dados, erro = validar_cadastro(request.form, tipo_categoria)
             if erro:
                 flash(erro, 'erro')
                 return redirect(url_for(f'{prefixo}_editar', id=id))
@@ -360,6 +462,7 @@ def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo, coluna_
             registro.endereco = dados['endereco']
             registro.telefone = dados['telefone']
             registro.email = dados['email']
+            registro.categoria_id = dados['categoria_id']
             db.session.commit()
             flash(f'{nome_singular} atualizado com sucesso.', 'sucesso')
             return redirect(url_for(f'{prefixo}_listar'))
@@ -369,6 +472,7 @@ def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo, coluna_
             registro=registro,
             titulo_singular=nome_singular,
             prefixo=prefixo,
+            categorias=_categorias(),
         )
 
     def excluir(id):
@@ -389,9 +493,9 @@ def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo, coluna_
 
     def exportar():
         registros = model.query.order_by(model.nome).all()
-        cabecalho = ['CNPJ/CPF', 'Nome', 'Endereço', 'Telefone', 'E-mail']
+        cabecalho = ['CNPJ/CPF', 'Nome', 'Endereço', 'Telefone', 'E-mail', 'Categoria Padrão']
         linhas = [
-            [r.cnpj_cpf, r.nome, r.endereco, r.telefone or '', r.email or '']
+            [r.cnpj_cpf, r.nome, r.endereco, r.telefone or '', r.email or '', r.categoria.nome if r.categoria else '']
             for r in registros
         ]
         formato = request.args.get('formato', 'csv')
@@ -406,82 +510,286 @@ def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo, coluna_
     app.add_url_rule(f'/{prefixo}/exportar', f'{prefixo}_exportar', exportar, methods=['GET'])
 
 
-registrar_rotas_cadastro(Fornecedor, 'Fornecedor', 'Fornecedores', 'fornecedores', Transacao.fornecedor_id)
-registrar_rotas_cadastro(Cliente, 'Cliente', 'Clientes', 'clientes', Transacao.cliente_id)
+registrar_rotas_cadastro(Fornecedor, 'Fornecedor', 'Fornecedores', 'fornecedores', Transacao.fornecedor_id, tipo_categoria='Pagar')
+registrar_rotas_cadastro(Cliente, 'Cliente', 'Clientes', 'clientes', Transacao.cliente_id, tipo_categoria='Receber')
 
 
-def validar_nome_simples(form, campo_maxlen):
+def validar_categoria(form):
     nome = form.get('nome', '').strip()
-    if not nome or len(nome) > campo_maxlen:
-        return None, f'Nome obrigatório (até {campo_maxlen} caracteres).'
-    return {'nome': nome}, None
+    tipo = form.get('tipo', '')
+    centro_custo = form.get('centro_custo', '').strip()
+
+    if not nome or len(nome) > 50:
+        return None, 'Nome obrigatório (até 50 caracteres).'
+    if tipo not in TIPOS_VALIDOS:
+        return None, 'Selecione se a categoria é para Contas a Pagar ou a Receber.'
+    if len(centro_custo) > 80:
+        return None, 'Centro de custo muito longo (máx. 80 caracteres).'
+
+    return {'nome': nome, 'tipo': tipo, 'centro_custo': centro_custo or None}, None
 
 
-def registrar_rotas_simples(model, nome_singular, nome_plural, prefixo, coluna_fk, campo_maxlen):
-    """Registra o CRUD de um cadastro com um único campo (nome): Categoria e
-    Conta Bancária. `coluna_fk` impede excluir um registro já em uso.
-    """
+@app.route('/categorias')
+def categorias_listar():
+    registros = Categoria.query.order_by(Categoria.tipo, Categoria.nome).all()
+    return render_template('categorias.html', registros=registros)
 
-    def listar():
-        registros = model.query.order_by(model.nome).all()
-        return render_template(
-            'simples.html',
-            registros=registros,
-            titulo=nome_plural,
-            titulo_singular=nome_singular,
-            prefixo=prefixo,
-        )
 
-    def adicionar():
-        dados, erro = validar_nome_simples(request.form, campo_maxlen)
+@app.route('/categorias/adicionar', methods=['POST'])
+def categorias_adicionar():
+    dados, erro = validar_categoria(request.form)
+    if erro:
+        flash(erro, 'erro')
+    else:
+        db.session.add(Categoria(**dados))
+        db.session.commit()
+        flash('Categoria cadastrada com sucesso.', 'sucesso')
+    return redirect(url_for('categorias_listar'))
+
+
+@app.route('/categorias/editar/<int:id>', methods=['GET', 'POST'])
+def categorias_editar(id):
+    registro = Categoria.query.get_or_404(id)
+    if request.method == 'POST':
+        dados, erro = validar_categoria(request.form)
         if erro:
             flash(erro, 'erro')
-        else:
-            db.session.add(model(**dados))
-            db.session.commit()
-            flash(f'{nome_singular} cadastrada com sucesso.', 'sucesso')
-        return redirect(url_for(f'{prefixo}_listar'))
-
-    def editar(id):
-        registro = model.query.get_or_404(id)
-        if request.method == 'POST':
-            dados, erro = validar_nome_simples(request.form, campo_maxlen)
-            if erro:
-                flash(erro, 'erro')
-                return redirect(url_for(f'{prefixo}_editar', id=id))
-            registro.nome = dados['nome']
-            db.session.commit()
-            flash(f'{nome_singular} atualizada com sucesso.', 'sucesso')
-            return redirect(url_for(f'{prefixo}_listar'))
-        return render_template(
-            'simples_editar.html',
-            registro=registro,
-            titulo_singular=nome_singular,
-            prefixo=prefixo,
-        )
-
-    def excluir(id):
-        registro = model.query.get_or_404(id)
-        em_uso = Transacao.query.filter(coluna_fk == id).first() is not None
-        if em_uso:
-            flash(
-                f'Não é possível excluir: existem lançamentos vinculados a esta {nome_singular.lower()}.',
-                'erro',
-            )
-            return redirect(url_for(f'{prefixo}_listar'))
-        db.session.delete(registro)
+            return redirect(url_for('categorias_editar', id=id))
+        registro.nome = dados['nome']
+        registro.tipo = dados['tipo']
+        registro.centro_custo = dados['centro_custo']
         db.session.commit()
-        flash(f'{nome_singular} excluída.', 'sucesso')
-        return redirect(url_for(f'{prefixo}_listar'))
-
-    app.add_url_rule(f'/{prefixo}', f'{prefixo}_listar', listar, methods=['GET'])
-    app.add_url_rule(f'/{prefixo}/adicionar', f'{prefixo}_adicionar', adicionar, methods=['POST'])
-    app.add_url_rule(f'/{prefixo}/editar/<int:id>', f'{prefixo}_editar', editar, methods=['GET', 'POST'])
-    app.add_url_rule(f'/{prefixo}/excluir/<int:id>', f'{prefixo}_excluir', excluir, methods=['POST'])
+        flash('Categoria atualizada com sucesso.', 'sucesso')
+        return redirect(url_for('categorias_listar'))
+    return render_template('categoria_editar.html', registro=registro)
 
 
-registrar_rotas_simples(Categoria, 'Categoria', 'Categorias', 'categorias', Transacao.categoria_id, campo_maxlen=50)
-registrar_rotas_simples(ContaBancaria, 'Conta', 'Contas Bancárias', 'contas', Transacao.conta_bancaria_id, campo_maxlen=80)
+@app.route('/categorias/excluir/<int:id>', methods=['POST'])
+def categorias_excluir(id):
+    registro = Categoria.query.get_or_404(id)
+    em_uso = (
+        Transacao.query.filter_by(categoria_id=id).first() is not None
+        or Fornecedor.query.filter_by(categoria_id=id).first() is not None
+        or Cliente.query.filter_by(categoria_id=id).first() is not None
+        or LancamentoRecorrente.query.filter_by(categoria_id=id).first() is not None
+    )
+    if em_uso:
+        flash(
+            'Não é possível excluir: existem lançamentos, fornecedores/clientes ou '
+            'recorrências usando esta categoria.',
+            'erro',
+        )
+        return redirect(url_for('categorias_listar'))
+    db.session.delete(registro)
+    db.session.commit()
+    flash('Categoria excluída.', 'sucesso')
+    return redirect(url_for('categorias_listar'))
+
+
+def validar_conta_bancaria(form):
+    nome = form.get('nome', '').strip()
+    banco = form.get('banco', '').strip()
+    agencia = form.get('agencia', '').strip()
+    conta_numero = form.get('conta_numero', '').strip()
+
+    if not nome or len(nome) > 80:
+        return None, 'Nome obrigatório (até 80 caracteres).'
+    if banco and banco not in BANCOS_BRASIL_MAPA:
+        return None, 'Banco inválido.'
+    if len(agencia) > 20:
+        return None, 'Agência muito longa (máx. 20 caracteres).'
+    if len(conta_numero) > 30:
+        return None, 'Número da conta muito longo (máx. 30 caracteres).'
+
+    return {
+        'nome': nome,
+        'banco': banco or None,
+        'agencia': agencia or None,
+        'conta_numero': conta_numero or None,
+    }, None
+
+
+@app.route('/contas')
+def contas_listar():
+    registros = ContaBancaria.query.order_by(ContaBancaria.nome).all()
+    return render_template('contas.html', registros=registros)
+
+
+@app.route('/contas/adicionar', methods=['POST'])
+def contas_adicionar():
+    dados, erro = validar_conta_bancaria(request.form)
+    if erro:
+        flash(erro, 'erro')
+    else:
+        db.session.add(ContaBancaria(**dados))
+        db.session.commit()
+        flash('Conta cadastrada com sucesso.', 'sucesso')
+    return redirect(url_for('contas_listar'))
+
+
+@app.route('/contas/editar/<int:id>', methods=['GET', 'POST'])
+def contas_editar(id):
+    registro = ContaBancaria.query.get_or_404(id)
+    if request.method == 'POST':
+        dados, erro = validar_conta_bancaria(request.form)
+        if erro:
+            flash(erro, 'erro')
+            return redirect(url_for('contas_editar', id=id))
+        registro.nome = dados['nome']
+        registro.banco = dados['banco']
+        registro.agencia = dados['agencia']
+        registro.conta_numero = dados['conta_numero']
+        db.session.commit()
+        flash('Conta atualizada com sucesso.', 'sucesso')
+        return redirect(url_for('contas_listar'))
+    return render_template('conta_editar.html', registro=registro)
+
+
+@app.route('/contas/excluir/<int:id>', methods=['POST'])
+def contas_excluir(id):
+    registro = ContaBancaria.query.get_or_404(id)
+    em_uso = (
+        Transacao.query.filter_by(conta_bancaria_id=id).first() is not None
+        or LancamentoRecorrente.query.filter_by(conta_bancaria_id=id).first() is not None
+    )
+    if em_uso:
+        flash('Não é possível excluir: existem lançamentos vinculados a esta conta.', 'erro')
+        return redirect(url_for('contas_listar'))
+    ContaMovimentacao.query.filter_by(conta_bancaria_id=id).delete()
+    db.session.delete(registro)
+    db.session.commit()
+    flash('Conta excluída.', 'sucesso')
+    return redirect(url_for('contas_listar'))
+
+
+def _periodo_movimentacoes(args):
+    hoje = datetime.now().date()
+    inicio = parse_data(args.get('inicio', '')) or hoje.replace(day=1)
+    fim = parse_data(args.get('fim', '')) or hoje
+    if inicio > fim:
+        inicio, fim = fim, inicio
+    return inicio, fim
+
+
+def _movimentacoes_do_periodo(conta_id, inicio, fim):
+    return ContaMovimentacao.query.filter(
+        ContaMovimentacao.conta_bancaria_id == conta_id,
+        ContaMovimentacao.data >= inicio,
+        ContaMovimentacao.data <= fim,
+    ).order_by(ContaMovimentacao.data, ContaMovimentacao.id).all()
+
+
+@app.route('/contas/<int:id>/movimentacoes')
+def contas_movimentacoes(id):
+    conta = ContaBancaria.query.get_or_404(id)
+    inicio, fim = _periodo_movimentacoes(request.args)
+    movimentos = _movimentacoes_do_periodo(id, inicio, fim)
+
+    total_creditos = sum(m.valor for m in movimentos if m.tipo == 'CREDITO')
+    total_debitos = sum(-m.valor for m in movimentos if m.tipo == 'DEBITO')
+
+    return render_template(
+        'conta_movimentacoes.html',
+        conta=conta,
+        movimentos=movimentos,
+        inicio=inicio,
+        fim=fim,
+        total_creditos=total_creditos,
+        total_debitos=total_debitos,
+        saldo_periodo=total_creditos - total_debitos,
+    )
+
+
+@app.route('/contas/<int:id>/importar-ofx', methods=['POST'])
+def contas_importar_ofx(id):
+    conta = ContaBancaria.query.get_or_404(id)
+    arquivo = request.files.get('ofx_arquivo')
+    if not arquivo or not arquivo.filename:
+        flash('Selecione um arquivo OFX para importar.', 'erro')
+        return redirect(url_for('contas_movimentacoes', id=id))
+
+    extensao = arquivo.filename.rsplit('.', 1)[-1].lower() if '.' in arquivo.filename else ''
+    if extensao not in EXTENSOES_OFX_PERMITIDAS:
+        flash('Formato não suportado. Envie um arquivo .ofx ou .qfx.', 'erro')
+        return redirect(url_for('contas_movimentacoes', id=id))
+
+    try:
+        extrato = ofx_parser.parse_ofx(arquivo.read())
+    except ofx_parser.OfxInvalido as exc:
+        flash(f'Não foi possível ler o arquivo: {exc}', 'erro')
+        return redirect(url_for('contas_movimentacoes', id=id))
+
+    # Só preenche o que ainda estiver em branco — não sobrescreve dados que
+    # o usuário já tenha corrigido manualmente no cadastro da conta.
+    if extrato.conta.banco and not conta.banco:
+        conta.banco = extrato.conta.banco
+    if extrato.conta.agencia and not conta.agencia:
+        conta.agencia = extrato.conta.agencia
+    if extrato.conta.conta and not conta.conta_numero:
+        conta.conta_numero = extrato.conta.conta
+    if extrato.saldo is not None:
+        conta.saldo = extrato.saldo
+        conta.saldo_data = extrato.saldo_data
+
+    novos = 0
+    for mov in extrato.movimentos:
+        existe = ContaMovimentacao.query.filter_by(conta_bancaria_id=id, fitid=mov.fitid).first()
+        if existe:
+            continue
+        db.session.add(ContaMovimentacao(
+            conta_bancaria_id=id,
+            fitid=mov.fitid,
+            data=mov.data,
+            descricao=mov.descricao,
+            valor=mov.valor,
+            tipo=mov.tipo,
+        ))
+        novos += 1
+    db.session.commit()
+
+    if novos:
+        flash(f'{novos} movimentação(ões) importada(s) com sucesso.', 'sucesso')
+    else:
+        flash('Nenhuma movimentação nova encontrada neste arquivo (já haviam sido importadas).', 'sucesso')
+
+    if extrato.movimentos:
+        datas = [m.data for m in extrato.movimentos]
+        return redirect(url_for(
+            'contas_movimentacoes', id=id,
+            inicio=min(datas).isoformat(), fim=max(datas).isoformat(),
+        ))
+    return redirect(url_for('contas_movimentacoes', id=id))
+
+
+@app.route('/contas/<int:id>/limpar-movimentacoes', methods=['POST'])
+def contas_limpar_movimentacoes(id):
+    ContaBancaria.query.get_or_404(id)
+    total = ContaMovimentacao.query.filter_by(conta_bancaria_id=id).delete()
+    db.session.commit()
+    flash(f'{total} movimentação(ões) removida(s). Você pode importar o OFX novamente.', 'sucesso')
+    return redirect(url_for('contas_movimentacoes', id=id))
+
+
+@app.route('/contas/<int:id>/movimentacoes/exportar')
+def contas_movimentacoes_exportar(id):
+    conta = ContaBancaria.query.get_or_404(id)
+    inicio, fim = _periodo_movimentacoes(request.args)
+    movimentos = _movimentacoes_do_periodo(id, inicio, fim)
+
+    cabecalho = ['Data', 'Descrição', 'Tipo', 'Valor']
+    nome_arquivo = f'movimentacoes_{conta.nome}_{inicio.isoformat()}_a_{fim.isoformat()}'
+    nome_arquivo = re.sub(r'[^A-Za-z0-9_-]+', '_', nome_arquivo)
+
+    formato = request.args.get('formato', 'csv')
+    if formato == 'xlsx':
+        linhas = [[m.data.strftime('%d/%m/%Y'), m.descricao, m.tipo.capitalize(), m.valor] for m in movimentos]
+        return _exportar_xlsx_generico(cabecalho, linhas, nome_arquivo, 'Movimentações')
+
+    linhas = [
+        [m.data.strftime('%d/%m/%Y'), m.descricao, m.tipo.capitalize(), f'{m.valor:.2f}'.replace('.', ',')]
+        for m in movimentos
+    ]
+    return _exportar_csv_generico(cabecalho, linhas, nome_arquivo)
 
 
 def parse_data(valor):
@@ -600,9 +908,9 @@ def validar_recorrente(form):
         if cliente_id is None:
             return None, 'Selecione um cliente.'
 
-    categoria_id, categoria_ok = _validar_id_opcional(form.get('categoria_id', ''), Categoria)
+    categoria_id, categoria_ok = _validar_categoria_opcional(form.get('categoria_id', ''), tipo)
     if not categoria_ok:
-        return None, 'Categoria inválida.'
+        return None, 'Categoria inválida (verifique se ela é do tipo certo: Pagar/Receber).'
 
     conta_bancaria_id, conta_ok = _validar_id_opcional(form.get('conta_bancaria_id', ''), ContaBancaria)
     if not conta_ok:
@@ -658,6 +966,8 @@ def index():
         fornecedores=Fornecedor.query.order_by(Fornecedor.nome).all(),
         clientes=Cliente.query.order_by(Cliente.nome).all(),
         categorias=Categoria.query.order_by(Categoria.nome).all(),
+        categorias_pagar=Categoria.query.filter_by(tipo='Pagar').order_by(Categoria.nome).all(),
+        categorias_receber=Categoria.query.filter_by(tipo='Receber').order_by(Categoria.nome).all(),
         contas_bancarias=ContaBancaria.query.order_by(ContaBancaria.nome).all(),
         hoje=datetime.now().date(),
         busca=busca,
@@ -743,7 +1053,8 @@ def editar(id):
         t=transacao,
         fornecedores=Fornecedor.query.order_by(Fornecedor.nome).all(),
         clientes=Cliente.query.order_by(Cliente.nome).all(),
-        categorias=Categoria.query.order_by(Categoria.nome).all(),
+        categorias_pagar=Categoria.query.filter_by(tipo='Pagar').order_by(Categoria.nome).all(),
+        categorias_receber=Categoria.query.filter_by(tipo='Receber').order_by(Categoria.nome).all(),
         contas_bancarias=ContaBancaria.query.order_by(ContaBancaria.nome).all(),
     )
 
@@ -871,7 +1182,7 @@ def relatorio():
         total_entradas=total_entradas,
         total_saidas=total_saidas,
         saldo=saldo,
-        categorias=Categoria.query.order_by(Categoria.nome).all(),
+        categorias=Categoria.query.order_by(Categoria.tipo, Categoria.nome).all(),
         contas_bancarias=ContaBancaria.query.order_by(ContaBancaria.nome).all(),
         atalhos=atalhos,
         hoje=hoje,
@@ -883,13 +1194,14 @@ def _nome_arquivo(inicio, fim):
 
 
 def _exportar_csv(transacoes, nome_arquivo):
-    cabecalho = ['Descrição', 'Tipo', 'Fornecedor/Cliente', 'Categoria', 'Conta', 'Vencimento', 'Pagamento', 'Valor', 'Status']
+    cabecalho = ['Descrição', 'Tipo', 'Fornecedor/Cliente', 'Categoria', 'Centro de Custo', 'Conta', 'Vencimento', 'Pagamento', 'Valor', 'Status']
     linhas = [
         [
             t.descricao,
             t.tipo,
             nome_entidade(t),
             t.categoria.nome if t.categoria else '',
+            (t.categoria.centro_custo or '') if t.categoria else '',
             t.conta_bancaria.nome if t.conta_bancaria else '',
             t.data_vencimento.strftime('%d/%m/%Y'),
             t.data_pagamento.strftime('%d/%m/%Y') if t.data_pagamento else '',
@@ -902,13 +1214,14 @@ def _exportar_csv(transacoes, nome_arquivo):
 
 
 def _exportar_xlsx(transacoes, nome_arquivo):
-    cabecalho = ['Descrição', 'Tipo', 'Fornecedor/Cliente', 'Categoria', 'Conta', 'Vencimento', 'Pagamento', 'Valor (R$)', 'Status']
+    cabecalho = ['Descrição', 'Tipo', 'Fornecedor/Cliente', 'Categoria', 'Centro de Custo', 'Conta', 'Vencimento', 'Pagamento', 'Valor (R$)', 'Status']
     linhas = [
         [
             t.descricao,
             t.tipo,
             nome_entidade(t),
             t.categoria.nome if t.categoria else '',
+            (t.categoria.centro_custo or '') if t.categoria else '',
             t.conta_bancaria.nome if t.conta_bancaria else '',
             t.data_vencimento.strftime('%d/%m/%Y'),
             t.data_pagamento.strftime('%d/%m/%Y') if t.data_pagamento else '',
@@ -940,7 +1253,8 @@ def recorrentes_listar():
         registros=registros,
         fornecedores=Fornecedor.query.order_by(Fornecedor.nome).all(),
         clientes=Cliente.query.order_by(Cliente.nome).all(),
-        categorias=Categoria.query.order_by(Categoria.nome).all(),
+        categorias_pagar=Categoria.query.filter_by(tipo='Pagar').order_by(Categoria.nome).all(),
+        categorias_receber=Categoria.query.filter_by(tipo='Receber').order_by(Categoria.nome).all(),
         contas_bancarias=ContaBancaria.query.order_by(ContaBancaria.nome).all(),
     )
 
@@ -981,7 +1295,8 @@ def recorrentes_editar(id):
         t=tpl,
         fornecedores=Fornecedor.query.order_by(Fornecedor.nome).all(),
         clientes=Cliente.query.order_by(Cliente.nome).all(),
-        categorias=Categoria.query.order_by(Categoria.nome).all(),
+        categorias_pagar=Categoria.query.filter_by(tipo='Pagar').order_by(Categoria.nome).all(),
+        categorias_receber=Categoria.query.filter_by(tipo='Receber').order_by(Categoria.nome).all(),
         contas_bancarias=ContaBancaria.query.order_by(ContaBancaria.nome).all(),
     )
 

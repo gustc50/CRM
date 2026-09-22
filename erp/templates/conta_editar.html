@@ -1,0 +1,37 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2>Editar Conta Bancária</h2>
+
+<form action="{{ url_for('contas_editar', id=registro.id) }}" method="POST" class="form-coluna">
+    <label>
+        Nome
+        <input type="text" name="nome" value="{{ registro.nome }}" maxlength="80" required>
+    </label>
+
+    <label>
+        Banco
+        <select name="banco">
+            <option value="">Selecione...</option>
+            {% for codigo, nome in BANCOS_BRASIL %}
+            <option value="{{ codigo }}" {{ 'selected' if registro.banco == codigo else '' }}>{{ nome }}</option>
+            {% endfor %}
+        </select>
+    </label>
+
+    <label>
+        Agência
+        <input type="text" name="agencia" value="{{ registro.agencia or '' }}" maxlength="20">
+    </label>
+
+    <label>
+        Conta
+        <input type="text" name="conta_numero" value="{{ registro.conta_numero or '' }}" maxlength="30">
+    </label>
+
+    <div class="form-acoes">
+        <button type="submit">Salvar Alterações</button>
+        <a href="{{ url_for('contas_listar') }}" class="btn-acao btn-cancelar">Cancelar</a>
+    </div>
+</form>
+{% endblock %}

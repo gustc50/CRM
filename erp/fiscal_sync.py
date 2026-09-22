@@ -154,6 +154,17 @@ def gerar_lancamento_para_nota(nota, tipo: str, contraparte_doc, contraparte_nom
         return None, 'A nota não possui valor válido para gerar o lançamento.'
 
     fornecedor_id, cliente_id = vincular_contraparte(tipo, contraparte_doc, contraparte_nome, endereco_padrao)
+
+    # Se o fornecedor/cliente já tem uma categoria padrão cadastrada, o
+    # lançamento gerado sozinho já nasce classificado com ela.
+    categoria_id = None
+    if fornecedor_id:
+        contraparte = Fornecedor.query.get(fornecedor_id)
+        categoria_id = contraparte.categoria_id if contraparte else None
+    elif cliente_id:
+        contraparte = Cliente.query.get(cliente_id)
+        categoria_id = contraparte.categoria_id if contraparte else None
+
     transacao = Transacao(
         tipo=tipo,
         descricao=descricao[:100],
@@ -161,6 +172,7 @@ def gerar_lancamento_para_nota(nota, tipo: str, contraparte_doc, contraparte_nom
         data_vencimento=nota.data_emissao or dt.datetime.now().date(),
         fornecedor_id=fornecedor_id,
         cliente_id=cliente_id,
+        categoria_id=categoria_id,
     )
     db.session.add(transacao)
     db.session.flush()

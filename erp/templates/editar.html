@@ -17,7 +17,7 @@
         <select name="fornecedor_id" id="fornecedor-select" {{ '' if t.tipo == 'Pagar' else 'disabled' }}>
             <option value="">Selecione o fornecedor...</option>
             {% for f in fornecedores %}
-            <option value="{{ f.id }}" {{ 'selected' if t.fornecedor_id == f.id else '' }}>{{ f.nome }}</option>
+            <option value="{{ f.id }}" data-categoria="{{ f.categoria_id or '' }}" {{ 'selected' if t.fornecedor_id == f.id else '' }}>{{ f.nome }}</option>
             {% endfor %}
         </select>
     </label>
@@ -27,17 +27,27 @@
         <select name="cliente_id" id="cliente-select" {{ '' if t.tipo == 'Receber' else 'disabled' }}>
             <option value="">Selecione o cliente...</option>
             {% for c in clientes %}
-            <option value="{{ c.id }}" {{ 'selected' if t.cliente_id == c.id else '' }}>{{ c.nome }}</option>
+            <option value="{{ c.id }}" data-categoria="{{ c.categoria_id or '' }}" {{ 'selected' if t.cliente_id == c.id else '' }}>{{ c.nome }}</option>
             {% endfor %}
         </select>
     </label>
 
-    <label>
-        Categoria
-        <select name="categoria_id">
+    <label id="categoria-pagar-campo" class="{{ '' if t.tipo == 'Pagar' else 'campo-oculto' }}">
+        Categoria (Pagar)
+        <select name="categoria_id" id="categoria-pagar-select" {{ '' if t.tipo == 'Pagar' else 'disabled' }}>
             <option value="">Sem categoria</option>
-            {% for c in categorias %}
-            <option value="{{ c.id }}" {{ 'selected' if t.categoria_id == c.id else '' }}>{{ c.nome }}</option>
+            {% for c in categorias_pagar %}
+            <option value="{{ c.id }}" {{ 'selected' if t.tipo == 'Pagar' and t.categoria_id == c.id else '' }}>{{ c.nome }}</option>
+            {% endfor %}
+        </select>
+    </label>
+
+    <label id="categoria-receber-campo" class="{{ '' if t.tipo == 'Receber' else 'campo-oculto' }}">
+        Categoria (Receber)
+        <select name="categoria_id" id="categoria-receber-select" {{ '' if t.tipo == 'Receber' else 'disabled' }}>
+            <option value="">Sem categoria</option>
+            {% for c in categorias_receber %}
+            <option value="{{ c.id }}" {{ 'selected' if t.tipo == 'Receber' and t.categoria_id == c.id else '' }}>{{ c.nome }}</option>
             {% endfor %}
         </select>
     </label>

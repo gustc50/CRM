@@ -20,18 +20,24 @@
     <select name="fornecedor_id" id="fornecedor-select" class="campo-oculto" disabled>
         <option value="">Selecione o fornecedor...</option>
         {% for f in fornecedores %}
-        <option value="{{ f.id }}">{{ f.nome }}</option>
+        <option value="{{ f.id }}" data-categoria="{{ f.categoria_id or '' }}">{{ f.nome }}</option>
         {% endfor %}
     </select>
     <select name="cliente_id" id="cliente-select" required>
         <option value="">Selecione o cliente...</option>
         {% for c in clientes %}
+        <option value="{{ c.id }}" data-categoria="{{ c.categoria_id or '' }}">{{ c.nome }}</option>
+        {% endfor %}
+    </select>
+    <select name="categoria_id" id="categoria-pagar-select" class="campo-oculto" disabled>
+        <option value="">Sem categoria (Pagar)</option>
+        {% for c in categorias_pagar %}
         <option value="{{ c.id }}">{{ c.nome }}</option>
         {% endfor %}
     </select>
-    <select name="categoria_id">
-        <option value="">Sem categoria</option>
-        {% for c in categorias %}
+    <select name="categoria_id" id="categoria-receber-select">
+        <option value="">Sem categoria (Receber)</option>
+        {% for c in categorias_receber %}
         <option value="{{ c.id }}">{{ c.nome }}</option>
         {% endfor %}
     </select>
@@ -68,7 +74,7 @@
             <td>{{ r.descricao }}</td>
             <td style="color: {{ '#28a745' if r.tipo == 'Receber' else '#dc3545' }}">{{ r.tipo }}</td>
             <td>{{ r.fornecedor.nome if r.tipo == 'Pagar' and r.fornecedor else (r.cliente.nome if r.cliente else '—') }}</td>
-            <td>{{ r.categoria.nome if r.categoria else '—' }}</td>
+            <td>{{ r.categoria.nome if r.categoria else '—' }}{% if r.categoria and r.categoria.centro_custo %} <small>({{ r.categoria.centro_custo }})</small>{% endif %}</td>
             <td>{{ r.dia_vencimento }}</td>
             <td>R$ {{ "%.2f"|format(r.valor) }}</td>
             <td>{{ 'Sim' if r.ativo else 'Não' }}</td>

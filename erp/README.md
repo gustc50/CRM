@@ -16,8 +16,12 @@ seis abas:
   telefone, e-mail) com editar, excluir e exportação em CSV/XLSX. Cada
   lançamento de "Conta a Pagar" é vinculado a um fornecedor, e cada
   "Conta a Receber" a um cliente.
-- **Categorias** e **Contas** (bancárias/caixa): cadastros simples usados
-  para classificar os lançamentos.
+- **Categorias**: classificam os lançamentos, cada uma exclusiva de Contas
+  a Pagar ou a Receber, com centro de custo opcional. Pode ser definida como
+  categoria padrão no cadastro de um Fornecedor ou Cliente.
+- **Contas** (bancárias): cadastro com banco, agência e número da conta.
+  Permite importar o extrato em **OFX** (gerado pelo internet banking) e
+  ver as movimentações importadas em uma sub-aba, filtráveis por período.
 - **NFS-e** e **NF-e**: notas fiscais baixadas automaticamente pelo
   certificado digital A1, divididas em "A Receber" e "A Pagar", com
   geração de lançamento em um clique.
@@ -260,6 +264,50 @@ portadas para dentro do ERP, integradas ao fluxo de contas a pagar/receber.
 O certificado e a senha ficam **apenas no seu computador**. As conexões são
 feitas diretamente com os servidores oficiais do governo (Portal Nacional
 da NFS-e e SEFAZ) — nada é enviado para servidores de terceiros.
+
+## Sétima rodada: Categorias com tipo/centro de custo e Contas com OFX
+
+**Categorias**
+- Ao cadastrar uma categoria, agora é obrigatório escolher o **tipo**
+  (Contas a Pagar ou Contas a Receber) — a categoria só aparece nos
+  lançamentos do tipo correspondente. O **centro de custo** é opcional e,
+  quando preenchido, aparece entre parênteses ao lado da categoria nas
+  telas de Lançamentos e Recorrentes.
+- O formulário de "Adicionar Lançamento" (e as telas de Editar) mostram a
+  lista de categorias certa automaticamente conforme o tipo escolhido
+  (Pagar/Receber), do mesmo jeito que já acontecia com Fornecedor/Cliente.
+- **Categoria padrão no Fornecedor/Cliente**: o cadastro de Fornecedor e
+  de Cliente ganhou um campo opcional "Categoria padrão". Ao escolher esse
+  fornecedor/cliente em um novo lançamento, a categoria correspondente é
+  pré-selecionada automaticamente (pode ser trocada antes de salvar). Notas
+  fiscais (NFS-e/NF-e) sincronizadas para um fornecedor/cliente com
+  categoria padrão já nascem com o lançamento classificado.
+
+**Contas bancárias**
+- O cadastro de conta passou a pedir **banco** (lista dos principais bancos
+  e fintechs brasileiros, pelo código Febraban), **agência** e **número da
+  conta**.
+- **Importar OFX**: em cada conta, a sub-aba "Movimentações" tem um botão
+  para selecionar um arquivo `.ofx`/`.qfx` exportado do internet banking.
+  O sistema lê o arquivo (aceita tanto o formato SGML dos bancos brasileiros
+  quanto OFX 2.x/XML) e importa todas as movimentações do extrato, além de
+  preencher automaticamente banco/agência/conta (só os campos que ainda
+  estiverem em branco) e o saldo mais recente informado no arquivo.
+  Movimentações já importadas antes (mesmo identificador único do banco,
+  o FITID) não são duplicadas em uma nova importação do mesmo extrato.
+- A sub-aba de Movimentações mostra as transações importadas com filtro por
+  data inicial/final, totais de créditos, débitos e saldo do período, além
+  de exportação em CSV/XLSX e um botão para limpar as movimentações
+  importadas (caso precise reimportar do zero).
+- Essa é uma visualização do extrato importado — o sistema não faz
+  conciliação automática entre as movimentações bancárias e os lançamentos
+  já cadastrados.
+
+Bancos `erp.db` de versões anteriores continuam funcionando: as colunas e
+tabelas novas são criadas/migradas automaticamente na primeira vez que a
+nova versão roda, sem perda de nenhum dado já cadastrado (categorias
+antigas viram "Contas a Pagar" por padrão, e contas antigas ficam sem
+banco/agência/conta até serem editadas ou até a primeira importação de OFX).
 
 ## Limitações conhecidas (fora do escopo desta revisão)
 

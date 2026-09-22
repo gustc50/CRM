@@ -1,0 +1,66 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2>Contas Bancárias</h2>
+<p class="aviso-cadastro">
+    Cadastre suas contas bancárias e importe o extrato em OFX para ver as movimentações de cada uma.
+</p>
+
+<form action="{{ url_for('contas_adicionar') }}" method="POST">
+    <input type="text" name="nome" placeholder="Nome da conta (ex: Conta Corrente PJ)" maxlength="80" required>
+    <select name="banco">
+        <option value="">Banco (opcional)...</option>
+        {% for codigo, nome in BANCOS_BRASIL %}
+        <option value="{{ codigo }}">{{ nome }}</option>
+        {% endfor %}
+    </select>
+    <input type="text" name="agencia" placeholder="Agência" maxlength="20">
+    <input type="text" name="conta_numero" placeholder="Conta" maxlength="30">
+    <button type="submit">Adicionar Conta</button>
+</form>
+
+<div class="table-scroll">
+<table>
+    <thead>
+        <tr>
+            <th>Nome</th>
+            <th>Banco</th>
+            <th>Agência</th>
+            <th>Conta</th>
+            <th>Saldo</th>
+            <th>Ação</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for r in registros %}
+        <tr>
+            <td>{{ r.nome }}</td>
+            <td>{{ nome_banco(r.banco) if r.banco else '—' }}</td>
+            <td>{{ r.agencia or '—' }}</td>
+            <td>{{ r.conta_numero or '—' }}</td>
+            <td>
+                {% if r.saldo is not none %}
+                R$ {{ "%.2f"|format(r.saldo) }}
+                {% if r.saldo_data %}<small>({{ r.saldo_data.strftime('%d/%m/%Y') }})</small>{% endif %}
+                {% else %}
+                —
+                {% endif %}
+            </td>
+            <td class="acoes">
+                <a href="{{ url_for('contas_movimentacoes', id=r.id) }}" class="btn-acao btn-sincronizar">Movimentações</a>
+                <a href="{{ url_for('contas_editar', id=r.id) }}" class="btn-acao btn-editar">Editar</a>
+                <form action="{{ url_for('contas_excluir', id=r.id) }}" method="POST" class="form-inline"
+                      onsubmit="return confirm('Excluir a conta \'{{ r.nome }}\'? Essa ação não pode ser desfeita.');">
+                    <button type="submit" class="btn-acao btn-excluir">Excluir</button>
+                </form>
+            </td>
+        </tr>
+        {% else %}
+        <tr>
+            <td colspan="6">Nenhuma conta bancária cadastrada.</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endblock %}

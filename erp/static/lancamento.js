@@ -26,6 +26,43 @@ function atualizarCampoEntidade() {
     if (clienteCampo) {
         clienteCampo.classList.toggle('campo-oculto', ehPagar);
     }
+
+    // A categoria segue a mesma regra: só a lista do tipo certo fica visível
+    // e habilitada (as duas usam name="categoria_id" — só a ativa é enviada).
+    var categoriaPagarSelect = document.getElementById('categoria-pagar-select');
+    var categoriaReceberSelect = document.getElementById('categoria-receber-select');
+    var categoriaPagarCampo = document.getElementById('categoria-pagar-campo');
+    var categoriaReceberCampo = document.getElementById('categoria-receber-campo');
+
+    if (categoriaPagarSelect) {
+        categoriaPagarSelect.classList.toggle('campo-oculto', !ehPagar);
+        categoriaPagarSelect.disabled = !ehPagar;
+    }
+    if (categoriaReceberSelect) {
+        categoriaReceberSelect.classList.toggle('campo-oculto', ehPagar);
+        categoriaReceberSelect.disabled = ehPagar;
+    }
+    if (categoriaPagarCampo) {
+        categoriaPagarCampo.classList.toggle('campo-oculto', !ehPagar);
+    }
+    if (categoriaReceberCampo) {
+        categoriaReceberCampo.classList.toggle('campo-oculto', ehPagar);
+    }
+}
+
+// Quando o usuário escolhe um fornecedor/cliente que já tem uma categoria
+// padrão cadastrada, pré-seleciona essa categoria automaticamente (o
+// usuário ainda pode trocar à vontade antes de salvar).
+function aplicarCategoriaPadrao(selectOrigem, selectCategoriaId) {
+    var selectCategoria = document.getElementById(selectCategoriaId);
+    if (!selectOrigem || !selectCategoria) {
+        return;
+    }
+    var opcao = selectOrigem.options[selectOrigem.selectedIndex];
+    var categoriaId = opcao ? opcao.getAttribute('data-categoria') : '';
+    if (categoriaId) {
+        selectCategoria.value = categoriaId;
+    }
 }
 
 document.addEventListener('DOMContentLoaded', function () {
@@ -33,5 +70,18 @@ document.addEventListener('DOMContentLoaded', function () {
     if (tipoSelect) {
         tipoSelect.addEventListener('change', atualizarCampoEntidade);
         atualizarCampoEntidade();
+    }
+
+    var fornecedorSelect = document.getElementById('fornecedor-select');
+    if (fornecedorSelect) {
+        fornecedorSelect.addEventListener('change', function () {
+            aplicarCategoriaPadrao(fornecedorSelect, 'categoria-pagar-select');
+        });
+    }
+    var clienteSelect = document.getElementById('cliente-select');
+    if (clienteSelect) {
+        clienteSelect.addEventListener('change', function () {
+            aplicarCategoriaPadrao(clienteSelect, 'categoria-receber-select');
+        });
     }
 });
