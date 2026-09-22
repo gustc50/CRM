@@ -1506,9 +1506,14 @@ app.jinja_env.globals['situacao_nfe_texto'] = situacao_nfe_texto
 
 
 def _periodo_simples(args):
-    """Filtro de período (inicio/fim) dos painéis de notas, padrão = mês atual."""
+    """Filtro de período (inicio/fim) dos painéis de notas.
+
+    O padrão são os últimos 90 dias, e não o mês atual: é essa a janela que os
+    servidores do governo guardam, então uma nota recém-baixada de um mês
+    anterior ficaria invisível se o padrão fosse só o mês corrente.
+    """
     hoje = datetime.now().date()
-    inicio = parse_data(args.get('inicio', '')) or hoje.replace(day=1)
+    inicio = parse_data(args.get('inicio', '')) or (hoje - timedelta(days=90))
     fim = parse_data(args.get('fim', '')) or hoje
     if inicio > fim:
         inicio, fim = fim, inicio
@@ -1549,6 +1554,7 @@ def notas_servico():
         fim=fim,
         emitidas=emitidas,
         recebidas=recebidas,
+        fora_do_periodo=NotaServico.query.count() - len(notas),
         totais_emitidas=_totais(emitidas),
         totais_recebidas=_totais(recebidas),
         sync=sync_fiscal.status('nfse'),
@@ -1590,6 +1596,7 @@ def notas_eletronicas():
         fim=fim,
         emitidas=emitidas,
         recebidas=recebidas,
+        fora_do_periodo=NotaEletronica.query.count() - len(notas),
         totais_emitidas=_totais(emitidas),
         totais_recebidas=_totais(recebidas),
         sync=sync_fiscal.status('nfe'),
@@ -1865,6 +1872,7 @@ def configuracoes_resetar_nsu(qual):
         flash('Cursor de NFS-e zerado: a próxima sincronização baixa tudo de novo (sem duplicar).', 'sucesso')
     elif qual == 'nfe':
         fiscal_sync.config_set('nfe_ultimo_nsu', '000000000000000')
+        fiscal_sync.config_set('nfe_max_nsu', '0')
         fiscal_sync.config_set('nfe_ultimo_cstat', '')
         flash('Cursor de NF-e zerado: a próxima sincronização re-baixa o que a SEFAZ ainda guarda (~90 dias).', 'sucesso')
     else:

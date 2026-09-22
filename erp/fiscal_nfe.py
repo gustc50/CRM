@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import gzip
+import re
 from xml.etree import ElementTree as ET
 
 import requests
@@ -36,8 +37,20 @@ class ErroSefaz(Exception):
         super().__init__(f'[{cstat}] {xmotivo}')
 
 
+def nsu_para_int(valor) -> int:
+    """NSU (15 dígitos com zeros à esquerda) como número, tolerando vazio/lixo."""
+    try:
+        return int(str(valor or '').strip() or 0)
+    except ValueError:
+        return 0
+
+
 def _montar_xml_distnsu(cnpj: str, uf_autor: str, ambiente: str, ult_nsu: str) -> str:
     tp_amb = '1' if ambiente == 'producao' else '2'
+    documento = re.sub(r'\D', '', cnpj or '')
+    # O schema exige <CPF> para pessoa física e <CNPJ> para empresa. Mandar um
+    # CPF dentro de <CNPJ> faz a SEFAZ rejeitar por schema, sem dizer o motivo.
+    tag_doc = 'CPF' if len(documento) == 11 else 'CNPJ'
     # IMPORTANTE: sem declaração <?xml ...?> aqui. Este XML vai embutido dentro
     # do <nfeDadosMsg> do envelope SOAP, e uma declaração no meio do documento
     # deixa a mensagem malformada — a SEFAZ responde 400 Bad Request.
@@ -45,8 +58,8 @@ def _montar_xml_distnsu(cnpj: str, uf_autor: str, ambiente: str, ult_nsu: str) -
         f'<distDFeInt xmlns="http://www.portalfiscal.inf.br/nfe" versao="1.01">'
         f'<tpAmb>{tp_amb}</tpAmb>'
         f'<cUFAutor>{uf_autor}</cUFAutor>'
-        f'<CNPJ>{cnpj}</CNPJ>'
-        f'<distNSU><ultNSU>{ult_nsu}</ultNSU></distNSU>'
+        f'<{tag_doc}>{documento}</{tag_doc}>'
+        f'<distNSU><ultNSU>{nsu_para_int(ult_nsu):015d}</ultNSU></distNSU>'
         f'</distDFeInt>'
     )
 

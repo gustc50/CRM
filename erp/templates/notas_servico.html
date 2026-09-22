@@ -27,6 +27,8 @@
     <button type="submit">Filtrar</button>
 </form>
 
+{{ fiscal.aviso_fora_do_periodo(fora_do_periodo) }}
+
 <h3 class="titulo-secao receber">📤 A Receber — serviços prestados (notas emitidas)</h3>
 <p class="totais-fiscais">
     {{ totais_emitidas.qtde }} nota(s) ativa(s) ·

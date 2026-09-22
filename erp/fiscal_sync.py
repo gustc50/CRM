@@ -30,8 +30,10 @@ import fiscal_nfse
 # Pausa entre chamadas consecutivas de distribuição (educação com os servidores)
 PAUSA_ENTRE_LOTES = 1.0
 
-# Máximo de lotes por sincronização de NF-e (mesma proteção do app original)
-NFE_MAX_LOTES = 10
+# Máximo de lotes por sincronização de NF-e. Cada lote traz até ~50 documentos,
+# então isso limita uma rodada a ~2500 documentos — o suficiente para colocar em
+# dia um CNPJ que ficou tempo sem sincronizar, sem prender a thread para sempre.
+NFE_MAX_LOTES = 50
 
 # A SEFAZ exige 1h de intervalo após um 137/656; 3 min de margem para
 # relógios adiantados (o mesmo racional do app original).
@@ -448,14 +450,26 @@ class SyncFiscal:
 
     # -------------------------- NF-e -------------------------------- #
 
+    @staticmethod
+    def nfe_em_dia() -> bool:
+        """True quando o cursor já alcançou o maior NSU que a SEFAZ tem."""
+        ultimo = fiscal_nfe.nsu_para_int(config_get('nfe_ultimo_nsu'))
+        maximo = fiscal_nfe.nsu_para_int(config_get('nfe_max_nsu'))
+        return ultimo >= maximo
+
     def nfe_minutos_de_espera(self) -> int:
         """Minutos até poder consultar a SEFAZ de novo (0 = liberado).
 
-        A regra vale depois de um 137 (nada novo) ou 656 (consumo indevido).
+        Vale sempre para o 656 (consumo indevido). Para o 137 só vale quando o
+        cursor já chegou no maxNSU: aí sim não há mais nada para baixar. Com
+        ultNSU < maxNSU ainda faltam documentos, e consultar de novo é
+        exatamente o que a SEFAZ espera — travar aí deixaria notas para trás.
         """
         cstat = config_get('nfe_ultimo_cstat')
         quando = config_get('nfe_ultima_consulta_em')
         if cstat not in ('137', '656') or not quando:
+            return 0
+        if cstat == '137' and not self.nfe_em_dia():
             return 0
         try:
             anterior = dt.datetime.fromisoformat(quando)
@@ -478,6 +492,7 @@ class SyncFiscal:
                 eventos = 0
                 cstat = ''
                 xmotivo = ''
+                max_nsu = config_get('nfe_max_nsu', '0')
 
                 with fiscal_certificado.CertificadoContext(caminho, senha) as ctx:
                     if ctx.documento and doc_empresa and ctx.documento != doc_empresa:
@@ -486,7 +501,8 @@ class SyncFiscal:
                             f'diferente do configurado ({doc_empresa}).'
                         )
                     for _ in range(NFE_MAX_LOTES):
-                        self._atualizar('nfe', mensagem=f'Consultando a SEFAZ a partir do NSU {int(ult_nsu)}...')
+                        nsu_anterior = fiscal_nfe.nsu_para_int(ult_nsu)
+                        self._atualizar('nfe', mensagem=f'Consultando a SEFAZ a partir do NSU {nsu_anterior}...')
                         resultado = fiscal_nfe.consultar_distnsu(
                             cnpj=doc_empresa,
                             uf_autor=uf_autor,
@@ -504,12 +520,21 @@ class SyncFiscal:
                         eventos += n_eventos
 
                         ult_nsu = resultado['ult_nsu']
+                        max_nsu = resultado['max_nsu']
                         config_set('nfe_ultimo_nsu', ult_nsu)
+                        config_set('nfe_max_nsu', max_nsu)
                         self._atualizar('nfe', novos=novos)
 
-                        tem_mais = cstat == '138' and resultado['ult_nsu'] != resultado['max_nsu']
-                        if not tem_mais:
+                        # cStat 137 NÃO significa "está tudo em dia": a SEFAZ
+                        # varre uma janela de NSUs por consulta e responde 137
+                        # quando naquela janela não havia documento de interesse
+                        # — mesmo existindo notas mais à frente na fila. O que
+                        # manda é o cursor: enquanto ultNSU < maxNSU ainda há o
+                        # que baixar, em qualquer um dos dois cStat.
+                        if fiscal_nfe.nsu_para_int(ult_nsu) >= fiscal_nfe.nsu_para_int(max_nsu):
                             break
+                        if fiscal_nfe.nsu_para_int(ult_nsu) <= nsu_anterior:
+                            break  # proteção contra loop sem avanço do cursor
                         time.sleep(PAUSA_ENTRE_LOTES)
 
                 lancamentos_gerados = gerar_lancamentos_pendentes()
@@ -517,12 +542,25 @@ class SyncFiscal:
                 config_set('nfe_ultima_consulta_em', dt.datetime.now().isoformat())
                 config_set('nfe_ultima_sync', _agora())
 
+                nsu_atual = fiscal_nfe.nsu_para_int(ult_nsu)
+                nsu_maximo = fiscal_nfe.nsu_para_int(max_nsu)
+                em_dia = nsu_atual >= nsu_maximo
+
                 mensagem = (
                     f'Sincronização concluída: {novos} nota(s) nova(s)'
                     + (f' e {eventos} evento(s)' if eventos else '')
                     + (f' ({lancamentos_gerados} lançamento(s) gerado(s) automaticamente)' if lancamentos_gerados else '')
-                    + f'. SEFAZ: [{cstat}] {xmotivo}'
+                    + f'. NSU {nsu_atual} de {nsu_maximo}'
                 )
+                if not em_dia:
+                    mensagem += ' — ainda há documentos na fila da SEFAZ: clique em sincronizar de novo para continuar'
+                elif not novos and nsu_maximo == 0:
+                    mensagem += (
+                        ' — a SEFAZ não tem nenhum documento para este CNPJ neste ambiente.'
+                        ' Confira o CNPJ/ambiente nas Configurações (a distribuição só'
+                        ' guarda os últimos ~90 dias)'
+                    )
+                mensagem += f'. SEFAZ: [{cstat}] {xmotivo}. Ambiente: {ambiente}.'
                 config_set('nfe_ultimo_status', mensagem)
                 self._atualizar('nfe', estado='concluido', mensagem=mensagem, novos=novos)
             except fiscal_nfe.ErroSefaz as exc:

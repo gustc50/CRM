@@ -37,6 +37,15 @@
     {% endif %}
 {% endmacro %}
 
+{% macro aviso_fora_do_periodo(quantidade) %}
+    {% if quantidade > 0 %}
+    <p class="aviso-cadastro">
+        ⚠ {{ quantidade }} nota(s) já baixada(s) estão fora do período filtrado acima —
+        amplie as datas (ou limpe o filtro) para vê-las.
+    </p>
+    {% endif %}
+{% endmacro %}
+
 {% macro badge_origem(t) %}
     {% if t.nota_servico %}
     <a href="{{ url_for('nfse_baixar_xml', id=t.nota_servico.id) }}" class="badge-origem" target="_blank"

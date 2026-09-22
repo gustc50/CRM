@@ -226,9 +226,14 @@ portadas para dentro do ERP, integradas ao fluxo de contas a pagar/receber.
   (compras: notas emitidas contra o CNPJ da empresa).
 - Quando a nota completa (`nfeProc`) chega depois do resumo (`resNFe`), ela
   **substitui** o resumo — a lista nunca mostra a mesma nota duas vezes.
-- **Regra de 1 hora da SEFAZ**: depois de uma consulta sem novidade
-  (cStat 137), novas consultas ficam bloqueadas por ~1h para não gerar o
-  bloqueio por consumo indevido (656). A tela mostra quanto falta e
+- **Paginação por NSU**: a SEFAZ varre uma janela de NSUs por consulta e
+  devolve no máximo ~50 documentos. O sistema continua consultando enquanto
+  o cursor (ultNSU) não alcançar o total disponível (maxNSU), inclusive
+  quando a resposta é cStat 137 — nesse caso 137 significa só "nada nesta
+  janela", não "acabou".
+- **Regra de 1 hora da SEFAZ**: quando o cursor já alcançou o maxNSU (aí sim
+  não há mais nada para baixar) ou a SEFAZ devolve 656 (consumo indevido),
+  novas consultas ficam bloqueadas por ~1h. A tela mostra quanto falta e
   permite forçar, por conta e risco.
 
 ### Integração com as baixas do sistema
@@ -365,6 +370,37 @@ automatizando passos que antes exigiam ação manual.
 
 Bancos `erp.db` de versões anteriores continuam funcionando: as colunas
 novas são migradas automaticamente, sem perda de dados.
+
+## Nona rodada: correção do buscador de NF-e (não achava notas e travava 1h)
+
+Sintoma relatado: a busca de NF-e não encontrava nada mesmo em uma empresa
+com notas, e ainda exibia o aviso de espera de 1 hora.
+
+- **Causa principal**: o sistema tratava o `cStat 137` ("Nenhum documento
+  localizado") como "está tudo em dia" e parava a sincronização ali. Só que
+  a SEFAZ varre uma janela de NSUs por consulta e responde 137 sempre que
+  **naquela janela** não havia documento de interesse — mesmo existindo
+  notas mais à frente na fila (`maxNSU` maior que o `ultNSU`). Como o 137
+  também dispara a espera de 1 hora, a sincronização parava no primeiro
+  trecho vazio, dizia "0 notas" e se bloqueava — repetindo isso a cada hora
+  sem nunca chegar nas notas. Agora o que manda é o cursor: enquanto
+  `ultNSU < maxNSU` a busca continua, em qualquer um dos dois cStat.
+- **Espera de 1 hora corrigida**: só vale para o 656 (consumo indevido) e
+  para o 137 **quando o cursor já alcançou o maxNSU**. Com documentos ainda
+  na fila, sincronizar de novo é o comportamento esperado pela própria
+  SEFAZ e não trava mais.
+- **Mensagem de status diagnóstica**: agora informa o progresso (`NSU 350 de
+  1200`), o ambiente usado e, quando ainda falta baixar, avisa para clicar
+  em sincronizar de novo. Quando a SEFAZ não tem nada para o CNPJ, explica
+  que a distribuição só guarda ~90 dias e sugere conferir CNPJ/ambiente.
+- **Notas baixadas que ficavam invisíveis**: o filtro de período dos painéis
+  de NFS-e/NF-e vinha com o mês atual por padrão, escondendo notas de meses
+  anteriores que já tinham sido baixadas. O padrão passou a ser os últimos
+  90 dias (a mesma janela que o governo mantém) e, se ainda houver notas
+  fora do período filtrado, um aviso mostra quantas são.
+- **CPF além de CNPJ**: a consulta agora monta a tag correta (`<CPF>` para
+  11 dígitos, `<CNPJ>` para 14) e normaliza o NSU com 15 dígitos, evitando
+  rejeição por schema sem explicação clara.
 
 ## Limitações conhecidas (fora do escopo desta revisão)
 
