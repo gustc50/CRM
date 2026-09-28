@@ -84,6 +84,14 @@
         <input type="text" name="busca" value="{{ busca }}" placeholder="Descrição, fornecedor ou cliente...">
     </label>
     <label>
+        Vencimento de
+        <input type="date" name="filtro_inicio" value="{{ filtro_inicio.isoformat() if filtro_inicio else '' }}">
+    </label>
+    <label>
+        até
+        <input type="date" name="filtro_fim" value="{{ filtro_fim.isoformat() if filtro_fim else '' }}">
+    </label>
+    <label>
         Tipo
         <select name="filtro_tipo">
             <option value="Todos" {{ 'selected' if filtro_tipo == 'Todos' else '' }}>Todos</option>

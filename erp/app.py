@@ -1203,6 +1203,13 @@ def index():
     filtro_categoria = request.args.get('filtro_categoria', '')
     filtro_conta = request.args.get('filtro_conta', '')
 
+    # Período por vencimento. Os dois campos são opcionais e funcionam soltos:
+    # só a data inicial mostra "daqui pra frente", só a final "até tal dia".
+    filtro_inicio = parse_data(request.args.get('filtro_inicio', ''))
+    filtro_fim = parse_data(request.args.get('filtro_fim', ''))
+    if filtro_inicio and filtro_fim and filtro_inicio > filtro_fim:
+        filtro_inicio, filtro_fim = filtro_fim, filtro_inicio
+
     query = Transacao.query
     if busca:
         termo = f'%{busca}%'
@@ -1221,6 +1228,10 @@ def index():
         query = query.filter(Transacao.categoria_id == int(filtro_categoria))
     if filtro_conta.isdigit():
         query = query.filter(Transacao.conta_bancaria_id == int(filtro_conta))
+    if filtro_inicio:
+        query = query.filter(Transacao.data_vencimento >= filtro_inicio)
+    if filtro_fim:
+        query = query.filter(Transacao.data_vencimento <= filtro_fim)
 
     transacoes = query.order_by(Transacao.data_vencimento).all()
 
@@ -1244,6 +1255,8 @@ def index():
         filtro_status=filtro_status,
         filtro_categoria=filtro_categoria,
         filtro_conta=filtro_conta,
+        filtro_inicio=filtro_inicio,
+        filtro_fim=filtro_fim,
     )
 
 
