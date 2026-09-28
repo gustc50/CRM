@@ -189,5 +189,10 @@ class NotaEletronica(db.Model):
     xml_gzip = db.Column(db.LargeBinary)
     baixado_em = db.Column(db.String(30))
 
+    # Manifestação do destinatário (Ciência da Operação). Enquanto não é dada,
+    # a SEFAZ só distribui o resumo das notas de compra, sem o XML completo.
+    manifestacao_em = db.Column(db.String(30), nullable=True)
+    manifestacao_protocolo = db.Column(db.String(30), nullable=True)
+
     transacao_id = db.Column(db.Integer, db.ForeignKey('transacao.id'), nullable=True)
     transacao = db.relationship('Transacao', backref=db.backref('nota_eletronica', uselist=False))

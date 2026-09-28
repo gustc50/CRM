@@ -47,7 +47,10 @@
     <tbody>
         {% for r in registros %}
         <tr>
-            <td>{{ formatar_cnpj_cpf(r.cnpj_cpf) }}</td>
+            <td>
+                {{ formatar_cnpj_cpf(r.cnpj_cpf) }}
+                {% if r.cnpj_cpf in duplicados %}<span class="badge-sem-categoria">repetido</span>{% endif %}
+            </td>
             <td>{{ r.nome }}</td>
             <td>{{ r.endereco }}</td>
             <td>{{ r.telefone or '—' }}</td>

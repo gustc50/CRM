@@ -72,6 +72,49 @@
        href="{{ url_for('exportar_relatorio', formato='xlsx', inicio=inicio.isoformat(), fim=fim.isoformat(), status=status_filtro, categoria=categoria_filtro, conta=conta_filtro) }}">Baixar Excel (XLSX)</a>
 </div>
 
+{% macro quadro_agrupado(titulo, grupos, rotulo_coluna, url_exportar) %}
+<h3 class="titulo-secao">{{ titulo }}</h3>
+<div class="exportar">
+    <a class="btn-acao btn-exportar" href="{{ url_exportar }}&formato=csv">Baixar CSV</a>
+    <a class="btn-acao btn-exportar" href="{{ url_exportar }}&formato=xlsx">Baixar Excel (XLSX)</a>
+</div>
+<div class="table-scroll">
+<table>
+    <thead>
+        <tr>
+            <th>{{ rotulo_coluna }}</th>
+            <th>Lançamentos</th>
+            <th>Entradas</th>
+            <th>Saídas</th>
+            <th>Saldo</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for g in grupos %}
+        <tr>
+            <td>{{ g.nome }}</td>
+            <td>{{ g.qtde }}</td>
+            <td style="color: #28a745">R$ {{ "%.2f"|format(g.entradas) }}</td>
+            <td style="color: #dc3545">R$ {{ "%.2f"|format(g.saidas) }}</td>
+            <td style="color: {{ '#28a745' if g.saldo >= 0 else '#dc3545' }}">R$ {{ "%.2f"|format(g.saldo) }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5">Nenhum lançamento no período selecionado.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endmacro %}
+
+{% set filtros = 'inicio=' ~ inicio.isoformat() ~ '&fim=' ~ fim.isoformat() ~ '&status=' ~ status_filtro ~ '&categoria=' ~ categoria_filtro ~ '&conta=' ~ conta_filtro %}
+
+{{ quadro_agrupado('Totais por Categoria', por_categoria, 'Categoria',
+                   url_for('exportar_relatorio_agrupado', por='categoria') ~ '?' ~ filtros) }}
+
+{{ quadro_agrupado('Totais por Centro de Custo', por_centro_custo, 'Centro de Custo',
+                   url_for('exportar_relatorio_agrupado', por='centro-custo') ~ '?' ~ filtros) }}
+
+<h3 class="titulo-secao">Lançamentos do período</h3>
 <div class="table-scroll">
 <table>
     <thead>

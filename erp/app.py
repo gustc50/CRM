@@ -3,6 +3,7 @@ import csv
 import io
 import os
 import re
+import sqlite3
 import sys
 import threading
 import uuid
@@ -15,6 +16,7 @@ from openpyxl.styles import Font
 from werkzeug.utils import secure_filename
 
 import fiscal_certificado
+import fiscal_manifestacao
 import fiscal_nfe
 import fiscal_nfse
 import fiscal_sync
@@ -107,6 +109,73 @@ def _apagar_anexo(nome_armazenado):
     caminho = os.path.join(anexos_dir(), nome_armazenado)
     if os.path.exists(caminho):
         os.remove(caminho)
+
+
+# Quantas cópias diárias do banco ficam guardadas antes de as mais velhas saírem
+BACKUPS_MANTIDOS = 30
+
+
+def backups_dir():
+    """Pasta com as cópias de segurança do banco, ao lado do programa."""
+    caminho = data_path('backups')
+    os.makedirs(caminho, exist_ok=True)
+    return caminho
+
+
+def fazer_backup(forcar=False):
+    """Grava uma cópia do banco em backups/erp-AAAA-MM-DD.db.
+
+    Usa a API de backup do próprio SQLite em vez de copiar o arquivo: assim a
+    cópia sai íntegra mesmo que algo esteja sendo gravado no momento. Roda uma
+    vez por dia — se o backup de hoje já existe, não faz nada, a menos que seja
+    pedido na mão pelo botão das Configurações.
+
+    Retorna o caminho gravado, ou None quando não havia o que fazer.
+    """
+    origem = data_path('erp.db')
+    if not os.path.exists(origem):
+        return None
+
+    destino = os.path.join(backups_dir(), f'erp-{date.today().isoformat()}.db')
+    if os.path.exists(destino) and not forcar:
+        return None
+
+    conexao_origem = sqlite3.connect(origem)
+    try:
+        conexao_destino = sqlite3.connect(destino)
+        try:
+            conexao_origem.backup(conexao_destino)
+        finally:
+            conexao_destino.close()
+    finally:
+        conexao_origem.close()
+
+    _limpar_backups_antigos()
+    return destino
+
+
+def _limpar_backups_antigos():
+    arquivos = sorted(
+        nome for nome in os.listdir(backups_dir())
+        if nome.startswith('erp-') and nome.endswith('.db')
+    )
+    for antigo in arquivos[:-BACKUPS_MANTIDOS]:
+        os.remove(os.path.join(backups_dir(), antigo))
+
+
+def backups_existentes():
+    """Backups já gravados, do mais recente para o mais antigo."""
+    arquivos = []
+    for nome in os.listdir(backups_dir()):
+        if not (nome.startswith('erp-') and nome.endswith('.db')):
+            continue
+        caminho = os.path.join(backups_dir(), nome)
+        arquivos.append({
+            'nome': nome,
+            'tamanho_kb': round(os.path.getsize(caminho) / 1024),
+            'data': datetime.fromtimestamp(os.path.getmtime(caminho)),
+        })
+    return sorted(arquivos, key=lambda a: a['nome'], reverse=True)
 
 
 app = Flask(
@@ -202,6 +271,18 @@ def migrar_schema():
                 for sql in pendentes_conta:
                     conn.execute(db.text(sql))
 
+    if 'nota_eletronica' in tabelas:
+        colunas_nfe = {c['name'] for c in inspector.get_columns('nota_eletronica')}
+        comandos_nfe = {
+            'manifestacao_em': 'ALTER TABLE nota_eletronica ADD COLUMN manifestacao_em VARCHAR(30)',
+            'manifestacao_protocolo': 'ALTER TABLE nota_eletronica ADD COLUMN manifestacao_protocolo VARCHAR(30)',
+        }
+        pendentes_nfe = [sql for coluna, sql in comandos_nfe.items() if coluna not in colunas_nfe]
+        if pendentes_nfe:
+            with db.engine.begin() as conn:
+                for sql in pendentes_nfe:
+                    conn.execute(db.text(sql))
+
     if 'conta_movimentacao' in tabelas:
         colunas_mov = {c['name'] for c in inspector.get_columns('conta_movimentacao')}
         if 'transacao_id' not in colunas_mov:
@@ -230,6 +311,10 @@ def _normalizar_cnpj_cpf_existentes():
         if alterados:
             db.session.commit()
 
+
+# Antes de mexer no schema: cópia do dia com o banco exatamente como estava.
+# Se uma migração futura der errado, o estado anterior continua recuperável.
+fazer_backup()
 
 with app.app_context():
     db.create_all()
@@ -370,11 +455,13 @@ def formatar_cnpj_cpf(valor):
 app.jinja_env.globals['formatar_cnpj_cpf'] = formatar_cnpj_cpf
 
 
-def validar_cadastro(form, tipo_categoria):
+def validar_cadastro(form, tipo_categoria, model=None, id_atual=None):
     """Valida os campos comuns ao cadastro de fornecedor/cliente.
 
     `tipo_categoria` é 'Pagar' (fornecedor) ou 'Receber' (cliente): restringe
     quais categorias podem ser escolhidas como padrão para este cadastro.
+    `model`/`id_atual` permitem recusar um CNPJ/CPF que já pertence a outro
+    cadastro (o próprio registro é ignorado na edição).
     """
     cnpj_cpf = form.get('cnpj_cpf', '').strip()
     nome = form.get('nome', '').strip()
@@ -385,6 +472,14 @@ def validar_cadastro(form, tipo_categoria):
     digitos = re.sub(r'\D', '', cnpj_cpf)
     if len(digitos) not in (11, 14):
         return None, 'CNPJ/CPF inválido (informe 11 dígitos para CPF ou 14 para CNPJ).'
+
+    if model is not None:
+        ja_existe = model.query.filter_by(cnpj_cpf=digitos).first()
+        if ja_existe is not None and ja_existe.id != id_atual:
+            return None, (
+                f'O CNPJ/CPF {formatar_cnpj_cpf(digitos)} já está cadastrado '
+                f'em "{ja_existe.nome}". Edite esse cadastro em vez de criar outro.'
+            )
 
     if not nome or len(nome) > 150:
         return None, 'Nome obrigatório (até 150 caracteres).'
@@ -480,9 +575,20 @@ def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo, coluna_
 
     def listar():
         registros = model.query.order_by(model.nome).all()
+
+        # Cadastros antigos podiam repetir o mesmo CNPJ/CPF escrito de formas
+        # diferentes; depois da normalização eles ficam idênticos. Marcar os
+        # repetidos deixa claro o que precisa ser unificado — sem isso, o
+        # usuário só descobriria ao ser barrado tentando salvar uma edição.
+        vistos = {}
+        for registro in registros:
+            vistos[registro.cnpj_cpf] = vistos.get(registro.cnpj_cpf, 0) + 1
+        duplicados = {doc for doc, quantas in vistos.items() if quantas > 1}
+
         return render_template(
             'cadastro.html',
             registros=registros,
+            duplicados=duplicados,
             titulo=nome_plural,
             titulo_singular=nome_singular,
             prefixo=prefixo,
@@ -491,7 +597,7 @@ def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo, coluna_
         )
 
     def adicionar():
-        dados, erro = validar_cadastro(request.form, tipo_categoria)
+        dados, erro = validar_cadastro(request.form, tipo_categoria, model=model)
         if erro:
             flash(erro, 'erro')
         else:
@@ -504,7 +610,7 @@ def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo, coluna_
         registro = model.query.get_or_404(id)
 
         if request.method == 'POST':
-            dados, erro = validar_cadastro(request.form, tipo_categoria)
+            dados, erro = validar_cadastro(request.form, tipo_categoria, model=model, id_atual=id)
             if erro:
                 flash(erro, 'erro')
                 return redirect(url_for(f'{prefixo}_editar', id=id))
@@ -1321,6 +1427,45 @@ def transacoes_do_periodo(inicio, fim, status_filtro, categoria_filtro='', conta
     return query.order_by(Transacao.data_vencimento).all()
 
 
+SEM_CATEGORIA = '(sem categoria)'
+SEM_CENTRO_CUSTO = '(sem centro de custo)'
+
+
+def _rotulo_categoria(t):
+    return t.categoria.nome if t.categoria else SEM_CATEGORIA
+
+
+def _rotulo_centro_custo(t):
+    if t.categoria and t.categoria.centro_custo:
+        return t.categoria.centro_custo
+    return SEM_CENTRO_CUSTO
+
+
+def agrupar_transacoes(transacoes, rotulo):
+    """Totaliza entradas, saídas e saldo por grupo (categoria ou centro de custo).
+
+    `rotulo` é a função que diz a qual grupo cada lançamento pertence. Os grupos
+    saem ordenados por volume movimentado, com os "(sem ...)" sempre no fim.
+    """
+    grupos = {}
+    for t in transacoes:
+        nome = rotulo(t)
+        grupo = grupos.setdefault(nome, {'nome': nome, 'qtde': 0, 'entradas': 0.0, 'saidas': 0.0})
+        grupo['qtde'] += 1
+        if t.tipo == 'Receber':
+            grupo['entradas'] += t.valor
+        else:
+            grupo['saidas'] += t.valor
+
+    for grupo in grupos.values():
+        grupo['saldo'] = grupo['entradas'] - grupo['saidas']
+
+    return sorted(
+        grupos.values(),
+        key=lambda g: (g['nome'].startswith('('), -(g['entradas'] + g['saidas'])),
+    )
+
+
 @app.route('/relatorio')
 def relatorio():
     inicio, fim, status_filtro, categoria_filtro, conta_filtro = periodo_dos_parametros(request.args)
@@ -1348,6 +1493,8 @@ def relatorio():
         total_entradas=total_entradas,
         total_saidas=total_saidas,
         saldo=saldo,
+        por_categoria=agrupar_transacoes(transacoes, _rotulo_categoria),
+        por_centro_custo=agrupar_transacoes(transacoes, _rotulo_centro_custo),
         categorias=Categoria.query.order_by(Categoria.tipo, Categoria.nome).all(),
         contas_bancarias=ContaBancaria.query.order_by(ContaBancaria.nome).all(),
         atalhos=atalhos,
@@ -1409,6 +1556,42 @@ def exportar_relatorio():
     if formato == 'xlsx':
         return _exportar_xlsx(transacoes, nome_arquivo)
     return _exportar_csv(transacoes, nome_arquivo)
+
+
+@app.route('/relatorio/exportar-agrupado/<por>')
+def exportar_relatorio_agrupado(por):
+    if por not in ('categoria', 'centro-custo'):
+        flash('Agrupamento inválido.', 'erro')
+        return redirect(url_for('relatorio'))
+
+    inicio, fim, status_filtro, categoria_filtro, conta_filtro = periodo_dos_parametros(request.args)
+    transacoes = transacoes_do_periodo(inicio, fim, status_filtro, categoria_filtro, conta_filtro)
+
+    if por == 'categoria':
+        grupos = agrupar_transacoes(transacoes, _rotulo_categoria)
+        titulo, coluna = 'Categoria', 'Categoria'
+    else:
+        grupos = agrupar_transacoes(transacoes, _rotulo_centro_custo)
+        titulo, coluna = 'Centro de Custo', 'Centro de Custo'
+
+    cabecalho = [coluna, 'Lançamentos', 'Entradas', 'Saídas', 'Saldo']
+    nome_arquivo = f'{por}_{inicio.isoformat()}_a_{fim.isoformat()}'
+
+    if request.args.get('formato') == 'xlsx':
+        linhas = [[g['nome'], g['qtde'], g['entradas'], g['saidas'], g['saldo']] for g in grupos]
+        return _exportar_xlsx_generico(cabecalho, linhas, nome_arquivo, titulo)
+
+    linhas = [
+        [
+            g['nome'],
+            g['qtde'],
+            f"{g['entradas']:.2f}".replace('.', ','),
+            f"{g['saidas']:.2f}".replace('.', ','),
+            f"{g['saldo']:.2f}".replace('.', ','),
+        ]
+        for g in grupos
+    ]
+    return _exportar_csv_generico(cabecalho, linhas, nome_arquivo)
 
 
 @app.route('/recorrentes')
@@ -1502,7 +1685,14 @@ def situacao_nfe_texto(situacao):
     return SITUACOES_NFE.get(str(situacao or ''), situacao or '—')
 
 
+def nfe_sem_efeito(situacao):
+    """True para NF-e cancelada (3) ou denegada (2): nenhuma das duas gera
+    obrigação de pagamento, então não viram lançamento."""
+    return str(situacao or '') in ('2', '3')
+
+
 app.jinja_env.globals['situacao_nfe_texto'] = situacao_nfe_texto
+app.jinja_env.globals['nfe_sem_efeito'] = nfe_sem_efeito
 
 
 def _periodo_simples(args):
@@ -1680,6 +1870,66 @@ def nfe_baixar_xml(id):
     )
 
 
+@app.route('/notas-eletronicas/<int:id>/dar-ciencia', methods=['POST'])
+def nfe_dar_ciencia(id):
+    """Registra a Ciência da Operação de uma NF-e de compra na SEFAZ.
+
+    É um evento fiscal de verdade, gravado no seu CNPJ e sem desfazer — por
+    isso só acontece por ação explícita do usuário, nunca junto da
+    sincronização automática.
+    """
+    nota = NotaEletronica.query.get_or_404(id)
+    destino = _destino_voltar()
+
+    if not fiscal_sync.certificado_configurado():
+        flash('Configure o certificado digital na aba Configurações antes de manifestar.', 'erro')
+        return redirect(url_for('configuracoes'))
+    if nota.papel == 'emitida':
+        flash('A manifestação vale só para notas emitidas contra a empresa (compras).', 'erro')
+        return redirect(destino)
+    if nota.manifestacao_em:
+        flash('Esta nota já teve a ciência registrada.', 'erro')
+        return redirect(destino)
+
+    try:
+        caminho, senha = sync_fiscal.credenciais()
+        with open(caminho, 'rb') as arquivo_pfx:
+            chave_privada, certificado, _ = fiscal_certificado.carregar_pfx(arquivo_pfx.read(), senha)
+
+        with fiscal_certificado.CertificadoContext(caminho, senha) as ctx:
+            resultado = fiscal_manifestacao.dar_ciencia(
+                chave=nota.chave,
+                documento=fiscal_sync.config_get('cert_documento'),
+                ambiente=fiscal_sync.config_get('nfe_ambiente', 'producao'),
+                dh_evento=datetime.now().astimezone().replace(microsecond=0).isoformat(),
+                chave_privada=chave_privada,
+                certificado=certificado,
+                cert_pair=ctx.cert_pair,
+                url=os.environ.get('ERP_NFE_EVENTO_URL'),
+                verify=sync_fiscal.verify(),
+            )
+    except fiscal_manifestacao.ErroManifestacao as exc:
+        flash(f'A SEFAZ recusou a manifestação: {exc}', 'erro')
+        return redirect(destino)
+    except fiscal_certificado.CertificadoInvalido as exc:
+        flash(str(exc), 'erro')
+        return redirect(destino)
+    except Exception as exc:  # falha de rede/timeout: superfície única para a UI
+        flash(f'Não foi possível registrar a manifestação: {exc}', 'erro')
+        return redirect(destino)
+
+    nota.manifestacao_em = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    nota.manifestacao_protocolo = resultado.get('protocolo')
+    db.session.commit()
+
+    flash(
+        f'Ciência registrada na SEFAZ ({resultado["cstat"]} {resultado["xmotivo"]}). '
+        'Sincronize novamente em alguns minutos para baixar o XML completo desta nota.',
+        'sucesso',
+    )
+    return redirect(destino)
+
+
 @app.route('/notas-servico/<int:id>/danfse')
 def nfse_baixar_danfse(id):
     nota = NotaServico.query.get_or_404(id)
@@ -1743,8 +1993,8 @@ def nfse_gerar_lancamento(id):
 def nfe_gerar_lancamento(id):
     """Fallback manual (ver nfse_gerar_lancamento)."""
     nota = NotaEletronica.query.get_or_404(id)
-    if str(nota.situacao or '') == '3':
-        flash('Não é possível gerar lançamento de uma nota cancelada.', 'erro')
+    if str(nota.situacao or '') in ('2', '3'):
+        flash('Não é possível gerar lançamento de uma nota cancelada ou denegada.', 'erro')
         return redirect(_destino_voltar())
 
     tipo = 'Receber' if nota.papel == 'emitida' else 'Pagar'
@@ -1862,7 +2112,19 @@ def configuracoes():
         nfe_ultimo_nsu=fiscal_sync.config_get('nfe_ultimo_nsu', '000000000000000'),
         ufs=sorted(fiscal_certificado.UF_PARA_CODIGO.keys()),
         ambientes_nfse=fiscal_nfse.AMBIENTES_NFSE,
+        backups=backups_existentes(),
+        backups_pasta=backups_dir(),
     )
+
+
+@app.route('/configuracoes/backup', methods=['POST'])
+def configuracoes_backup():
+    caminho = fazer_backup(forcar=True)
+    if caminho:
+        flash(f'Backup gravado em {caminho}', 'sucesso')
+    else:
+        flash('Não há banco de dados para copiar ainda.', 'erro')
+    return redirect(url_for('configuracoes'))
 
 
 @app.route('/configuracoes/resetar-nsu/<qual>', methods=['POST'])

@@ -119,12 +119,11 @@ def vincular_contraparte(tipo: str, doc: str | None, nome: str | None, endereco_
     if not docd or not nome:
         return None, None
 
+    # O CNPJ/CPF é gravado sempre só com dígitos (inclusive nos cadastros
+    # antigos, normalizados na migração), então dá para consultar direto em vez
+    # de trazer a tabela inteira para comparar em Python.
     modelo = Fornecedor if tipo == 'Pagar' else Cliente
-    registro = None
-    for candidato in modelo.query.all():
-        if _digitos(candidato.cnpj_cpf) == docd:
-            registro = candidato
-            break
+    registro = modelo.query.filter_by(cnpj_cpf=docd).first()
     if registro is None:
         registro = modelo(
             cnpj_cpf=docd,
@@ -217,9 +216,11 @@ def gerar_lancamentos_pendentes() -> int:
         if transacao:
             total += 1
 
+    # cSitNFe: 1 = autorizada, 2 = denegada, 3 = cancelada. Denegada e cancelada
+    # não viram lançamento — nenhuma das duas gera obrigação de pagamento.
     for nota in NotaEletronica.query.filter(
         NotaEletronica.transacao_id.is_(None),
-        NotaEletronica.situacao != '3',
+        db.or_(NotaEletronica.situacao.is_(None), ~NotaEletronica.situacao.in_(('2', '3'))),
     ).all():
         tipo = 'Receber' if nota.papel == 'emitida' else 'Pagar'
         if tipo == 'Receber':
@@ -280,6 +281,14 @@ class SyncFiscal:
             )
         senha = fiscal_certificado.descriptografar_senha(senha_cripto, self.caminho_chave)
         return caminho, senha
+
+    def credenciais(self):
+        """(caminho do .pfx, senha em claro) — usado também pela manifestação."""
+        return self._credenciais()
+
+    def verify(self):
+        """Bundle de CA a usar nas conexões (mesmo critério da sincronização)."""
+        return self._verify()
 
     def iniciar(self, qual: str) -> bool:
         if qual not in ('nfse', 'nfe'):

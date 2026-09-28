@@ -111,4 +111,37 @@
     </tbody>
 </table>
 </div>
+
+<h3 class="titulo-secao">Backup do banco de dados</h3>
+<p class="aviso-cadastro">
+    Uma cópia do banco é gravada automaticamente uma vez por dia, ao abrir o
+    programa, em <code>{{ backups_pasta }}</code> (as {{ backups|length }} cópias
+    mais recentes ficam guardadas; o sistema mantém até 30 dias).
+    <strong>Continue levando essa pasta junto com o <code>erp.db</code> no seu
+    backup externo</strong> — pendrive, HD externo ou nuvem: uma cópia no mesmo
+    computador não protege contra perda ou roubo da máquina.
+</p>
+
+<form action="{{ url_for('configuracoes_backup') }}" method="POST" class="form-inline-bloco">
+    <button type="submit">Fazer backup agora</button>
+</form>
+
+<div class="table-scroll">
+<table>
+    <thead>
+        <tr><th>Arquivo</th><th>Gravado em</th><th>Tamanho</th></tr>
+    </thead>
+    <tbody>
+        {% for b in backups %}
+        <tr>
+            <td>{{ b.nome }}</td>
+            <td>{{ b.data.strftime('%d/%m/%Y %H:%M') }}</td>
+            <td>{{ b.tamanho_kb }} KB</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="3">Nenhum backup gravado ainda.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
 {% endblock %}

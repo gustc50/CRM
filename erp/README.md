@@ -23,10 +23,10 @@ seis abas:
   Permite importar o extrato em **OFX** (gerado pelo internet banking) e
   ver as movimentações importadas em uma sub-aba, filtráveis por período.
 - **NFS-e** e **NF-e**: notas fiscais baixadas automaticamente pelo
-  certificado digital A1, divididas em "A Receber" e "A Pagar", com
-  geração de lançamento em um clique.
-- **⚙ Configurações**: certificado digital, ambientes e controle de
-  sincronização.
+  certificado digital A1, divididas em "A Receber" e "A Pagar", com o
+  lançamento gerado sozinho e manifestação do destinatário nas compras.
+- **⚙ Configurações**: certificado digital, ambientes, controle de
+  sincronização e backup do banco de dados.
 
 ## Como gerar o executável (.exe) no Windows
 
@@ -402,6 +402,49 @@ com notas, e ainda exibia o aviso de espera de 1 hora.
   11 dígitos, `<CNPJ>` para 14) e normaliza o NSU com 15 dígitos, evitando
   rejeição por schema sem explicação clara.
 
+## Décima rodada: backup, manifestação de NF-e e relatórios por centro de custo
+
+**Backup automático do banco**
+- Toda vez que o programa abre, é gravada uma cópia do banco em
+  `backups/erp-AAAA-MM-DD.db` (uma por dia; as 30 mais recentes são
+  mantidas). A cópia é feita **antes** de qualquer alteração de estrutura,
+  então o estado anterior continua recuperável se uma atualização der errado.
+- Usa a API de backup do próprio SQLite, não uma cópia de arquivo: o arquivo
+  sai íntegro mesmo com o programa em uso.
+- Em ⚙ Configurações há o botão **Fazer backup agora** e a lista das cópias
+  existentes. Continue levando a pasta `backups` junto com o `erp.db` para um
+  pendrive ou nuvem — cópia no mesmo computador não protege contra perda da
+  máquina.
+
+**Manifestação do destinatário (NF-e)**
+- Notas de compra chegam como **Resumo** até a empresa se manifestar: a SEFAZ
+  só libera o XML completo depois disso. O botão **Dar Ciência** no painel
+  "A Pagar" registra o evento de Ciência da Operação (tpEvento 210210) e, na
+  sincronização seguinte, a nota completa é baixada.
+- O evento vai assinado digitalmente (XML-DSig com o certificado A1 da
+  empresa), como a SEFAZ exige.
+- É um evento fiscal gravado no CNPJ e **não pode ser desfeito**, por isso
+  acontece só por clique explícito, com confirmação, nunca junto da
+  sincronização automática. A nota passa a mostrar "Ciência dada" com o
+  protocolo.
+
+**Relatórios por categoria e centro de custo**
+- O Relatório por Período ganhou dois quadros de totais: **por categoria** e
+  **por centro de custo**, com entradas, saídas e saldo de cada grupo,
+  respeitando os filtros aplicados na tela e com exportação CSV/XLSX própria.
+  É o que faz o campo centro de custo valer a pena: dá para ver quanto cada
+  área custou no período sem somar na mão.
+
+**Correções**
+- Nota **denegada** (situação 2) não gera mais lançamento a pagar — antes só
+  a cancelada era ignorada, e uma nota denegada não gera obrigação nenhuma.
+- **CNPJ/CPF repetido** é recusado no cadastro de fornecedores e clientes,
+  com a mensagem apontando em qual cadastro aquele documento já está. Se um
+  banco antigo já tiver repetidos (por terem sido digitados com pontuação
+  diferente), a listagem marca as linhas como "repetido" para você unificar.
+- A busca do fornecedor/cliente pelo CNPJ durante a sincronização passou a
+  ser uma consulta direta em vez de varrer a tabela inteira na memória.
+
 ## Limitações conhecidas (fora do escopo desta revisão)
 
 - Não há autenticação/login — qualquer pessoa com acesso à máquina/rede onde
@@ -410,8 +453,10 @@ com notas, e ainda exibia o aviso de espera de 1 hora.
 - Banco de dados local (SQLite), sem sincronização entre computadores.
 - A sincronização de notas é disparada por botão (ou ao abrir a aba). Para
   uso intenso, o ideal seria uma rotina agendada de 1x por hora.
-- Não é enviado o evento de **manifestação do destinatário**: antes de se
-  manifestar, a SEFAZ libera apenas o *resumo* da NF-e de compra, não o XML
-  completo — por isso algumas notas aparecem como "Resumo".
+- A manifestação do destinatário disponível é a **Ciência da Operação**, que
+  é a que libera o XML completo. As outras (Confirmação, Desconhecimento e
+  Operação não Realizada) não são enviadas pelo sistema.
+- A manifestação é feita **uma nota por vez**, no botão: não há envio em lote
+  nem manifestação automática, de propósito — é um evento fiscal definitivo.
 - Certificados A1 valem 1 ano: quando renovar, envie o novo arquivo na aba
   Configurações.
