@@ -112,6 +112,78 @@
 </table>
 </div>
 
+<h3 class="titulo-secao">E-mail (envio para o contador)</h3>
+<p class="aviso-cadastro">
+    Escolha um provedor com plano gratuito e informe a conta de e-mail que o
+    sistema vai usar para enviar. Não há credencial embutida no programa: a
+    conta é sua, então as mensagens saem do seu endereço e não caem em spam
+    por causa de um remetente compartilhado.
+    <br><br>
+    <strong>Atenção:</strong> Gmail, Outlook e Zoho não aceitam a senha normal
+    da conta — é preciso gerar uma <strong>senha de aplicativo</strong>.
+</p>
+
+<form action="{{ url_for('configuracoes_email') }}" method="POST" class="form-coluna form-config">
+    <label>
+        Provedor
+        <select name="smtp_provedor" id="smtp-provedor">
+            {% for chave, p in provedores_smtp.items() %}
+            <option value="{{ chave }}" {{ 'selected' if smtp.provedor == chave else '' }}
+                    data-aviso="{{ p.aviso }}">{{ p.nome }}{% if p.servidor %} — {{ p.servidor }}:{{ p.porta }}{% endif %}</option>
+            {% endfor %}
+        </select>
+    </label>
+    <p class="aviso-cadastro" id="smtp-aviso">{{ provedores_smtp[smtp.provedor].aviso }}</p>
+
+    <div id="smtp-manual" class="{{ '' if smtp.provedor == 'outro' else 'campo-oculto' }}">
+        <label>
+            Servidor SMTP
+            <input type="text" name="smtp_servidor" value="{{ smtp.servidor }}" maxlength="120" placeholder="smtp.seuprovedor.com">
+        </label>
+        <label>
+            Porta
+            <input type="number" name="smtp_porta" value="{{ smtp.porta }}" min="1" max="65535">
+        </label>
+        <label>
+            Segurança
+            <select name="smtp_seguranca">
+                {% for valor, rotulo in segurancas_smtp %}
+                <option value="{{ valor }}" {{ 'selected' if smtp.seguranca == valor else '' }}>{{ rotulo }}</option>
+                {% endfor %}
+            </select>
+        </label>
+    </div>
+
+    <label>
+        E-mail remetente (de onde a mensagem sai)
+        <input type="email" name="smtp_remetente" value="{{ smtp.remetente }}" maxlength="150" placeholder="financeiro@suaempresa.com.br">
+    </label>
+    <label>
+        Nome que aparece no remetente (opcional)
+        <input type="text" name="smtp_remetente_nome" value="{{ smtp.remetente_nome }}" maxlength="120" placeholder="Minha Empresa Ltda">
+    </label>
+    <label>
+        Usuário do SMTP (normalmente o próprio e-mail)
+        <input type="text" name="smtp_usuario" value="{{ smtp.usuario }}" maxlength="150">
+    </label>
+    <label>
+        Senha {% if smtp.senha_salva %}<small>(já salva — preencha só para trocar)</small>{% endif %}
+        <input type="password" name="smtp_senha" autocomplete="new-password" placeholder="{{ '••••••••' if smtp.senha_salva else 'senha de aplicativo' }}">
+    </label>
+
+    <div class="form-acoes">
+        <button type="submit">Salvar E-mail</button>
+    </div>
+</form>
+
+<form action="{{ url_for('configuracoes_email_testar') }}" method="POST" class="form-inline-bloco">
+    <label>
+        Enviar teste para
+        <input type="email" name="destino" placeholder="{{ smtp.remetente or 'seu@email.com' }}">
+    </label>
+    <button type="submit">Enviar e-mail de teste</button>
+</form>
+
 <h3 class="titulo-secao">Backup do banco de dados</h3>
 <p class="aviso-cadastro">
     Uma cópia do banco é gravada automaticamente uma vez por dia, ao abrir o

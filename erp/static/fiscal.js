@@ -31,3 +31,27 @@ document.addEventListener('DOMContentLoaded', function () {
 
     setTimeout(verificar, 2000);
 });
+
+// Configurações de e-mail: servidor/porta/segurança só aparecem quando o
+// provedor escolhido é "Outro servidor"; nos demais vêm prontos do preset.
+document.addEventListener('DOMContentLoaded', function () {
+    var provedor = document.getElementById('smtp-provedor');
+    var manual = document.getElementById('smtp-manual');
+    var aviso = document.getElementById('smtp-aviso');
+    if (!provedor) {
+        return;
+    }
+
+    function atualizar() {
+        var opcao = provedor.options[provedor.selectedIndex];
+        if (manual) {
+            manual.classList.toggle('campo-oculto', provedor.value !== 'outro');
+        }
+        if (aviso && opcao) {
+            aviso.textContent = opcao.getAttribute('data-aviso') || '';
+        }
+    }
+
+    provedor.addEventListener('change', atualizar);
+    atualizar();
+});

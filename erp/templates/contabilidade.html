@@ -1,0 +1,92 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2>Enviar documentos ao contador</h2>
+
+{% if not smtp_ok %}
+<p class="aviso-cadastro">
+    Para enviar, configure primeiro o e-mail na aba
+    <a href="{{ url_for('configuracoes') }}">⚙ Configurações</a>.
+</p>
+{% endif %}
+
+<p class="aviso-cadastro">
+    Escolha o período e o sistema monta o pacote: os lançamentos em planilha
+    (.xlsx) e em texto (.txt), mais um .zip com os XMLs das notas fiscais
+    separados em pastas por tipo (NFS-e/NF-e) e por emitidas/recebidas.
+    Identificação usada na mensagem: <strong>{{ empresa }}</strong>.
+</p>
+
+<form action="{{ url_for('contabilidade') }}" method="GET" class="form-filtro">
+    <label>
+        De
+        <input type="date" name="inicio" value="{{ inicio.isoformat() }}">
+    </label>
+    <label>
+        Até
+        <input type="date" name="fim" value="{{ fim.isoformat() }}">
+    </label>
+    <button type="submit">Ver o que será enviado</button>
+</form>
+
+<div class="dashboard">
+    <div class="card">
+        <h3>Lançamentos</h3>
+        <h2>{{ total_lancamentos }}</h2>
+    </div>
+    <div class="card">
+        <h3>Notas fiscais (XML)</h3>
+        <h2>{{ total_notas }}</h2>
+    </div>
+    <div class="card {{ 'pagar' if tamanho_mb > limite_mb else '' }}">
+        <h3>Tamanho dos anexos</h3>
+        <h2>{{ tamanho_mb }} MB</h2>
+        <small>Limite de {{ limite_mb }} MB por e-mail</small>
+    </div>
+</div>
+
+<h3 class="titulo-secao">Anexos que vão na mensagem</h3>
+<div class="table-scroll">
+<table>
+    <thead>
+        <tr><th>Arquivo</th><th>Tamanho</th></tr>
+    </thead>
+    <tbody>
+        {% for a in anexos %}
+        <tr>
+            <td>{{ a.nome }}</td>
+            <td>{{ a.kb }} KB</td>
+        </tr>
+        {% endfor %}
+        {% if total_notas == 0 %}
+        <tr>
+            <td colspan="2">
+                <small>Nenhuma nota fiscal com XML no período — o .zip não é anexado.</small>
+            </td>
+        </tr>
+        {% endif %}
+    </tbody>
+</table>
+</div>
+
+<h3 class="titulo-secao">Envio</h3>
+<form action="{{ url_for('contabilidade_enviar') }}" method="POST" class="form-coluna form-config"
+      onsubmit="return confirm('Enviar os documentos de {{ inicio.strftime('%d/%m/%Y') }} a {{ fim.strftime('%d/%m/%Y') }} por e-mail?');">
+    <input type="hidden" name="inicio" value="{{ inicio.isoformat() }}">
+    <input type="hidden" name="fim" value="{{ fim.isoformat() }}">
+
+    <label>
+        E-mail do contador
+        <input type="email" name="email_contador" value="{{ email_contador }}" maxlength="150" required
+               placeholder="contador@escritorio.com.br">
+    </label>
+    <label>
+        Observação (opcional, entra no corpo da mensagem)
+        <textarea name="mensagem" rows="3" maxlength="600" placeholder="Ex: as notas da filial vão no próximo envio."></textarea>
+    </label>
+
+    <div class="form-acoes">
+        <button type="submit" {{ 'disabled' if not smtp_ok else '' }}>Enviar ao contador</button>
+    </div>
+</form>
+{% endblock %}

@@ -1,7 +1,7 @@
 # ERP Financeiro (Contas a Pagar/Receber)
 
-Aplicação Flask simples para controle de contas a pagar e a receber, com
-seis abas:
+Aplicação Flask simples para controle de contas a pagar e a receber. A
+navegação fica em um menu lateral, com estas seções:
 
 - **Lançamentos**: cadastro de contas a pagar/receber, com busca/filtro,
   editar, excluir, dar baixa e reabrir. Contas vencidas e ainda pendentes
@@ -12,9 +12,9 @@ seis abas:
   exportação em CSV ou Excel (XLSX).
 - **Recorrentes**: lançamentos que se repetem todo mês (aluguel, salários),
   gerados automaticamente.
-- **Fornecedores** e **Clientes**: cadastro (CNPJ/CPF, nome, endereço,
-  telefone, e-mail) com editar, excluir e exportação em CSV/XLSX. Cada
-  lançamento de "Conta a Pagar" é vinculado a um fornecedor, e cada
+- **Cadastros** (sub-abas **Fornecedores** e **Clientes**): CNPJ/CPF, nome,
+  endereço, telefone, e-mail, com editar, excluir e exportação em CSV/XLSX.
+  Cada lançamento de "Conta a Pagar" é vinculado a um fornecedor, e cada
   "Conta a Receber" a um cliente.
 - **Categorias**: classificam os lançamentos, cada uma exclusiva de Contas
   a Pagar ou a Receber, com centro de custo opcional. Pode ser definida como
@@ -22,11 +22,14 @@ seis abas:
 - **Contas** (bancárias): cadastro com banco, agência e número da conta.
   Permite importar o extrato em **OFX** (gerado pelo internet banking) e
   ver as movimentações importadas em uma sub-aba, filtráveis por período.
-- **NFS-e** e **NF-e**: notas fiscais baixadas automaticamente pelo
-  certificado digital A1, divididas em "A Receber" e "A Pagar", com o
-  lançamento gerado sozinho e manifestação do destinatário nas compras.
+- **Notas Fiscais** (sub-abas **NFS-e** e **NF-e**): notas baixadas
+  automaticamente pelo certificado digital A1, divididas em "A Receber" e
+  "A Pagar", com o lançamento gerado sozinho e manifestação do destinatário
+  nas compras.
+- **Contabilidade**: envia ao contador, por e-mail, os lançamentos e os XMLs
+  das notas de um período escolhido.
 - **⚙ Configurações**: certificado digital, ambientes, controle de
-  sincronização e backup do banco de dados.
+  sincronização, envio de e-mail (SMTP) e backup do banco de dados.
 
 ## Como gerar o executável (.exe) no Windows
 
@@ -444,6 +447,42 @@ com notas, e ainda exibia o aviso de espera de 1 hora.
   diferente), a listagem marca as linhas como "repetido" para você unificar.
 - A busca do fornecedor/cliente pelo CNPJ durante a sincronização passou a
   ser uma consulta direta em vez de varrer a tabela inteira na memória.
+
+## Décima primeira rodada: visual novo e envio para o contador
+
+**Menu lateral**
+- As abas saíram do topo e viraram um menu lateral com ícones arredondados,
+  que acompanha a rolagem da página. Em telas estreitas (celular) o menu volta
+  a ficar em cima, quebrando em linhas.
+- Abas agrupadas: **Notas Fiscais** reúne NFS-e e NF-e, e **Cadastros** reúne
+  Fornecedores e Clientes. As sub-abas aparecem recuadas embaixo da seção
+  assim que você entra nela.
+
+**Nova aba Contabilidade**
+- Escolha um período (data inicial e final) e o sistema monta o pacote para o
+  contador: os lançamentos em **planilha (.xlsx)** e em **texto (.txt)**, mais
+  um **.zip com os XMLs** das notas fiscais do período, organizados em pastas
+  (`nfse/emitidas`, `nfse/recebidas`, `nfe/emitidas`, `nfe/recebidas`).
+- Antes de enviar, a tela mostra quantos lançamentos e notas entram no pacote,
+  quais arquivos serão anexados e o tamanho total — e recusa o envio se passar
+  do limite de anexo aceito pelos provedores, sugerindo dividir por mês.
+- A mensagem começa com *"Seu cliente [razão social e CNPJ] enviou uma
+  mensagem"*, seguida do resumo do período. Dá para incluir uma observação.
+
+**E-mail (SMTP)**
+- Em ⚙ Configurações há a seção de e-mail, com os dados já prontos dos
+  provedores de plano gratuito (**Gmail**, **Outlook/Hotmail**, **Brevo** e
+  **Zoho**) — basta escolher um e informar a conta; ou usar "Outro servidor"
+  para preencher servidor/porta/segurança na mão.
+- A senha é guardada criptografada, com a mesma chave do certificado digital,
+  e há um botão para **enviar um e-mail de teste** antes de usar pra valer.
+- Vale saber: não existe SMTP que envie sem nenhuma conta. O programa não traz
+  credencial embutida de propósito — seria uma conta compartilhada por todos
+  os usuários, que cairia em spam e seria bloqueada rapidamente. Usando a sua
+  conta, as mensagens saem do seu endereço, com sua reputação de remetente.
+- **Gmail, Outlook e Zoho não aceitam a senha normal da conta**: é preciso
+  gerar uma "senha de aplicativo" no painel do provedor. A tela avisa isso
+  conforme o provedor escolhido.
 
 ## Limitações conhecidas (fora do escopo desta revisão)
 

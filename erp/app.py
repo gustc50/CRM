@@ -1,10 +1,12 @@
 import calendar
 import csv
+import gzip
 import io
 import os
 import re
 import sqlite3
 import sys
+import zipfile
 import threading
 import uuid
 import webbrowser
@@ -15,6 +17,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font
 from werkzeug.utils import secure_filename
 
+import envio_email
 import fiscal_certificado
 import fiscal_manifestacao
 import fiscal_nfe
@@ -455,6 +458,43 @@ def formatar_cnpj_cpf(valor):
 app.jinja_env.globals['formatar_cnpj_cpf'] = formatar_cnpj_cpf
 
 
+# Menu lateral. `ativo_em` lista os endpoints que acendem cada item (incluindo
+# as telas de edição), e `filhos` são as sub-abas que aparecem quando a seção
+# está aberta. Clicar no item pai leva para a primeira sub-aba.
+MENU_LATERAL = [
+    {'icone': '💰', 'rotulo': 'Lançamentos', 'endpoint': 'index',
+     'ativo_em': ('index', 'editar')},
+    {'icone': '📊', 'rotulo': 'Relatório', 'endpoint': 'relatorio',
+     'ativo_em': ('relatorio',)},
+    {'icone': '🔁', 'rotulo': 'Recorrentes', 'endpoint': 'recorrentes_listar',
+     'ativo_em': ('recorrentes_listar', 'recorrentes_editar')},
+    {'icone': '🧾', 'rotulo': 'Notas Fiscais', 'endpoint': 'notas_servico',
+     'ativo_em': ('notas_servico', 'notas_eletronicas'),
+     'filhos': [
+         {'rotulo': 'NFS-e', 'endpoint': 'notas_servico', 'ativo_em': ('notas_servico',)},
+         {'rotulo': 'NF-e', 'endpoint': 'notas_eletronicas', 'ativo_em': ('notas_eletronicas',)},
+     ]},
+    {'icone': '👥', 'rotulo': 'Cadastros', 'endpoint': 'fornecedores_listar',
+     'ativo_em': ('fornecedores_listar', 'fornecedores_editar', 'clientes_listar', 'clientes_editar'),
+     'filhos': [
+         {'rotulo': 'Fornecedores', 'endpoint': 'fornecedores_listar',
+          'ativo_em': ('fornecedores_listar', 'fornecedores_editar')},
+         {'rotulo': 'Clientes', 'endpoint': 'clientes_listar',
+          'ativo_em': ('clientes_listar', 'clientes_editar')},
+     ]},
+    {'icone': '🏷️', 'rotulo': 'Categorias', 'endpoint': 'categorias_listar',
+     'ativo_em': ('categorias_listar', 'categorias_editar')},
+    {'icone': '🏦', 'rotulo': 'Contas', 'endpoint': 'contas_listar',
+     'ativo_em': ('contas_listar', 'contas_editar', 'contas_movimentacoes')},
+    {'icone': '📨', 'rotulo': 'Contabilidade', 'endpoint': 'contabilidade',
+     'ativo_em': ('contabilidade',)},
+    {'icone': '⚙️', 'rotulo': 'Configurações', 'endpoint': 'configuracoes',
+     'ativo_em': ('configuracoes',)},
+]
+
+app.jinja_env.globals['MENU_LATERAL'] = MENU_LATERAL
+
+
 def validar_cadastro(form, tipo_categoria, model=None, id_atual=None):
     """Valida os campos comuns ao cadastro de fornecedor/cliente.
 
@@ -513,22 +553,28 @@ def validar_cadastro(form, tipo_categoria, model=None, id_atual=None):
     return dados, None
 
 
-def _exportar_csv_generico(cabecalho, linhas, nome_arquivo):
+def _texto_delimitado(cabecalho, linhas):
+    """Tabela como texto separado por ';' — serve tanto para o CSV baixado
+    quanto para o .txt que vai anexado no e-mail do contador."""
     buffer = io.StringIO()
     buffer.write('﻿')  # BOM para o Excel abrir acentos corretamente
     writer = csv.writer(buffer, delimiter=';')
     writer.writerow(cabecalho)
     for linha in linhas:
         writer.writerow(linha)
+    return buffer.getvalue()
 
+
+def _exportar_csv_generico(cabecalho, linhas, nome_arquivo):
     return Response(
-        buffer.getvalue(),
+        _texto_delimitado(cabecalho, linhas),
         mimetype='text/csv',
         headers={'Content-Disposition': f'attachment; filename="{nome_arquivo}.csv"'},
     )
 
 
-def _exportar_xlsx_generico(cabecalho, linhas, nome_arquivo, titulo_aba='Dados'):
+def _planilha_bytes(cabecalho, linhas, titulo_aba='Dados'):
+    """Planilha XLSX como bytes (usada pelo download e pelo anexo do e-mail)."""
     wb = Workbook()
     ws = wb.active
     ws.title = titulo_aba[:31]  # Excel limita o nome da aba a 31 caracteres
@@ -545,10 +591,12 @@ def _exportar_xlsx_generico(cabecalho, linhas, nome_arquivo, titulo_aba='Dados')
 
     buffer = io.BytesIO()
     wb.save(buffer)
-    buffer.seek(0)
+    return buffer.getvalue()
 
+
+def _exportar_xlsx_generico(cabecalho, linhas, nome_arquivo, titulo_aba='Dados'):
     return Response(
-        buffer.getvalue(),
+        _planilha_bytes(cabecalho, linhas, titulo_aba),
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         headers={'Content-Disposition': f'attachment; filename="{nome_arquivo}.xlsx"'},
     )
@@ -1519,9 +1567,19 @@ def _nome_arquivo(inicio, fim):
     return f'lancamentos_{inicio.isoformat()}_a_{fim.isoformat()}'
 
 
-def _exportar_csv(transacoes, nome_arquivo):
-    cabecalho = ['Descrição', 'Tipo', 'Fornecedor/Cliente', 'Categoria', 'Centro de Custo', 'Conta', 'Vencimento', 'Pagamento', 'Valor', 'Status']
-    linhas = [
+CABECALHO_LANCAMENTOS = [
+    'Descrição', 'Tipo', 'Fornecedor/Cliente', 'Categoria', 'Centro de Custo',
+    'Conta', 'Vencimento', 'Pagamento', 'Valor', 'Status',
+]
+
+
+def linhas_lancamentos(transacoes, valor_numerico=False):
+    """Linhas dos lançamentos para planilha/texto.
+
+    `valor_numerico` decide entre o número puro (planilha, que soma) e o texto
+    com vírgula decimal (arquivos de texto abertos no Excel em português).
+    """
+    return [
         [
             t.descricao,
             t.tipo,
@@ -1531,32 +1589,194 @@ def _exportar_csv(transacoes, nome_arquivo):
             t.conta_bancaria.nome if t.conta_bancaria else '',
             t.data_vencimento.strftime('%d/%m/%Y'),
             t.data_pagamento.strftime('%d/%m/%Y') if t.data_pagamento else '',
-            f'{t.valor:.2f}'.replace('.', ','),
+            t.valor if valor_numerico else f'{t.valor:.2f}'.replace('.', ','),
             t.status,
         ]
         for t in transacoes
     ]
-    return _exportar_csv_generico(cabecalho, linhas, nome_arquivo)
+
+
+def _exportar_csv(transacoes, nome_arquivo):
+    return _exportar_csv_generico(CABECALHO_LANCAMENTOS, linhas_lancamentos(transacoes), nome_arquivo)
 
 
 def _exportar_xlsx(transacoes, nome_arquivo):
-    cabecalho = ['Descrição', 'Tipo', 'Fornecedor/Cliente', 'Categoria', 'Centro de Custo', 'Conta', 'Vencimento', 'Pagamento', 'Valor (R$)', 'Status']
-    linhas = [
-        [
-            t.descricao,
-            t.tipo,
-            nome_entidade(t),
-            t.categoria.nome if t.categoria else '',
-            (t.categoria.centro_custo or '') if t.categoria else '',
-            t.conta_bancaria.nome if t.conta_bancaria else '',
-            t.data_vencimento.strftime('%d/%m/%Y'),
-            t.data_pagamento.strftime('%d/%m/%Y') if t.data_pagamento else '',
-            t.valor,
-            t.status,
-        ]
-        for t in transacoes
-    ]
+    cabecalho = list(CABECALHO_LANCAMENTOS)
+    cabecalho[8] = 'Valor (R$)'
+    linhas = linhas_lancamentos(transacoes, valor_numerico=True)
     return _exportar_xlsx_generico(cabecalho, linhas, nome_arquivo, 'Lançamentos')
+
+
+# ------------------------------------------------------------------ #
+# Contabilidade — envio dos documentos do período ao contador
+# ------------------------------------------------------------------ #
+
+def _notas_do_periodo(inicio, fim):
+    """NFS-e e NF-e emitidas dentro do período, com XML guardado."""
+    servico = NotaServico.query.filter(
+        NotaServico.data_emissao >= inicio,
+        NotaServico.data_emissao <= fim,
+        NotaServico.xml_gzip.isnot(None),
+    ).order_by(NotaServico.data_emissao).all()
+
+    eletronica = NotaEletronica.query.filter(
+        NotaEletronica.data_emissao >= inicio,
+        NotaEletronica.data_emissao <= fim,
+        NotaEletronica.xml_gzip.isnot(None),
+    ).order_by(NotaEletronica.data_emissao).all()
+
+    return servico, eletronica
+
+
+def _zip_das_notas(notas_servico, notas_eletronicas):
+    """ZIP com os XMLs separados em pastas por tipo e por entrada/saída.
+
+    Retorna (bytes, quantidade) — ou (None, 0) quando não há nenhum XML.
+    """
+    if not notas_servico and not notas_eletronicas:
+        return None, 0
+
+    buffer = io.BytesIO()
+    total = 0
+    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as pacote:
+        for nota in notas_servico:
+            pasta = 'nfse/emitidas' if nota.papel == 'emitida' else 'nfse/recebidas'
+            pacote.writestr(f'{pasta}/NFSe_{nota.numero or nota.chave_acesso}.xml',
+                            gzip.decompress(nota.xml_gzip))
+            total += 1
+        for nota in notas_eletronicas:
+            pasta = 'nfe/emitidas' if nota.papel == 'emitida' else 'nfe/recebidas'
+            pacote.writestr(f'{pasta}/NFe_{nota.chave}.xml', gzip.decompress(nota.xml_gzip))
+            total += 1
+
+    return buffer.getvalue(), total
+
+
+def _anexos_contabilidade(inicio, fim):
+    """Monta os anexos do período: planilha, texto e o pacote de XMLs."""
+    transacoes = Transacao.query.filter(
+        Transacao.data_vencimento >= inicio,
+        Transacao.data_vencimento <= fim,
+    ).order_by(Transacao.data_vencimento).all()
+
+    periodo = f'{inicio.isoformat()}_a_{fim.isoformat()}'
+    anexos = []
+
+    cabecalho_planilha = list(CABECALHO_LANCAMENTOS)
+    cabecalho_planilha[8] = 'Valor (R$)'
+    anexos.append((
+        f'lancamentos_{periodo}.xlsx',
+        _planilha_bytes(cabecalho_planilha, linhas_lancamentos(transacoes, valor_numerico=True), 'Lançamentos'),
+    ))
+    anexos.append((
+        f'lancamentos_{periodo}.txt',
+        _texto_delimitado(CABECALHO_LANCAMENTOS, linhas_lancamentos(transacoes)).encode('utf-8'),
+    ))
+
+    notas_servico, notas_eletronicas = _notas_do_periodo(inicio, fim)
+    pacote, total_notas = _zip_das_notas(notas_servico, notas_eletronicas)
+    if pacote:
+        anexos.append((f'notas_fiscais_{periodo}.zip', pacote))
+
+    return anexos, len(transacoes), total_notas
+
+
+def _identificacao_empresa():
+    documento = fiscal_sync.config_get('cert_documento')
+    nome = fiscal_sync.config_get('cert_titular')
+    if documento:
+        return f'{nome} ({formatar_cnpj_cpf(documento)})' if nome else formatar_cnpj_cpf(documento)
+    return nome or 'empresa sem CNPJ configurado'
+
+
+@app.route('/contabilidade')
+def contabilidade():
+    hoje = datetime.now().date()
+    inicio = parse_data(request.args.get('inicio', '')) or hoje.replace(day=1)
+    fim = parse_data(request.args.get('fim', '')) or hoje
+    if inicio > fim:
+        inicio, fim = fim, inicio
+
+    anexos, total_lancamentos, total_notas = _anexos_contabilidade(inicio, fim)
+    tamanho_mb = sum(len(conteudo) for _, conteudo in anexos) / (1024 * 1024)
+
+    return render_template(
+        'contabilidade.html',
+        inicio=inicio,
+        fim=fim,
+        total_lancamentos=total_lancamentos,
+        total_notas=total_notas,
+        anexos=[{'nome': nome, 'kb': round(len(conteudo) / 1024)} for nome, conteudo in anexos],
+        tamanho_mb=round(tamanho_mb, 2),
+        limite_mb=envio_email.LIMITE_ANEXOS_MB,
+        smtp_ok=_smtp_configurado(),
+        empresa=_identificacao_empresa(),
+        email_contador=fiscal_sync.config_get('email_contador'),
+    )
+
+
+@app.route('/contabilidade/enviar', methods=['POST'])
+def contabilidade_enviar():
+    inicio = parse_data(request.form.get('inicio', ''))
+    fim = parse_data(request.form.get('fim', ''))
+    if not inicio or not fim:
+        flash('Informe a data inicial e a data final do período.', 'erro')
+        return redirect(url_for('contabilidade'))
+    if inicio > fim:
+        inicio, fim = fim, inicio
+
+    destinatario = request.form.get('email_contador', '').strip()
+    if not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', destinatario):
+        flash('Informe um e-mail válido para o contador.', 'erro')
+        return redirect(url_for('contabilidade', inicio=inicio.isoformat(), fim=fim.isoformat()))
+
+    if not _smtp_configurado():
+        flash('Configure o envio de e-mail na aba Configurações antes de enviar.', 'erro')
+        return redirect(url_for('configuracoes'))
+
+    anexos, total_lancamentos, total_notas = _anexos_contabilidade(inicio, fim)
+    tamanho_mb = sum(len(conteudo) for _, conteudo in anexos) / (1024 * 1024)
+    if tamanho_mb > envio_email.LIMITE_ANEXOS_MB:
+        flash(
+            f'Os anexos somam {tamanho_mb:.1f} MB e passam do limite de '
+            f'{envio_email.LIMITE_ANEXOS_MB} MB aceito pela maioria dos provedores. '
+            'Envie em períodos menores (por exemplo, mês a mês).',
+            'erro',
+        )
+        return redirect(url_for('contabilidade', inicio=inicio.isoformat(), fim=fim.isoformat()))
+
+    empresa = _identificacao_empresa()
+    periodo_texto = f'{inicio.strftime("%d/%m/%Y")} a {fim.strftime("%d/%m/%Y")}'
+    observacao = request.form.get('mensagem', '').strip()
+
+    corpo = (
+        f'Seu cliente {empresa} enviou uma mensagem.\n\n'
+        f'Seguem os documentos do período de {periodo_texto}:\n\n'
+        f'- {total_lancamentos} lançamento(s), em planilha (.xlsx) e em texto (.txt)\n'
+        f'- {total_notas} nota(s) fiscal(is) em XML, no arquivo .zip separadas por tipo\n'
+    )
+    if observacao:
+        corpo += f'\nObservação do cliente:\n{observacao}\n'
+    corpo += '\n—\nEnviado automaticamente pelo sistema de Gestão Financeira.\n'
+
+    try:
+        _enviar_email(
+            destinatario,
+            f'Documentos contábeis {periodo_texto} — {empresa}',
+            corpo,
+            anexos,
+        )
+    except envio_email.ErroEnvio as exc:
+        flash(str(exc), 'erro')
+        return redirect(url_for('contabilidade', inicio=inicio.isoformat(), fim=fim.isoformat()))
+
+    fiscal_sync.config_set('email_contador', destinatario)
+    fiscal_sync.config_set('contabilidade_ultimo_envio', f'{datetime.now():%d/%m/%Y %H:%M} para {destinatario} ({periodo_texto})')
+    flash(
+        f'Enviado para {destinatario}: {total_lancamentos} lançamento(s) e {total_notas} nota(s) fiscal(is).',
+        'sucesso',
+    )
+    return redirect(url_for('contabilidade', inicio=inicio.isoformat(), fim=fim.isoformat()))
 
 
 @app.route('/relatorio/exportar')
@@ -1861,9 +2081,8 @@ def nfse_baixar_xml(id):
     if not nota.xml_gzip:
         flash('XML desta nota não está disponível.', 'erro')
         return redirect(url_for('notas_servico'))
-    import gzip as _gzip
     return Response(
-        _gzip.decompress(nota.xml_gzip),
+        gzip.decompress(nota.xml_gzip),
         mimetype='application/xml',
         headers={'Content-Disposition': f'attachment; filename="NFSe_{nota.chave_acesso}.xml"'},
     )
@@ -1875,9 +2094,8 @@ def nfe_baixar_xml(id):
     if not nota.xml_gzip:
         flash('XML desta nota não está disponível.', 'erro')
         return redirect(url_for('notas_eletronicas'))
-    import gzip as _gzip
     return Response(
-        _gzip.decompress(nota.xml_gzip),
+        gzip.decompress(nota.xml_gzip),
         mimetype='application/xml',
         headers={'Content-Disposition': f'attachment; filename="NFe_{nota.chave}.xml"'},
     )
@@ -2127,7 +2345,115 @@ def configuracoes():
         ambientes_nfse=fiscal_nfse.AMBIENTES_NFSE,
         backups=backups_existentes(),
         backups_pasta=backups_dir(),
+        smtp=_config_smtp(),
+        provedores_smtp=envio_email.PROVEDORES_SMTP,
+        segurancas_smtp=envio_email.SEGURANCAS,
     )
+
+
+def _config_smtp():
+    """Configuração de e-mail atual (a senha nunca sai daqui em claro)."""
+    return {
+        'provedor': fiscal_sync.config_get('smtp_provedor', 'gmail'),
+        'servidor': fiscal_sync.config_get('smtp_servidor'),
+        'porta': fiscal_sync.config_get('smtp_porta', '587'),
+        'seguranca': fiscal_sync.config_get('smtp_seguranca', 'tls'),
+        'usuario': fiscal_sync.config_get('smtp_usuario'),
+        'remetente': fiscal_sync.config_get('smtp_remetente'),
+        'remetente_nome': fiscal_sync.config_get('smtp_remetente_nome'),
+        'senha_salva': bool(fiscal_sync.config_get('smtp_senha_cripto')),
+    }
+
+
+def _smtp_configurado():
+    return bool(fiscal_sync.config_get('smtp_servidor') and fiscal_sync.config_get('smtp_remetente'))
+
+
+def _enviar_email(destinatario, assunto, corpo, anexos=()):
+    """Envia usando o SMTP configurado, decifrando a senha guardada."""
+    senha_cripto = fiscal_sync.config_get('smtp_senha_cripto')
+    senha = fiscal_certificado.descriptografar_senha(senha_cripto, data_path('.chave_secreta')) if senha_cripto else ''
+    return envio_email.enviar(
+        servidor=fiscal_sync.config_get('smtp_servidor'),
+        porta=fiscal_sync.config_get('smtp_porta', '587'),
+        seguranca=fiscal_sync.config_get('smtp_seguranca', 'tls'),
+        usuario=fiscal_sync.config_get('smtp_usuario'),
+        senha=senha,
+        remetente=fiscal_sync.config_get('smtp_remetente'),
+        remetente_nome=fiscal_sync.config_get('smtp_remetente_nome'),
+        destinatario=destinatario,
+        assunto=assunto,
+        corpo=corpo,
+        anexos=anexos,
+    )
+
+
+@app.route('/configuracoes/email', methods=['POST'])
+def configuracoes_email():
+    provedor = request.form.get('smtp_provedor', 'outro')
+    if provedor not in envio_email.PROVEDORES_SMTP:
+        provedor = 'outro'
+    preset = envio_email.PROVEDORES_SMTP[provedor]
+
+    # Escolhendo um provedor da lista, servidor/porta/segurança vêm prontos;
+    # em "Outro servidor" é o usuário quem informa.
+    if provedor == 'outro':
+        servidor = request.form.get('smtp_servidor', '').strip()
+        porta = request.form.get('smtp_porta', '587').strip()
+        seguranca = request.form.get('smtp_seguranca', 'tls')
+    else:
+        servidor, porta, seguranca = preset['servidor'], str(preset['porta']), preset['seguranca']
+
+    if seguranca not in dict(envio_email.SEGURANCAS):
+        seguranca = 'tls'
+    if not porta.isdigit():
+        flash('Porta do servidor inválida.', 'erro')
+        return redirect(url_for('configuracoes'))
+
+    remetente = request.form.get('smtp_remetente', '').strip()
+    if remetente and not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', remetente):
+        flash('E-mail remetente inválido.', 'erro')
+        return redirect(url_for('configuracoes'))
+
+    fiscal_sync.config_set('smtp_provedor', provedor)
+    fiscal_sync.config_set('smtp_servidor', servidor)
+    fiscal_sync.config_set('smtp_porta', porta)
+    fiscal_sync.config_set('smtp_seguranca', seguranca)
+    fiscal_sync.config_set('smtp_usuario', request.form.get('smtp_usuario', '').strip())
+    fiscal_sync.config_set('smtp_remetente', remetente)
+    fiscal_sync.config_set('smtp_remetente_nome', request.form.get('smtp_remetente_nome', '').strip())
+
+    senha = request.form.get('smtp_senha', '')
+    if senha:
+        fiscal_sync.config_set(
+            'smtp_senha_cripto',
+            fiscal_certificado.criptografar_senha(senha, data_path('.chave_secreta')),
+        )
+
+    flash('Configurações de e-mail salvas.', 'sucesso')
+    return redirect(url_for('configuracoes'))
+
+
+@app.route('/configuracoes/email/testar', methods=['POST'])
+def configuracoes_email_testar():
+    destino = request.form.get('destino', '').strip() or fiscal_sync.config_get('smtp_remetente')
+    if not destino:
+        flash('Informe um e-mail para receber o teste.', 'erro')
+        return redirect(url_for('configuracoes'))
+
+    try:
+        _enviar_email(
+            destino,
+            'Teste de envio — Gestão Financeira',
+            'Se você recebeu esta mensagem, o envio de e-mail do sistema está funcionando.\n\n'
+            'Pode responder ignorando: é só um teste de configuração.',
+        )
+    except envio_email.ErroEnvio as exc:
+        flash(str(exc), 'erro')
+        return redirect(url_for('configuracoes'))
+
+    flash(f'E-mail de teste enviado para {destino}. Confira a caixa de entrada (e o spam).', 'sucesso')
+    return redirect(url_for('configuracoes'))
 
 
 @app.route('/configuracoes/backup', methods=['POST'])
