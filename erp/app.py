@@ -12,6 +12,7 @@ import threading
 import uuid
 from collections import defaultdict
 from datetime import date, datetime, timedelta
+from urllib.parse import quote
 
 from flask import (
     Flask, Response, abort, flash, jsonify, redirect, render_template, request,
@@ -1488,7 +1489,32 @@ def sem_acesso():
                            # Só faz sentido oferecer pagamento a quem está
                            # barrado por assinatura: quem o admin bloqueou na
                            # mão não se desbloqueia pagando.
-                           pode_pagar=(motivo == 'assinatura' and asaas.configurado()))
+                           pode_pagar=(motivo == 'assinatura'),
+                           link_suporte=link_do_suporte(usuario))
+
+
+def link_do_suporte(usuario=None):
+    """Conversa no WhatsApp com o suporte, já com a pessoa identificada.
+
+    Devolve None quando o administrador ainda não cadastrou o número — é
+    melhor não mostrar o botão do que mandar a pessoa para um número errado.
+    """
+    numero = re.sub(r'\D', '', fiscal_sync.sistema_get('suporte_whatsapp'))
+    if not numero:
+        return None
+
+    # Número brasileiro digitado sem o código do país ganha o 55.
+    if len(numero) in (10, 11):
+        numero = f'55{numero}'
+
+    if usuario is not None:
+        empresa = usuario.empresa.nome if usuario.empresa else 'sem empresa'
+        texto = (f'Olá! Sou {usuario.nome} ({usuario.email}), da {empresa}. '
+                 f'Preciso de ajuda com o acesso ao sistema.')
+    else:
+        texto = 'Olá! Preciso de ajuda com o sistema.'
+
+    return f'https://wa.me/{numero}?text={quote(texto)}'
 
 
 # ------------------------------------------------------------------ #
@@ -1634,16 +1660,17 @@ def cadastro():
     origem = request.remote_addr or 'desconhecido'
 
     if dados['papel'] == PAPEL_CONTADOR:
-        auth.criar_usuario(
+        contador = auth.criar_usuario(
             dados['email'], dados['senha'], dados['nome'], papel=PAPEL_CONTADOR,
             cpf_cnpj=dados['cpf_cnpj'], endereco=dados['endereco'], cep=dados['cep'],
             cidade=dados['cidade'], uf=dados['uf'], telefone=dados['telefone'],
         )
         db.session.commit()
         _registrar_cadastro(origem)
-        flash('Conta de contador criada. Entre e peça ao seu cliente para informar '
-              'o seu e-mail na aba Contabilidade dele.', 'sucesso')
-        return redirect(url_for('login'))
+        auth.entrar(contador)
+        flash('Conta criada! Peça ao seu cliente para informar o seu e-mail na aba '
+              'Contabilidade do sistema dele — é isso que libera o acesso.', 'sucesso')
+        return redirect(url_for('inicio'))
 
     # Cliente: nasce com a empresa, mas sem assinatura — o acesso às telas só
     # abre quando um pagamento for confirmado.
@@ -1667,23 +1694,22 @@ def cadastro():
     db.session.commit()
     _registrar_cadastro(origem)
 
-    if dados['pagamento'] == 'depois' or not asaas.configurado():
-        if dados['pagamento'] == 'agora':
-            flash('A cobrança automática ainda não está disponível. Sua conta foi '
-                  'criada e o acesso abre assim que o pagamento for combinado.', 'erro')
-        else:
-            flash('Conta criada. O acesso às telas abre quando o pagamento for '
-                  'confirmado — entre e escolha "Pagar agora" quando quiser.', 'sucesso')
-        return redirect(url_for('login'))
-
-    # Pagar agora: entra já logado e segue para o link de pagamento. Mesmo
-    # assim o acesso continua barrado até o Asaas confirmar.
+    # Entra já logado em todos os casos. Mandar de volta para o login deixava
+    # a pessoa sem entender o que aconteceu com a conta que acabou de criar;
+    # na tela de bloqueio ela vê a situação e os botões de pagar e de suporte.
     auth.entrar(usuario)
+
+    if dados['pagamento'] == 'depois':
+        flash('Conta criada! O acesso às telas abre quando o pagamento for '
+              'confirmado — é só clicar em "Realizar pagamento" quando quiser.',
+              'sucesso')
+        return redirect(url_for('sem_acesso'))
+
     try:
         _, link = asaas.criar_cobranca(empresa, data_path('.chave_secreta'),
                                        url_base=os.environ.get('ERP_ASAAS_URL'))
     except asaas.ErroAsaas as exc:
-        flash(f'Conta criada, mas não deu para gerar a cobrança: {exc}', 'erro')
+        flash(f'Conta criada, mas não deu para gerar a cobrança agora: {exc}', 'erro')
         return redirect(url_for('sem_acesso'))
 
     return redirect(link)
@@ -3281,6 +3307,7 @@ def admin_assinaturas():
         asaas=asaas.configuracao(),
         ultima_verificacao=fiscal_sync.sistema_get('asaas_ultima_verificacao') or '',
         ultimo_resultado=fiscal_sync.sistema_get('asaas_ultimo_resultado') or '',
+        suporte_whatsapp=fiscal_sync.sistema_get('suporte_whatsapp'),
     )
 
 
@@ -3298,6 +3325,14 @@ def admin_asaas_configurar():
             'asaas_token_cripto',
             fiscal_certificado.criptografar_senha(token, data_path('.chave_secreta')),
         )
+
+    # Número do suporte: guardado só com dígitos, para montar o link do
+    # WhatsApp sem depender de como o admin digitou.
+    whatsapp = re.sub(r'\D', '', request.form.get('suporte_whatsapp', ''))
+    if whatsapp and len(whatsapp) < 10:
+        flash('Número de WhatsApp muito curto — informe com DDD.', 'erro')
+        return redirect(url_for('admin_assinaturas'))
+    fiscal_sync.sistema_set('suporte_whatsapp', whatsapp)
 
     valor = request.form.get('valor', '').strip().replace(',', '.')
     if valor:

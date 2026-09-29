@@ -118,7 +118,6 @@
             <div class="so-cliente">
                 <h3 class="titulo-secao">4. Pagamento</h3>
 
-                {% if cobranca_disponivel %}
                 <div class="escolha-cartoes">
                     <label class="cartao-escolha">
                         <input type="radio" name="pagamento" value="agora"
@@ -135,17 +134,17 @@
                         <span class="cartao-corpo">
                             <strong>Pagar depois</strong>
                             <small>Cria a conta agora. As telas do sistema só abrem
-                                   depois do pagamento — você paga quando quiser, pela
-                                   própria tela de entrada.</small>
+                                   depois do pagamento — você paga quando quiser, pelo
+                                   botão que aparece logo após entrar.</small>
                         </span>
                     </label>
                 </div>
-                {% else %}
-                <input type="hidden" name="pagamento" value="depois">
+
+                {% if not cobranca_disponivel %}
                 <p class="aviso-cadastro">
-                    O pagamento on-line ainda não está configurado neste servidor.
-                    Sua conta será criada e o administrador libera o acesso depois
-                    de combinar o pagamento com você.
+                    O pagamento on-line ainda não está ligado neste servidor. Sua conta
+                    é criada do mesmo jeito, e logo depois você vê a tela com o botão de
+                    falar com o suporte para combinar a liberação.
                 </p>
                 {% endif %}
             </div>

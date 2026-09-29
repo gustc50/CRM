@@ -699,9 +699,16 @@ de pagamento fazem coisas diferentes:
   tela de bloqueio e **nenhuma função do sistema abre**. De lá mesmo ela pode
   clicar em *Pagar agora* quando quiser.
 
-Como a confirmação vem por consulta periódica, a tela de bloqueio tem
-**"Já paguei — conferir agora"**, que consulta só aquela empresa na hora, em
-vez de deixar a pessoa esperando a rodada de 6 em 6 horas.
+Em todos os casos a pessoa **já entra logada e cai na tela de bloqueio**, que
+é onde ficam as saídas: **"Realizar pagamento"** (gera a cobrança e abre a
+página de pagamento) e **"Falar com o suporte"** (abre a conversa no WhatsApp
+já identificando quem está pedindo ajuda), lado a lado. Abaixo delas,
+**"Já paguei — conferir agora"** consulta só aquela empresa na hora, em vez de
+deixar a pessoa esperando a rodada de 6 em 6 horas.
+
+O número do WhatsApp do suporte é cadastrado pelo admin em *Assinaturas*.
+Sem número cadastrado, o botão não aparece (melhor do que mandar a pessoa
+para um número errado) e a tela orienta a falar com o administrador.
 
 **Contador.** Não paga e não tem empresa: a conta já entra liberada, mas
 enquanto nenhum cliente informar o e-mail dele na aba Contabilidade, a lista
@@ -709,9 +716,9 @@ de clientes dele fica vazia. O CPF/CNPJ e o endereço dele ficam no próprio
 usuário.
 
 O valor da mensalidade é definido pelo admin em *Assinaturas* (padrão de
-R$ 99,90). Sem token do Asaas configurado, a seção de pagamento some do
-formulário e toda conta nasce como "pagar depois", com o aviso de que o
-administrador libera depois de combinar o pagamento.
+R$ 99,90). **Sem token do Asaas configurado o formulário continua igual**, com
+as duas opções; o que muda é que a cobrança não é gerada, e a pessoa cai na
+tela de bloqueio com o aviso do motivo e o botão de falar com o suporte.
 
 Três cuidados no cadastro aberto, por ser uma porta que qualquer um
 atravessa:
@@ -800,6 +807,15 @@ Três suítes contra banco limpo, todas passando:
   silêncio.
 - **O limite por IP contava tentativas recusadas**, o que trancava por uma
   hora quem apenas errasse o formulário cinco vezes.
+- **Quem se cadastrava caía no login sem entender o que houve.** Em servidor
+  sem o Asaas configurado, a seção de pagamento sumia do formulário *e* o
+  cadastro terminava na tela de entrada — ou seja, nem pagar nem adiar
+  apareciam. Agora as duas opções são sempre exibidas e o cadastro termina na
+  tela de bloqueio, já logado, com pagar e suporte à mão.
+- **Formulário dentro de formulário.** Os blocos de ação da tela de bloqueio
+  herdavam o estilo de cartão branco do `form` comum, virando caixas dentro da
+  caixa, e encolhiam até o tamanho do texto porque o `form` base é uma linha
+  flex. Só apareceu na captura de tela.
 
 ## Limitações conhecidas (fora do escopo desta revisão)
 

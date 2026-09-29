@@ -857,9 +857,49 @@ input[type="file"] {
 /* Na tela de bloqueio as ações ficam empilhadas; o "Sair" acompanha a
    largura dos botões acima em vez de ficar solto no canto. */
 .tela-login .form-acoes { margin-top: 12px; }
-.tela-login .form-acoes .btn-acao {
+.tela-login .form-acoes .btn-acao,
+.tela-login .form-acoes > button {
     width: 100%;
     padding: 10px;
     font-size: 14px;
     text-align: center;
+}
+
+/* Nas telas de entrada o formulario nao e um cartao: a caixa branca ja e a
+   moldura. Sem isto, cada form vira um cartao dentro do outro. */
+.tela-login form {
+    background: none;
+    box-shadow: none;
+    padding: 0;
+    margin: 0 0 10px;
+    /* O `form` base e uma linha flex; aqui tudo empilha e ocupa a largura
+       toda, senao os blocos de acao encolhem ate o tamanho do texto. */
+    flex-direction: column;
+    align-items: stretch;
+}
+
+/* Pagar e falar com o suporte lado a lado na tela de bloqueio. */
+.acoes-lado-a-lado {
+    display: flex;
+    align-items: stretch;
+    gap: 10px;
+    margin-top: 16px;
+}
+.acoes-lado-a-lado > form { flex: 1; display: flex; margin: 0; }
+.acoes-lado-a-lado button,
+.acoes-lado-a-lado .btn-acao {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 11px 8px;
+    font-size: 14px;
+    line-height: 1.2;
+    text-align: center;
+}
+.btn-whatsapp { background: #25d366; }
+.btn-whatsapp:hover { background: #1da851; }
+
+@media (max-width: 460px) {
+    .acoes-lado-a-lado { flex-direction: column; }
 }
