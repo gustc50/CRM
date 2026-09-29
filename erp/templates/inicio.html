@@ -1,0 +1,157 @@
+{% extends 'base.html' %}
+
+{# Formatação brasileira: milhar com ponto, decimal com vírgula, sinal antes do R$ #}
+{% macro dinheiro(valor) %}
+{%- set absoluto = "{:,.2f}".format(valor|abs).replace(',', 'X').replace('.', ',').replace('X', '.') -%}
+{{ '-' if valor < 0 else '' }}R$ {{ absoluto }}
+{%- endmacro %}
+
+{% macro porcento(valor, casas=1) %}{{ ("%." ~ casas ~ "f")|format(valor)|replace('.', ',') }}%{% endmacro %}
+
+{# Valor curto para caber como rótulo de barra — o exato está no topo, na
+   tabela e no hover; aqui o papel é dar a escala do gráfico. #}
+{% macro compacto(valor) %}
+{%- if valor >= 1000000 -%}{{ "%.1f"|format(valor / 1000000)|replace('.', ',') }} mi
+{%- elif valor >= 1000 -%}{{ (valor / 1000)|round|int }} mil
+{%- else -%}{{ valor|round|int }}
+{%- endif -%}
+{% endmacro %}
+
+{% macro variacao(percentual, mais_e_melhor=True) %}
+    {% if percentual is not none %}
+    {% set subiu = percentual >= 0 %}
+    {% set bom = subiu if mais_e_melhor else not subiu %}
+    <span class="delta {{ 'delta-bom' if bom else 'delta-ruim' }}">
+        {{ '▲' if subiu else '▼' }} {{ porcento(percentual|abs) }} vs. mês anterior
+    </span>
+    {% else %}
+    <span class="delta delta-neutro">sem base de comparação</span>
+    {% endif %}
+{% endmacro %}
+
+{% block content %}
+<h2>Início <small class="subtitulo">visão geral de {{ mes_atual.rotulo }}</small></h2>
+
+<!-- Resultado do mês: o número que a tela lidera -->
+<section class="painel destaque-resultado">
+    <div>
+        <p class="rotulo-painel">Resultado de {{ mes_atual.rotulo }} <small>(por vencimento)</small></p>
+        {% if mes_atual.margem is not none %}
+        <p class="hero {{ 'hero-lucro' if mes_atual.resultado >= 0 else 'hero-prejuizo' }}">
+            {{ porcento(mes_atual.margem|abs) }} de {{ 'lucro' if mes_atual.resultado >= 0 else 'prejuízo' }}
+        </p>
+        {% else %}
+        <p class="hero hero-neutro">sem faturamento no mês</p>
+        {% endif %}
+        <p class="hero-apoio">
+            {{ dinheiro(mes_atual.resultado) }} de resultado ·
+            {{ variacao(variacao_resultado) }}
+        </p>
+    </div>
+    <div class="resumo-mes">
+        <p><span class="chave entradas"></span> Entradas <strong>{{ dinheiro(mes_atual.entradas) }}</strong></p>
+        <p><span class="chave saidas"></span> Saídas <strong>{{ dinheiro(mes_atual.saidas) }}</strong></p>
+        <p class="hero-apoio">Mês anterior: {{ dinheiro(mes_passado.resultado) }}</p>
+    </div>
+</section>
+
+<!-- Entradas x saídas ao longo do tempo -->
+<section class="painel">
+    <div class="cabecalho-grafico">
+        <h3>Entradas e saídas por mês</h3>
+        <div class="legenda">
+            <span><span class="chave entradas"></span> Entradas</span>
+            <span><span class="chave saidas"></span> Saídas</span>
+        </div>
+    </div>
+
+    {% if teto > 0 %}
+    <div class="grafico-barras">
+        {% for m in serie %}
+        {# Rótulo direto só no mês atual: é a ponta da série e o que a tela conta.
+           Número em toda barra vira ruído e ninguém lê — os demais meses ficam
+           no hover e na tabela abaixo. #}
+        <div class="grupo-mes {{ 'mes-atual' if loop.last else '' }}">
+            <div class="barras">
+                <div class="barra entradas" style="height: {{ (m.entradas / teto * 100)|round(1) }}%"
+                     title="{{ m.rotulo }} · Entradas {{ dinheiro(m.entradas) }}">
+                    {% if loop.last %}<span class="rotulo-barra rotulo-esquerda">{{ compacto(m.entradas) }}</span>{% endif %}
+                </div>
+                <div class="barra saidas" style="height: {{ (m.saidas / teto * 100)|round(1) }}%"
+                     title="{{ m.rotulo }} · Saídas {{ dinheiro(m.saidas) }}">
+                    {% if loop.last %}<span class="rotulo-barra rotulo-direita">{{ compacto(m.saidas) }}</span>{% endif %}
+                </div>
+            </div>
+            <span class="rotulo-mes">{{ m.rotulo_curto }}</span>
+        </div>
+        {% endfor %}
+    </div>
+    <p class="nota-grafico">Últimos {{ serie|length }} meses, por data de vencimento. O mês atual é o último à direita.</p>
+
+    <details class="tabela-grafico">
+        <summary>Ver os números em tabela</summary>
+        <div class="table-scroll">
+        <table>
+            <thead>
+                <tr><th>Mês</th><th>Entradas</th><th>Saídas</th><th>Resultado</th></tr>
+            </thead>
+            <tbody>
+                {% for m in serie %}
+                <tr>
+                    <td>{{ m.rotulo }}</td>
+                    <td>{{ dinheiro(m.entradas) }}</td>
+                    <td>{{ dinheiro(m.saidas) }}</td>
+                    <td class="{{ 'valor-bom' if m.resultado >= 0 else 'valor-ruim' }}">{{ dinheiro(m.resultado) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        </div>
+    </details>
+    {% else %}
+    <p class="aviso-cadastro">Ainda não há lançamentos nos últimos {{ serie|length }} meses para montar o gráfico.</p>
+    {% endif %}
+</section>
+
+<!-- Caixa contra compromissos -->
+<section class="painel">
+    <h3>Caixa e bancos x contas a pagar</h3>
+
+    {% if saldo_contas is not none %}
+    <div class="medidor">
+        <div class="medidor-trilha" title="Contas a pagar em aberto: {{ dinheiro(a_pagar) }} de {{ dinheiro(saldo_contas) }} em caixa">
+            <div class="medidor-fill {{ 'medidor-estourado' if comprometido >= 100 else '' }}"
+                 style="width: {{ comprometido|round(1) }}%"></div>
+        </div>
+        <p class="medidor-texto">
+            <strong>{{ "%.0f"|format(comprometido) }}%</strong> do saldo em conta já está comprometido
+            com contas a pagar em aberto.
+        </p>
+    </div>
+
+    <div class="dashboard">
+        <div class="card">
+            <h3>Saldo em contas</h3>
+            <h2>{{ dinheiro(saldo_contas) }}</h2>
+            {% if saldo_data %}<small>Último OFX importado em {{ saldo_data.strftime('%d/%m/%Y') }}</small>{% endif %}
+        </div>
+        <div class="card">
+            <h3>A pagar em aberto</h3>
+            <h2>{{ dinheiro(a_pagar) }}</h2>
+            {% if atrasados %}<small class="valor-ruim">{{ atrasados }} já vencida(s): {{ dinheiro(valor_atrasado) }}</small>{% endif %}
+        </div>
+        <div class="card">
+            <h3>{{ 'Sobra projetada' if sobra >= 0 else 'Falta projetada' }}</h3>
+            <h2 class="{{ 'valor-bom' if sobra >= 0 else 'valor-ruim' }}">{{ dinheiro(sobra) }}</h2>
+            <small>Sem contar os {{ dinheiro(a_receber) }} a receber</small>
+        </div>
+    </div>
+    {% else %}
+    <p class="aviso-cadastro">
+        Para comparar o caixa com as despesas, <a href="{{ url_for('contas_listar') }}">importe o extrato OFX</a>
+        de pelo menos uma conta bancária — é dele que vem o saldo real.
+        Hoje há <strong>{{ dinheiro(a_pagar) }}</strong> em contas a pagar em aberto.
+    </p>
+    {% endif %}
+</section>
+{% endblock %}

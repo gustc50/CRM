@@ -33,7 +33,7 @@
 {% if sem_categoria_count %}
 <p class="aviso-cadastro">
     ⚠ {{ sem_categoria_count }} lançamento(s) sem categoria.
-    <a href="{{ url_for('index', filtro_categoria='sem') }}">Ver todos</a>
+    <a href="{{ url_for('lancamentos', filtro_categoria='sem') }}">Ver todos</a>
 </p>
 {% endif %}
 
@@ -78,7 +78,7 @@
     <button type="submit">Adicionar Lançamento</button>
 </form>
 
-<form action="{{ url_for('index') }}" method="GET" class="form-filtro">
+<form action="{{ url_for('lancamentos') }}" method="GET" class="form-filtro">
     <label>
         Buscar
         <input type="text" name="busca" value="{{ busca }}" placeholder="Descrição, fornecedor ou cliente...">
@@ -127,7 +127,7 @@
         </select>
     </label>
     <button type="submit">Buscar</button>
-    <a href="{{ url_for('index') }}" class="btn-acao btn-cancelar">Limpar</a>
+    <a href="{{ url_for('lancamentos') }}" class="btn-acao btn-cancelar">Limpar</a>
 </form>
 
 <div class="table-scroll">

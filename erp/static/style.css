@@ -509,6 +509,185 @@ input[type="file"] {
     padding: 8px;
 }
 
+/* ---- Início (dashboards) ----
+   Paleta das séries validada para daltonismo com o validate_palette.js:
+   azul x laranja separam ΔE 24.7 sob protanopia. Verde/vermelho, usados no
+   resto do sistema junto de rótulos em texto, separam só ΔE 3.5 — serviriam
+   para colorir uma palavra, não para ser o único sinal num gráfico. */
+:root {
+    --serie-entradas: #2a78d6;
+    --serie-saidas: #eb6834;
+    --superficie: #fff;
+    --tinta-secundaria: #52514e;
+    --grade: #e6e9ee;
+}
+
+.painel {
+    background: #fff;
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+.painel h3 { margin-top: 0; }
+
+.subtitulo {
+    font-weight: normal;
+    color: var(--tinta-secundaria);
+    font-size: 15px;
+}
+.rotulo-painel {
+    margin: 0;
+    color: var(--tinta-secundaria);
+    font-size: 14px;
+}
+.rotulo-painel small { color: #8a8a86; }
+
+.destaque-resultado {
+    display: flex;
+    justify-content: space-between;
+    gap: 24px;
+    flex-wrap: wrap;
+}
+/* Hero: o número que a tela lidera. Uma por página. */
+.hero {
+    font-size: 48px;
+    font-weight: 600;
+    line-height: 1.1;
+    margin: 6px 0;
+}
+.hero-lucro { color: #17693f; }
+.hero-prejuizo { color: #a4332f; }
+.hero-neutro { color: var(--tinta-secundaria); font-size: 30px; }
+.hero-apoio {
+    margin: 4px 0;
+    color: var(--tinta-secundaria);
+    font-size: 14px;
+}
+
+.delta { font-weight: 600; white-space: nowrap; }
+.delta-bom { color: #17693f; }
+.delta-ruim { color: #a4332f; }
+.delta-neutro { color: #8a8a86; font-weight: normal; }
+.valor-bom { color: #17693f; }
+.valor-ruim { color: #a4332f; }
+
+.resumo-mes { font-size: 14px; }
+.resumo-mes p { margin: 6px 0; }
+.resumo-mes strong { margin-left: 4px; }
+
+/* Chave de cor da legenda e dos resumos */
+.chave {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    vertical-align: -1px;
+    margin-right: 4px;
+}
+.chave.entradas { background: var(--serie-entradas); }
+.chave.saidas { background: var(--serie-saidas); }
+
+.cabecalho-grafico {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+.legenda {
+    display: flex;
+    gap: 16px;
+    font-size: 13px;
+    color: var(--tinta-secundaria);
+}
+
+.grafico-barras {
+    display: flex;
+    align-items: flex-end;
+    gap: 18px;
+    height: 200px;
+    margin: 20px 0 6px;
+    padding-top: 10px;
+    border-bottom: 1px solid var(--grade);
+}
+.grupo-mes {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 100%;
+}
+.barras {
+    flex: 1;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 2px;  /* o gap em cor de superfície é o que separa as barras vizinhas */
+    width: 100%;
+}
+.barra {
+    width: 22px;  /* marcas finas: a sobra da faixa é ar, não tinta */
+    max-width: 40%;
+    min-height: 2px;
+    border-radius: 4px 4px 0 0;  /* arredondado na ponta do dado, reto na base */
+    position: relative;
+}
+/* Rótulo fica fora da ponta da barra (dentro não cabe) e cada um puxa para o
+   seu lado: centralizados nas duas barras vizinhas, os textos se sobrepõem. */
+.rotulo-barra {
+    position: absolute;
+    bottom: 100%;
+    margin-bottom: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--tinta-secundaria);
+    white-space: nowrap;
+}
+.rotulo-esquerda { right: 50%; margin-right: 3px; }
+.rotulo-direita { left: 50%; margin-left: 3px; }
+.barra.entradas { background: var(--serie-entradas); }
+.barra.saidas { background: var(--serie-saidas); }
+.rotulo-mes {
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--tinta-secundaria);
+}
+.mes-atual .rotulo-mes { font-weight: bold; color: #333; }
+
+.nota-grafico {
+    font-size: 12px;
+    color: #8a8a86;
+    margin: 4px 0 0;
+}
+.tabela-grafico { margin-top: 14px; }
+.tabela-grafico summary {
+    cursor: pointer;
+    font-size: 13px;
+    color: #0056b3;
+}
+.tabela-grafico .table-scroll table { min-width: 0; }
+
+/* Medidor: quanto do caixa já está comprometido */
+.medidor { margin: 16px 0 24px; }
+.medidor-trilha {
+    height: 22px;
+    background: #e7f1ff;  /* trilha é um passo mais claro da mesma rampa do fill */
+    border-radius: 6px;
+    overflow: hidden;
+}
+.medidor-fill {
+    height: 100%;
+    background: var(--serie-entradas);
+    border-radius: 6px 0 0 6px;
+}
+.medidor-fill.medidor-estourado { background: var(--serie-saidas); }
+.medidor-texto {
+    margin: 8px 0 0;
+    font-size: 14px;
+    color: var(--tinta-secundaria);
+}
+
 .badge-origem {
     display: inline-block;
     text-decoration: none;

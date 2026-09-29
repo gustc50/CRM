@@ -196,7 +196,7 @@ db.init_app(app)
 @app.errorhandler(413)
 def arquivo_muito_grande(_erro):
     flash('Arquivo muito grande. O limite por anexo é 10 MB.', 'erro')
-    return redirect(request.referrer or url_for('index'))
+    return redirect(request.referrer or url_for('lancamentos'))
 
 
 def migrar_schema():
@@ -462,8 +462,10 @@ app.jinja_env.globals['formatar_cnpj_cpf'] = formatar_cnpj_cpf
 # as telas de edição), e `filhos` são as sub-abas que aparecem quando a seção
 # está aberta. Clicar no item pai leva para a primeira sub-aba.
 MENU_LATERAL = [
-    {'icone': '💰', 'rotulo': 'Lançamentos', 'endpoint': 'index',
-     'ativo_em': ('index', 'editar')},
+    {'icone': '🏠', 'rotulo': 'Início', 'endpoint': 'inicio',
+     'ativo_em': ('inicio',)},
+    {'icone': '💰', 'rotulo': 'Lançamentos', 'endpoint': 'lancamentos',
+     'ativo_em': ('lancamentos', 'editar')},
     {'icone': '📊', 'rotulo': 'Relatório', 'endpoint': 'relatorio',
      'ativo_em': ('relatorio',)},
     {'icone': '🔁', 'rotulo': 'Recorrentes', 'endpoint': 'recorrentes_listar',
@@ -1234,8 +1236,116 @@ def validar_recorrente(form):
     return dados, None
 
 
+# ------------------------------------------------------------------ #
+# Início — visão geral do negócio
+# ------------------------------------------------------------------ #
+
+MESES_NO_GRAFICO = 6
+MESES_ABREVIADOS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez']
+
+
+def _limites_do_mes(referencia):
+    """Primeiro e último dia do mês da data informada."""
+    primeiro = referencia.replace(day=1)
+    ultimo = primeiro.replace(day=calendar.monthrange(primeiro.year, primeiro.month)[1])
+    return primeiro, ultimo
+
+
+def _mes_anterior(referencia):
+    primeiro = referencia.replace(day=1)
+    return (primeiro - timedelta(days=1)).replace(day=1)
+
+
+def resultado_do_mes(referencia):
+    """Entradas, saídas e resultado de um mês, por data de vencimento.
+
+    Usa competência (vencimento) e não caixa (pagamento) para bater com o
+    Relatório por Período e para não depender de o usuário ter dado baixa em
+    tudo — senão um mês sem baixas apareceria como prejuízo que não existe.
+    """
+    inicio, fim = _limites_do_mes(referencia)
+    transacoes = Transacao.query.filter(
+        Transacao.data_vencimento >= inicio,
+        Transacao.data_vencimento <= fim,
+    ).all()
+
+    entradas = sum(t.valor for t in transacoes if t.tipo == 'Receber')
+    saidas = sum(t.valor for t in transacoes if t.tipo == 'Pagar')
+    resultado = entradas - saidas
+
+    return {
+        'inicio': inicio,
+        'fim': fim,
+        'rotulo': f'{inicio.month:02d}/{inicio.year}',
+        'rotulo_curto': MESES_ABREVIADOS[inicio.month - 1],
+        'entradas': entradas,
+        'saidas': saidas,
+        'resultado': resultado,
+        # Margem sobre o faturamento: sem entradas no mês não existe margem
+        # (dividir por zero diria "prejuízo de infinito%").
+        'margem': (resultado / entradas * 100) if entradas else None,
+    }
+
+
+def _variacao(atual, anterior):
+    """Variação percentual entre dois valores; None quando não dá para comparar."""
+    if not anterior:
+        return None
+    return (atual - anterior) / abs(anterior) * 100
+
+
 @app.route('/')
-def index():
+def inicio():
+    hoje = datetime.now().date()
+    mes_atual = resultado_do_mes(hoje)
+    mes_passado = resultado_do_mes(_mes_anterior(hoje))
+
+    # Série dos últimos meses, do mais antigo para o mais recente
+    serie = []
+    referencia = hoje
+    for _ in range(MESES_NO_GRAFICO):
+        serie.append(resultado_do_mes(referencia))
+        referencia = _mes_anterior(referencia)
+    serie.reverse()
+    teto = max([max(m['entradas'], m['saidas']) for m in serie] or [0])
+
+    # Caixa: o que existe em conta contra o que já está comprometido
+    contas_com_saldo = ContaBancaria.query.filter(ContaBancaria.saldo.isnot(None)).all()
+    saldo_contas = sum(c.saldo for c in contas_com_saldo) if contas_com_saldo else None
+    saldo_data = max((c.saldo_data for c in contas_com_saldo if c.saldo_data), default=None)
+
+    pendentes = Transacao.query.filter_by(status='Pendente').all()
+    a_pagar = sum(t.valor for t in pendentes if t.tipo == 'Pagar')
+    a_receber = sum(t.valor for t in pendentes if t.tipo == 'Receber')
+    atrasados = [t for t in pendentes if t.tipo == 'Pagar' and t.data_vencimento < hoje]
+
+    comprometido = None
+    if saldo_contas and saldo_contas > 0:
+        comprometido = min(a_pagar / saldo_contas * 100, 100)
+
+    return render_template(
+        'inicio.html',
+        hoje=hoje,
+        mes_atual=mes_atual,
+        mes_passado=mes_passado,
+        serie=serie,
+        teto=teto,
+        variacao_entradas=_variacao(mes_atual['entradas'], mes_passado['entradas']),
+        variacao_saidas=_variacao(mes_atual['saidas'], mes_passado['saidas']),
+        variacao_resultado=_variacao(mes_atual['resultado'], mes_passado['resultado']),
+        saldo_contas=saldo_contas,
+        saldo_data=saldo_data,
+        a_pagar=a_pagar,
+        a_receber=a_receber,
+        sobra=(saldo_contas - a_pagar) if saldo_contas is not None else None,
+        comprometido=comprometido,
+        atrasados=len(atrasados),
+        valor_atrasado=sum(t.valor for t in atrasados),
+    )
+
+
+@app.route('/lancamentos')
+def lancamentos():
     todas_transacoes = Transacao.query.all()
     total_receber = sum(t.valor for t in todas_transacoes if t.tipo == 'Receber' and t.status == 'Pendente')
     total_pagar = sum(t.valor for t in todas_transacoes if t.tipo == 'Pagar' and t.status == 'Pendente')
@@ -1284,7 +1394,7 @@ def index():
     transacoes = query.order_by(Transacao.data_vencimento).all()
 
     return render_template(
-        'index.html',
+        'lancamentos.html',
         transacoes=transacoes,
         total_receber=total_receber,
         total_pagar=total_pagar,
@@ -1313,12 +1423,12 @@ def adicionar():
     dados, erro = validar_transacao(request.form)
     if erro:
         flash(erro, 'erro')
-        return redirect(url_for('index'))
+        return redirect(url_for('lancamentos'))
 
     db.session.add(Transacao(**dados))
     db.session.commit()
     flash('Lançamento adicionado com sucesso.', 'sucesso')
-    return redirect(url_for('index'))
+    return redirect(url_for('lancamentos'))
 
 
 @app.route('/editar/<int:id>', methods=['GET', 'POST'])
@@ -1377,7 +1487,7 @@ def editar(id):
         transacao.conta_bancaria_id = dados['conta_bancaria_id']
         db.session.commit()
         flash('Lançamento atualizado com sucesso.', 'sucesso')
-        return redirect(url_for('index'))
+        return redirect(url_for('lancamentos'))
 
     return render_template(
         'editar.html',
@@ -1401,7 +1511,7 @@ def excluir(id):
     db.session.delete(transacao)
     db.session.commit()
     flash('Lançamento excluído.', 'sucesso')
-    return redirect(url_for('index'))
+    return redirect(url_for('lancamentos'))
 
 
 def _destino_voltar():
@@ -1409,7 +1519,7 @@ def _destino_voltar():
     voltar = request.form.get('voltar', '')
     if voltar.startswith('/') and not voltar.startswith('//'):
         return voltar
-    return url_for('index')
+    return url_for('lancamentos')
 
 
 @app.route('/concluir/<int:id>', methods=['POST'])
@@ -1433,7 +1543,7 @@ def reabrir(id):
     transacao.status = 'Pendente'
     transacao.data_pagamento = None
     db.session.commit()
-    return redirect(url_for('index'))
+    return redirect(url_for('lancamentos'))
 
 
 @app.route('/anexos/<int:id>')
@@ -1441,7 +1551,7 @@ def baixar_anexo(id):
     transacao = Transacao.query.get_or_404(id)
     if not transacao.anexo_arquivo:
         flash('Este lançamento não possui anexo.', 'erro')
-        return redirect(url_for('index'))
+        return redirect(url_for('lancamentos'))
     return send_from_directory(
         anexos_dir(),
         transacao.anexo_arquivo,

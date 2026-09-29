@@ -3,6 +3,10 @@
 Aplicação Flask simples para controle de contas a pagar e a receber. A
 navegação fica em um menu lateral, com estas seções:
 
+- **Início**: tela de abertura, com o resultado do mês em destaque (a margem
+  de lucro ou prejuízo e a variação contra o mês anterior), o gráfico de
+  entradas e saídas dos últimos 6 meses e a comparação do caixa com as contas
+  a pagar em aberto.
 - **Lançamentos**: cadastro de contas a pagar/receber, com busca/filtro,
   editar, excluir, dar baixa e reabrir. Contas vencidas e ainda pendentes
   aparecem destacadas com um selo "Atrasado".
@@ -483,6 +487,38 @@ com notas, e ainda exibia o aviso de espera de 1 hora.
 - **Gmail, Outlook e Zoho não aceitam a senha normal da conta**: é preciso
   gerar uma "senha de aplicativo" no painel do provedor. A tela avisa isso
   conforme o provedor escolhido.
+
+## Décima segunda rodada: aba Início com os painéis
+
+A tela que abre com o programa passou a ser o **Início** (os Lançamentos
+mudaram de endereço, de `/` para `/lancamentos`). Ela responde três perguntas
+sem exigir nenhum clique:
+
+- **"O mês está dando lucro?"** — o resultado do mês aparece em destaque como
+  *"15,7% de lucro"* ou *"18,8% de prejuízo"*, com o valor em reais e a
+  variação contra o mês anterior. A margem é sobre o faturamento do mês; sem
+  faturamento, a tela diz isso em vez de inventar uma porcentagem.
+- **"E comparado com os meses anteriores?"** — gráfico de barras com entradas
+  e saídas dos últimos 6 meses, com os valores do mês atual rotulados para dar
+  a escala, os demais no hover, e um "ver os números em tabela" para quem
+  prefere ler os valores exatos.
+- **"Tenho dinheiro para pagar o que devo?"** — um medidor mostra quanto do
+  saldo em conta já está comprometido com as contas a pagar em aberto, com
+  os cards de saldo, total a pagar (destacando o que já venceu) e a sobra ou
+  falta projetada.
+
+Os números do resultado seguem a **data de vencimento** (competência), igual
+ao Relatório por Período — e não a data de pagamento. Assim um mês em que
+ainda falta dar baixa não aparece como prejuízo que não existe. Já o bloco de
+caixa usa o saldo real das contas, vindo do último OFX importado.
+
+Sobre as cores do gráfico: entradas e saídas usam **azul e laranja** em vez do
+verde e vermelho do resto do sistema. O par verde/vermelho é o caso clássico
+de confusão no daltonismo — medido, ele separa ΔE 3,5 para quem tem
+deuteranopia (o mínimo seguro é 8), ou seja, as duas barras ficariam
+praticamente iguais. Azul e laranja separam ΔE 24,7. No resto do sistema o
+verde e o vermelho continuam, porque lá sempre vêm ao lado da palavra
+("Receber"/"Pagar") — a cor não é o único sinal.
 
 ## Limitações conhecidas (fora do escopo desta revisão)
 
