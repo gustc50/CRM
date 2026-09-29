@@ -124,7 +124,35 @@ novo a senha do certificado, o SMTP e o token do Asaas. A aba
 **⚙ Configurações** tem um backup do banco sob demanda, e o sistema também faz
 cópias sozinho em `backups/`.
 
-## Rodar na sua máquina (desenvolvimento)
+## Testar na sua máquina
+
+### Windows: `testar_local.bat`
+
+Copie a pasta `erp` para o seu computador e dê duplo clique em
+**`testar_local.bat`**. Ele cria o ambiente virtual, instala as dependências,
+sobe o servidor e abre o navegador em `http://127.0.0.1:5000`. Na primeira vez
+demora 1–2 minutos por causa da instalação; depois é imediato.
+
+A janela preta precisa ficar aberta enquanto você testa — fechá-la encerra o
+servidor. Para parar, `Ctrl+C` ou feche a janela.
+
+Para começar do zero (apaga tudo que você lançou no teste), rode pelo Prompt
+de Comando:
+
+```
+testar_local.bat limpar
+```
+
+Ele pede confirmação antes de apagar, e as contas de teste são recriadas na
+subida seguinte. Para usar outra porta: `set ERP_PORT=8080` antes de chamar o
+script.
+
+O servidor escuta **só em `127.0.0.1`**, ou seja, ninguém na sua rede alcança
+o sistema durante o teste. É o servidor embutido do Flask: serve para
+experimentar, não para colocar no ar — para isso, veja
+[Como colocar no ar](#como-colocar-no-ar-servidor-hospedado).
+
+### Linux e macOS
 
 ```bash
 pip install -r requirements.txt

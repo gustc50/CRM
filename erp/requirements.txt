@@ -3,4 +3,6 @@ Flask-SQLAlchemy==3.1.1
 openpyxl==3.1.5
 requests>=2.31
 cryptography>=42.0
-gunicorn>=21.2
+# Servidor de producao (Linux). Nao roda em Windows, onde o sistema e
+# usado so para teste local, com o servidor embutido do Flask.
+gunicorn>=21.2; sys_platform != "win32"

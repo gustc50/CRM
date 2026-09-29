@@ -1,0 +1,4 @@
+# Script do Windows precisa de CRLF: com LF, o cmd engasga em blocos de
+# if/parenteses. O do Linux precisa de LF, senao o shell reclama do \r.
+*.bat text eol=crlf
+*.sh  text eol=lf
