@@ -10,6 +10,7 @@ import time
 import zipfile
 import threading
 import uuid
+from collections import defaultdict
 from datetime import date, datetime, timedelta
 
 from flask import (
@@ -30,6 +31,7 @@ import fiscal_nfse
 import fiscal_sync
 import ofx_parser
 from models import (
+    DIAS_POR_PAGAMENTO,
     PAPEL_ADMIN,
     PAPEL_CONTADOR,
     PAPEL_USUARIO,
@@ -300,6 +302,42 @@ def migrar_schema():
         if pendentes_tabela:
             with db.engine.begin() as conn:
                 for sql in pendentes_tabela:
+                    conn.execute(db.text(sql))
+
+    # Dados de cobrança e de cadastro, que passaram a ser pedidos no
+    # autocadastro. Bancos criados antes disso ficam com as colunas vazias.
+    if 'empresa' in tabelas:
+        colunas_empresa = {c['name'] for c in inspector.get_columns('empresa')}
+        comandos_empresa = {
+            'endereco': 'ALTER TABLE empresa ADD COLUMN endereco VARCHAR(200)',
+            'cep': 'ALTER TABLE empresa ADD COLUMN cep VARCHAR(10)',
+            'cidade': 'ALTER TABLE empresa ADD COLUMN cidade VARCHAR(80)',
+            'uf': 'ALTER TABLE empresa ADD COLUMN uf VARCHAR(2)',
+            'telefone': 'ALTER TABLE empresa ADD COLUMN telefone VARCHAR(20)',
+            'email': 'ALTER TABLE empresa ADD COLUMN email VARCHAR(150)',
+        }
+        pendentes_empresa = [sql for coluna, sql in comandos_empresa.items()
+                             if coluna not in colunas_empresa]
+        if pendentes_empresa:
+            with db.engine.begin() as conn:
+                for sql in pendentes_empresa:
+                    conn.execute(db.text(sql))
+
+    if 'usuario' in tabelas:
+        colunas_usuario = {c['name'] for c in inspector.get_columns('usuario')}
+        comandos_usuario = {
+            'cpf_cnpj': 'ALTER TABLE usuario ADD COLUMN cpf_cnpj VARCHAR(20)',
+            'endereco': 'ALTER TABLE usuario ADD COLUMN endereco VARCHAR(200)',
+            'cep': 'ALTER TABLE usuario ADD COLUMN cep VARCHAR(10)',
+            'cidade': 'ALTER TABLE usuario ADD COLUMN cidade VARCHAR(80)',
+            'uf': 'ALTER TABLE usuario ADD COLUMN uf VARCHAR(2)',
+            'telefone': 'ALTER TABLE usuario ADD COLUMN telefone VARCHAR(20)',
+        }
+        pendentes_usuario = [sql for coluna, sql in comandos_usuario.items()
+                             if coluna not in colunas_usuario]
+        if pendentes_usuario:
+            with db.engine.begin() as conn:
+                for sql in pendentes_usuario:
                     conn.execute(db.text(sql))
 
     if 'categoria' in tabelas:
@@ -1446,7 +1484,270 @@ def sem_acesso():
         return redirect(url_for('inicio'))
 
     return render_template('sem_acesso.html', usuario=usuario, motivo=motivo,
-                           empresa=usuario.empresa)
+                           empresa=usuario.empresa,
+                           # Só faz sentido oferecer pagamento a quem está
+                           # barrado por assinatura: quem o admin bloqueou na
+                           # mão não se desbloqueia pagando.
+                           pode_pagar=(motivo == 'assinatura' and asaas.configurado()))
+
+
+# ------------------------------------------------------------------ #
+# Autocadastro
+# ------------------------------------------------------------------ #
+
+UFS = ('AC', 'AL', 'AM', 'AP', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MG', 'MS',
+       'MT', 'PA', 'PB', 'PE', 'PI', 'PR', 'RJ', 'RN', 'RO', 'RR', 'RS', 'SC',
+       'SE', 'SP', 'TO')
+
+SENHA_MINIMA = 8
+
+# Quantas contas podem sair do mesmo endereço por hora. O cadastro é aberto a
+# qualquer um, então sem um teto um robô encheria o banco em minutos.
+LIMITE_CADASTROS_POR_HORA = 5
+_cadastros_recentes = defaultdict(list)
+_trava_cadastros = threading.Lock()
+
+
+def _pode_cadastrar(ip):
+    """Se este endereço ainda pode criar conta nesta hora."""
+    agora = time.time()
+    with _trava_cadastros:
+        recentes = [t for t in _cadastros_recentes[ip] if agora - t < 3600]
+        _cadastros_recentes[ip] = recentes
+        return len(recentes) < LIMITE_CADASTROS_POR_HORA
+
+
+def _registrar_cadastro(ip):
+    """Marca uma conta efetivamente criada.
+
+    Só conta o que virou conta: quem erra o formulário algumas vezes não é
+    o abuso de que o limite trata, e barrá-lo deixaria a pessoa travada por
+    uma hora por ter digitado o CEP errado.
+    """
+    with _trava_cadastros:
+        _cadastros_recentes[ip].append(time.time())
+
+
+def validar_autocadastro(form):
+    """Confere os dados do cadastro aberto. Retorna (dados, erro).
+
+    O papel vem de um formulário público, então é escolhido de uma lista
+    fechada: aceitar o que veio no POST deixaria qualquer visitante criar
+    uma conta de administrador.
+    """
+    papel = form.get('papel', '')
+    if papel not in (PAPEL_USUARIO, PAPEL_CONTADOR):
+        return None, 'Escolha se a conta é de cliente ou de contador.'
+
+    nome = form.get('nome', '').strip()
+    if not nome or len(nome) > 150:
+        return None, 'Informe o seu nome completo (até 150 caracteres).'
+
+    email = form.get('email', '').strip().lower()
+    if not email or len(email) > 150 or not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email):
+        return None, 'E-mail inválido.'
+    if not auth.email_disponivel(email):
+        return None, 'Já existe uma conta com esse e-mail. Tente entrar ou use outro endereço.'
+
+    senha = form.get('senha', '')
+    if len(senha) < SENHA_MINIMA:
+        return None, f'A senha precisa ter pelo menos {SENHA_MINIMA} caracteres.'
+    if senha != form.get('senha_confirmacao', ''):
+        return None, 'As duas senhas digitadas não são iguais.'
+
+    documento = re.sub(r'\D', '', form.get('cpf_cnpj', ''))
+    if len(documento) not in (11, 14):
+        return None, 'CNPJ/CPF inválido (informe 11 dígitos para CPF ou 14 para CNPJ).'
+
+    endereco = form.get('endereco', '').strip()
+    if not endereco or len(endereco) > 200:
+        return None, 'Endereço obrigatório (até 200 caracteres).'
+
+    cep = re.sub(r'\D', '', form.get('cep', ''))
+    if len(cep) != 8:
+        return None, 'CEP inválido (informe os 8 dígitos).'
+
+    cidade = form.get('cidade', '').strip()
+    if not cidade or len(cidade) > 80:
+        return None, 'Cidade obrigatória.'
+
+    uf = form.get('uf', '').strip().upper()
+    if uf not in UFS:
+        return None, 'Escolha um estado (UF) válido.'
+
+    telefone = form.get('telefone', '').strip()
+    if len(telefone) > 20:
+        return None, 'Telefone muito longo (máx. 20 caracteres).'
+
+    # O contador não assina: quem paga é o cliente que o indicar. Por isso a
+    # forma de pagamento só é lida (e cobrada) no cadastro de cliente.
+    pagamento = form.get('pagamento', 'depois')
+    if papel == PAPEL_USUARIO and pagamento not in ('agora', 'depois'):
+        return None, 'Escolha se quer pagar agora ou depois.'
+
+    empresa_nome = form.get('empresa_nome', '').strip()
+    if papel == PAPEL_USUARIO:
+        if not empresa_nome or len(empresa_nome) > 150:
+            return None, 'Informe o nome da sua empresa (até 150 caracteres).'
+
+    return {
+        'papel': papel,
+        'nome': nome,
+        'email': email,
+        'senha': senha,
+        'cpf_cnpj': documento,
+        'endereco': endereco,
+        'cep': cep,
+        'cidade': cidade,
+        'uf': uf,
+        'telefone': telefone or None,
+        'pagamento': pagamento,
+        'empresa_nome': empresa_nome,
+    }, None
+
+
+@app.route('/cadastro', methods=['GET', 'POST'])
+def cadastro():
+    """Criação de conta pelo próprio interessado, sem passar pelo admin."""
+    if auth.usuario_logado():
+        return redirect(url_for('inicio'))
+
+    if request.method == 'GET':
+        return render_template('criar_conta.html', ufs=UFS, form={},
+                               valor=asaas.valor_mensalidade(),
+                               cobranca_disponivel=asaas.configurado(),
+                               dias=DIAS_POR_PAGAMENTO)
+
+    if not _pode_cadastrar(request.remote_addr or 'desconhecido'):
+        flash('Muitas contas criadas deste endereço. Tente novamente daqui a pouco.', 'erro')
+        return redirect(url_for('cadastro'))
+
+    dados, erro = validar_autocadastro(request.form)
+    if erro:
+        flash(erro, 'erro')
+        # Devolve o que já foi digitado para a pessoa não recomeçar do zero.
+        return render_template('criar_conta.html', ufs=UFS, form=request.form,
+                               valor=asaas.valor_mensalidade(),
+                               cobranca_disponivel=asaas.configurado(),
+                               dias=DIAS_POR_PAGAMENTO), 400
+
+    origem = request.remote_addr or 'desconhecido'
+
+    if dados['papel'] == PAPEL_CONTADOR:
+        auth.criar_usuario(
+            dados['email'], dados['senha'], dados['nome'], papel=PAPEL_CONTADOR,
+            cpf_cnpj=dados['cpf_cnpj'], endereco=dados['endereco'], cep=dados['cep'],
+            cidade=dados['cidade'], uf=dados['uf'], telefone=dados['telefone'],
+        )
+        db.session.commit()
+        _registrar_cadastro(origem)
+        flash('Conta de contador criada. Entre e peça ao seu cliente para informar '
+              'o seu e-mail na aba Contabilidade dele.', 'sucesso')
+        return redirect(url_for('login'))
+
+    # Cliente: nasce com a empresa, mas sem assinatura — o acesso às telas só
+    # abre quando um pagamento for confirmado.
+    empresa = Empresa(
+        nome=dados['empresa_nome'],
+        cnpj=dados['cpf_cnpj'],
+        endereco=dados['endereco'],
+        cep=dados['cep'],
+        cidade=dados['cidade'],
+        uf=dados['uf'],
+        telefone=dados['telefone'],
+        email=dados['email'],
+    )
+    db.session.add(empresa)
+    db.session.flush()  # precisa do id para vincular o usuário
+
+    usuario = auth.criar_usuario(
+        dados['email'], dados['senha'], dados['nome'], papel=PAPEL_USUARIO,
+        empresa=empresa, cpf_cnpj=dados['cpf_cnpj'], telefone=dados['telefone'],
+    )
+    db.session.commit()
+    _registrar_cadastro(origem)
+
+    if dados['pagamento'] == 'depois' or not asaas.configurado():
+        if dados['pagamento'] == 'agora':
+            flash('A cobrança automática ainda não está disponível. Sua conta foi '
+                  'criada e o acesso abre assim que o pagamento for combinado.', 'erro')
+        else:
+            flash('Conta criada. O acesso às telas abre quando o pagamento for '
+                  'confirmado — entre e escolha "Pagar agora" quando quiser.', 'sucesso')
+        return redirect(url_for('login'))
+
+    # Pagar agora: entra já logado e segue para o link de pagamento. Mesmo
+    # assim o acesso continua barrado até o Asaas confirmar.
+    auth.entrar(usuario)
+    try:
+        _, link = asaas.criar_cobranca(empresa, data_path('.chave_secreta'),
+                                       url_base=os.environ.get('ERP_ASAAS_URL'))
+    except asaas.ErroAsaas as exc:
+        flash(f'Conta criada, mas não deu para gerar a cobrança: {exc}', 'erro')
+        return redirect(url_for('sem_acesso'))
+
+    return redirect(link)
+
+
+# ------------------------------------------------------------------ #
+# Assinatura (pagar depois, a partir da tela de bloqueio)
+# ------------------------------------------------------------------ #
+
+def _empresa_para_cobrar():
+    """Empresa do usuário logado, quando ele é um cliente barrado por assinatura."""
+    usuario = auth.usuario_logado()
+    if usuario is None or usuario.papel != PAPEL_USUARIO or usuario.empresa is None:
+        return None
+    if not usuario.ativo:  # bloqueio do admin não se resolve pagando
+        return None
+    return usuario.empresa
+
+
+@app.route('/assinatura')
+def assinatura():
+    return redirect(url_for('sem_acesso'))
+
+
+@app.route('/assinatura/cobrar', methods=['POST'])
+def assinatura_cobrar():
+    """Gera a mensalidade e manda a pessoa para a página de pagamento."""
+    empresa = _empresa_para_cobrar()
+    if empresa is None:
+        flash('Essa conta não tem assinatura para pagar.', 'erro')
+        return redirect(url_for('sem_acesso'))
+
+    try:
+        _, link = asaas.criar_cobranca(empresa, data_path('.chave_secreta'),
+                                       url_base=os.environ.get('ERP_ASAAS_URL'))
+    except asaas.ErroAsaas as exc:
+        flash(str(exc), 'erro')
+        return redirect(url_for('sem_acesso'))
+
+    return redirect(link)
+
+
+@app.route('/assinatura/conferir', methods=['POST'])
+def assinatura_conferir():
+    """"Já paguei": confere na hora, sem esperar a rodada automática."""
+    empresa = _empresa_para_cobrar()
+    if empresa is None:
+        return redirect(url_for('sem_acesso'))
+
+    try:
+        creditados = asaas.verificar_empresa(empresa, data_path('.chave_secreta'),
+                                             url_base=os.environ.get('ERP_ASAAS_URL'))
+    except asaas.ErroAsaas as exc:
+        flash(str(exc), 'erro')
+        return redirect(url_for('sem_acesso'))
+
+    if creditados:
+        flash(f'Pagamento confirmado! Acesso liberado até '
+              f'{empresa.assinatura_ate.strftime("%d/%m/%Y")}.', 'sucesso')
+        return redirect(url_for('inicio'))
+
+    flash('Ainda não encontramos o pagamento. Se você acabou de pagar, o banco '
+          'pode levar alguns minutos para avisar o Asaas.', 'erro')
+    return redirect(url_for('sem_acesso'))
 
 
 @app.route('/')
@@ -2997,6 +3298,17 @@ def admin_asaas_configurar():
             'asaas_token_cripto',
             fiscal_certificado.criptografar_senha(token, data_path('.chave_secreta')),
         )
+
+    valor = request.form.get('valor', '').strip().replace(',', '.')
+    if valor:
+        try:
+            if float(valor) < 0:
+                raise ValueError
+            fiscal_sync.sistema_set('asaas_valor', f'{float(valor):.2f}')
+        except ValueError:
+            flash('Valor da mensalidade inválido — o resto foi salvo.', 'erro')
+            return redirect(url_for('admin_assinaturas'))
+
     flash('Configuração do Asaas salva.', 'sucesso')
     return redirect(url_for('admin_assinaturas'))
 

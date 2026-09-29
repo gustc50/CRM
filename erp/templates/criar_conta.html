@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Criar conta — Gestão Financeira</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="tela-login">
+    <div class="caixa-login caixa-cadastro">
+        <div class="marca">
+            <span class="marca-icone">📒</span>
+            <span class="marca-nome">Criar<br>conta</span>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+            <ul class="flashes">
+                {% for categoria, mensagem in messages %}
+                <li class="{{ categoria }}">{{ mensagem }}</li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+        {% endwith %}
+
+        <form action="{{ url_for('cadastro') }}" method="POST" class="form-coluna" id="form-cadastro">
+
+            <h3 class="titulo-secao">1. Tipo de conta</h3>
+            <div class="escolha-cartoes">
+                <label class="cartao-escolha">
+                    <input type="radio" name="papel" value="user"
+                           {{ 'checked' if form.get('papel', 'user') == 'user' else '' }}>
+                    <span class="cartao-corpo">
+                        <strong>Sou cliente</strong>
+                        <small>Vou usar o sistema para controlar as contas da minha empresa.</small>
+                    </span>
+                </label>
+                <label class="cartao-escolha">
+                    <input type="radio" name="papel" value="contador"
+                           {{ 'checked' if form.get('papel') == 'contador' else '' }}>
+                    <span class="cartao-corpo">
+                        <strong>Sou contador</strong>
+                        <small>Vou acessar os dados dos clientes que informarem o meu e-mail.</small>
+                    </span>
+                </label>
+            </div>
+
+            <p class="aviso-cadastro so-contador">
+                O contador não paga assinatura. Depois de criar a conta, peça ao seu
+                cliente para informar o seu e-mail na aba <strong>Contabilidade</strong>
+                dele — é isso que libera o acesso, sempre somente leitura.
+            </p>
+
+            <h3 class="titulo-secao">2. Seus dados de acesso</h3>
+            <label>
+                Nome completo
+                <input type="text" name="nome" maxlength="150" required
+                       value="{{ form.get('nome', '') }}">
+            </label>
+            <label>
+                E-mail
+                <input type="email" name="email" maxlength="150" autocomplete="username" required
+                       value="{{ form.get('email', '') }}">
+            </label>
+            <label>
+                Senha <small>(mínimo de 8 caracteres)</small>
+                <input type="password" name="senha" minlength="8" autocomplete="new-password" required>
+            </label>
+            <label>
+                Repita a senha
+                <input type="password" name="senha_confirmacao" minlength="8"
+                       autocomplete="new-password" required>
+            </label>
+
+            <h3 class="titulo-secao">3. Dados de cadastro</h3>
+            <label class="so-cliente">
+                Nome da empresa
+                <input type="text" name="empresa_nome" maxlength="150"
+                       value="{{ form.get('empresa_nome', '') }}">
+            </label>
+            <label>
+                CNPJ ou CPF
+                <input type="text" name="cpf_cnpj" maxlength="20" required
+                       placeholder="00.000.000/0000-00" value="{{ form.get('cpf_cnpj', '') }}">
+            </label>
+            <label>
+                Endereço <small>(rua, número, bairro)</small>
+                <input type="text" name="endereco" maxlength="200" required
+                       value="{{ form.get('endereco', '') }}">
+            </label>
+            <div class="linha-campos">
+                <label>
+                    CEP
+                    <input type="text" name="cep" maxlength="10" required
+                           placeholder="00000-000" value="{{ form.get('cep', '') }}">
+                </label>
+                <label>
+                    Cidade
+                    <input type="text" name="cidade" maxlength="80" required
+                           value="{{ form.get('cidade', '') }}">
+                </label>
+                <label class="campo-uf">
+                    UF
+                    <select name="uf" required>
+                        <option value="">—</option>
+                        {% for sigla in ufs %}
+                        <option value="{{ sigla }}" {{ 'selected' if form.get('uf') == sigla else '' }}>{{ sigla }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+            </div>
+            <label>
+                Telefone <small>(opcional)</small>
+                <input type="text" name="telefone" maxlength="20"
+                       value="{{ form.get('telefone', '') }}">
+            </label>
+
+            <div class="so-cliente">
+                <h3 class="titulo-secao">4. Pagamento</h3>
+
+                {% if cobranca_disponivel %}
+                <div class="escolha-cartoes">
+                    <label class="cartao-escolha">
+                        <input type="radio" name="pagamento" value="agora"
+                               {{ 'checked' if form.get('pagamento', 'agora') == 'agora' else '' }}>
+                        <span class="cartao-corpo">
+                            <strong>Pagar agora — R$ {{ '%.2f'|format(valor)|replace('.', ',') }}</strong>
+                            <small>Abre a página de pagamento (pix, boleto ou cartão).
+                                   Confirmado o pagamento, o acesso vale {{ dias }} dias.</small>
+                        </span>
+                    </label>
+                    <label class="cartao-escolha">
+                        <input type="radio" name="pagamento" value="depois"
+                               {{ 'checked' if form.get('pagamento') == 'depois' else '' }}>
+                        <span class="cartao-corpo">
+                            <strong>Pagar depois</strong>
+                            <small>Cria a conta agora. As telas do sistema só abrem
+                                   depois do pagamento — você paga quando quiser, pela
+                                   própria tela de entrada.</small>
+                        </span>
+                    </label>
+                </div>
+                {% else %}
+                <input type="hidden" name="pagamento" value="depois">
+                <p class="aviso-cadastro">
+                    O pagamento on-line ainda não está configurado neste servidor.
+                    Sua conta será criada e o administrador libera o acesso depois
+                    de combinar o pagamento com você.
+                </p>
+                {% endif %}
+            </div>
+
+            <div class="form-acoes">
+                <button type="submit">Criar minha conta</button>
+            </div>
+        </form>
+
+        <p class="rodape-login">
+            Já tem conta? <a href="{{ url_for('login') }}">Entrar</a>
+        </p>
+    </div>
+
+    <script>
+        // Cliente e contador preenchem coisas diferentes: o contador não tem
+        // empresa nem assinatura, então essas partes sao escondidas.
+        (function () {
+            var form = document.getElementById('form-cadastro');
+            var papeis = form.querySelectorAll('input[name="papel"]');
+            var soCliente = form.querySelectorAll('.so-cliente');
+            var soContador = document.querySelectorAll('.so-contador');
+            var nomeEmpresa = form.querySelector('input[name="empresa_nome"]');
+
+            function aplicar() {
+                var eContador = form.querySelector('input[name="papel"]:checked').value === 'contador';
+                soCliente.forEach(function (el) { el.classList.toggle('campo-oculto', eContador); });
+                soContador.forEach(function (el) { el.classList.toggle('campo-oculto', !eContador); });
+                // Campo escondido não pode ser obrigatório, senão o navegador
+                // barra o envio apontando para algo que não está na tela.
+                if (nomeEmpresa) { nomeEmpresa.required = !eContador; }
+            }
+
+            papeis.forEach(function (radio) { radio.addEventListener('change', aplicar); });
+            aplicar();
+        })();
+    </script>
+</body>
+</html>

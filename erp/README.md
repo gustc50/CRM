@@ -681,6 +681,49 @@ o desenvolvimento: a validação de `fornecedor_id` no POST ainda usava
 - Cobrança de cliente que não está vinculado a nenhuma empresa não é
   descartada em silêncio: aparece no resumo como "sem empresa vinculada".
 
+### Autocadastro: o interessado cria a própria conta
+
+A tela de entrada tem **"Cadastre-se agora"** abaixo do login. O formulário
+pede, em quatro partes: o tipo de conta (cliente ou contador), os dados de
+acesso (nome, e-mail e senha), os dados de cadastro (nome da empresa,
+CNPJ/CPF, endereço, CEP, cidade, UF e telefone) e, por último, o pagamento.
+
+**Cliente.** Nasce com a empresa criada e a assinatura zerada. As duas opções
+de pagamento fazem coisas diferentes:
+
+- **Pagar agora** — o sistema cria o cliente no Asaas, gera a mensalidade e
+  manda a pessoa direto para a página de pagamento, onde ela escolhe entre
+  pix, boleto e cartão. O acesso **continua barrado** até o pagamento ser
+  confirmado: gerar cobrança não é receber.
+- **Pagar depois** — cria só a conta. A pessoa consegue entrar, mas cai na
+  tela de bloqueio e **nenhuma função do sistema abre**. De lá mesmo ela pode
+  clicar em *Pagar agora* quando quiser.
+
+Como a confirmação vem por consulta periódica, a tela de bloqueio tem
+**"Já paguei — conferir agora"**, que consulta só aquela empresa na hora, em
+vez de deixar a pessoa esperando a rodada de 6 em 6 horas.
+
+**Contador.** Não paga e não tem empresa: a conta já entra liberada, mas
+enquanto nenhum cliente informar o e-mail dele na aba Contabilidade, a lista
+de clientes dele fica vazia. O CPF/CNPJ e o endereço dele ficam no próprio
+usuário.
+
+O valor da mensalidade é definido pelo admin em *Assinaturas* (padrão de
+R$ 99,90). Sem token do Asaas configurado, a seção de pagamento some do
+formulário e toda conta nasce como "pagar depois", com o aviso de que o
+administrador libera depois de combinar o pagamento.
+
+Três cuidados no cadastro aberto, por ser uma porta que qualquer um
+atravessa:
+
+- **O papel vem de uma lista fechada.** Um POST com `papel=admin` é recusado
+  e não cria conta nenhuma — aceitar o que veio no formulário deixaria
+  qualquer visitante virar administrador.
+- **Limite de 5 contas por hora por endereço de origem**, contando só o que
+  virou conta: quem erra o formulário algumas vezes não fica travado.
+- **Pagar não desfaz bloqueio do administrador.** Quem o admin bloqueou na
+  mão não consegue nem gerar cobrança.
+
 ### Contas de teste
 
 Quando o banco está vazio, o sistema cria estas contas e mostra as senhas no
@@ -737,14 +780,37 @@ Três suítes contra banco limpo, todas passando:
   destravando sozinho, verificação repetida **não** duplicando o prazo,
   renovação somando a partir do vencimento, cobrança sem dono reportada,
   vencimento automático e token inválido virando recado em português.
+- **Autocadastro** (41 conferências), também contra o Asaas de mentira:
+  conta criada com senha em hash e CNPJ só com dígitos, "pagar depois"
+  deixando o acesso barrado, "pagar agora" gerando cliente e cobrança e
+  levando ao link, `papel=admin` recusado, as sete validações do formulário,
+  o limite por IP, o "já paguei" confirmando na hora e o bloqueio do admin
+  que não se resolve pagando.
+
+### Correções que apareceram nos testes desta rodada
+
+- **A consulta de pagamentos só enxergava uma situação.** O filtro da API ia
+  fixo em `status=RECEIVED`, enquanto o código tratava como pagas também as
+  cobranças `CONFIRMED` (cartão aprovado e ainda não repassado) e
+  `RECEIVED_IN_CASH`. Quem pagasse no cartão ficaria sem acesso. Agora a
+  consulta percorre as três situações — o teste anterior não pegou isso
+  porque o Asaas de mentira devolvia tudo, ignorando o filtro.
+- **A tela de bloqueio não mostrava recado nenhum**: faltava o bloco de
+  mensagens, então avisos como "ainda não encontramos o pagamento" sumiam em
+  silêncio.
+- **O limite por IP contava tentativas recusadas**, o que trancava por uma
+  hora quem apenas errasse o formulário cinco vezes.
 
 ## Limitações conhecidas (fora do escopo desta revisão)
 
 - Banco de dados SQLite, com um worker só. Aguenta bem dezenas de empresas;
   para muito mais que isso, migre para PostgreSQL antes de aumentar os
   workers.
-- Não há autocadastro: quem cria empresa e usuário é o admin, pelo painel.
 - Não há recuperação de senha por e-mail — quem redefine é o admin.
+- O cadastro não confirma o e-mail nem valida o dígito verificador do
+  CNPJ/CPF: confere só o formato e o tamanho.
+- O limite de cadastros é por endereço de origem e fica na memória do
+  processo, então reiniciar o servidor zera a contagem.
 - A cobrança é conferida por consulta periódica (6 em 6 horas). Com webhook o
   crédito seria imediato, mas exigiria domínio e HTTPS publicados.
 - A sincronização de notas é disparada por botão (ou ao abrir a aba). Para

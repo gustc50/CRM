@@ -25,6 +25,15 @@ class Empresa(db.Model):
     cnpj = db.Column(db.String(20), nullable=True)
     criada_em = db.Column(db.DateTime, nullable=False, default=dt.datetime.now)
 
+    # Endereço de cobrança, preenchido no autocadastro. O CEP fica separado
+    # porque o Asaas exige o dele para emitir boleto.
+    endereco = db.Column(db.String(200), nullable=True)
+    cep = db.Column(db.String(10), nullable=True)
+    cidade = db.Column(db.String(80), nullable=True)
+    uf = db.Column(db.String(2), nullable=True)
+    telefone = db.Column(db.String(20), nullable=True)
+    email = db.Column(db.String(150), nullable=True)
+
     # Assinatura: o acesso vale enquanto hoje <= assinatura_ate
     assinatura_ate = db.Column(db.Date, nullable=True)
     # Identificador do cliente no Asaas, para casar os pagamentos recebidos
@@ -64,6 +73,17 @@ class Usuario(db.Model):
 
     criado_em = db.Column(db.DateTime, nullable=False, default=dt.datetime.now)
     ultimo_acesso = db.Column(db.DateTime, nullable=True)
+
+    # Dados da pessoa, preenchidos no autocadastro. Interessam sobretudo ao
+    # contador: ele não tem empresa, então é aqui que ficam documento e
+    # endereço dele. Para o cliente, esses dados ficam na Empresa, que é
+    # quem paga a assinatura.
+    cpf_cnpj = db.Column(db.String(20), nullable=True)
+    endereco = db.Column(db.String(200), nullable=True)
+    cep = db.Column(db.String(10), nullable=True)
+    cidade = db.Column(db.String(80), nullable=True)
+    uf = db.Column(db.String(2), nullable=True)
+    telefone = db.Column(db.String(20), nullable=True)
 
     # Só o papel 'user' tem empresa; admin e contador não têm dados próprios
     empresa_id = db.Column(db.Integer, db.ForeignKey('empresa.id'), nullable=True)

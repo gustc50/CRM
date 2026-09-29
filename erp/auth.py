@@ -28,7 +28,11 @@ from models import PAPEL_ADMIN, PAPEL_CONTADOR, PAPEL_USUARIO, Empresa, Usuario,
 CHAVE_SESSAO = 'usuario_id'
 
 # Rotas que podem ser abertas sem estar logado
-ROTAS_LIVRES = {'login', 'logout', 'static', 'sem_acesso'}
+ROTAS_LIVRES = {'login', 'logout', 'static', 'sem_acesso', 'cadastro'}
+
+# Rotas que quem está barrado ainda alcança. São as da própria assinatura:
+# barrar quem quer pagar deixaria a conta presa sem saída.
+ROTAS_DO_BLOQUEIO = {'assinatura', 'assinatura_cobrar', 'assinatura_conferir'}
 
 
 def carregar_chave_secreta(caminho):
@@ -154,7 +158,7 @@ def registrar(app, caminho_chave):
             return redirect(url_for('login', proximo=request.full_path))
 
         motivo = motivo_de_bloqueio(usuario)
-        if motivo:
+        if motivo and request.endpoint not in ROTAS_DO_BLOQUEIO:
             return redirect(url_for('sem_acesso', motivo=motivo))
 
         return None
@@ -223,14 +227,25 @@ def sair():
     session.clear()
 
 
-def criar_usuario(email, senha, nome, papel=PAPEL_USUARIO, empresa=None):
-    """Cria uma conta já com a senha em hash (a senha em claro nunca é gravada)."""
+def criar_usuario(email, senha, nome, papel=PAPEL_USUARIO, empresa=None, **dados_pessoais):
+    """Cria uma conta já com a senha em hash (a senha em claro nunca é gravada).
+
+    `dados_pessoais` aceita cpf_cnpj, endereco, cep, cidade, uf e telefone —
+    preenchidos pelo autocadastro, sobretudo no do contador, que não tem
+    empresa onde guardá-los.
+    """
+    permitidos = ('cpf_cnpj', 'endereco', 'cep', 'cidade', 'uf', 'telefone')
     usuario = Usuario(
         email=email.strip().lower(),
         senha_hash=hash_senha(senha),
         nome=nome,
         papel=papel,
         empresa_id=empresa.id if empresa else None,
+        **{c: v for c, v in dados_pessoais.items() if c in permitidos},
     )
     db.session.add(usuario)
     return usuario
+
+
+def email_disponivel(email):
+    return Usuario.query.filter_by(email=(email or '').strip().lower()).first() is None

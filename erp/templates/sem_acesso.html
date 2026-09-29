@@ -13,17 +13,44 @@
             <span class="marca-nome">Acesso<br>bloqueado</span>
         </div>
 
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+            <ul class="flashes">
+                {% for categoria, mensagem in messages %}
+                <li class="{{ categoria }}">{{ mensagem }}</li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+        {% endwith %}
+
         {% if motivo == 'assinatura' %}
         <p>
             Olá, {{ usuario.nome }}. O acesso da empresa
-            <strong>{{ empresa.nome if empresa else '' }}</strong> está suspenso porque a
-            assinatura venceu
-            {% if empresa and empresa.assinatura_ate %}em {{ empresa.assinatura_ate.strftime('%d/%m/%Y') }}{% endif %}.
+            <strong>{{ empresa.nome if empresa else '' }}</strong>
+            {% if empresa and empresa.assinatura_ate %}
+            está suspenso porque a assinatura venceu em
+            {{ empresa.assinatura_ate.strftime('%d/%m/%Y') }}.
+            {% else %}
+            ainda não foi liberado, porque nenhum pagamento foi confirmado até agora.
+            {% endif %}
         </p>
         <p>
             Assim que o pagamento for confirmado, o acesso volta sozinho por mais 30 dias —
             pode levar alguns minutos até o sistema conferir.
         </p>
+
+        {% if pode_pagar %}
+        <form action="{{ url_for('assinatura_cobrar') }}" method="POST" class="form-coluna">
+            <div class="form-acoes">
+                <button type="submit">Pagar agora</button>
+            </div>
+        </form>
+        <form action="{{ url_for('assinatura_conferir') }}" method="POST" class="form-coluna">
+            <div class="form-acoes">
+                <button type="submit" class="btn-secundario">Já paguei — conferir agora</button>
+            </div>
+        </form>
+        {% endif %}
         {% elif motivo == 'bloqueado' %}
         <p>
             Olá, {{ usuario.nome }}. Sua conta foi bloqueada pelo administrador do sistema.

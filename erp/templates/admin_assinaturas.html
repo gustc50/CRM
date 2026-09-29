@@ -40,6 +40,10 @@
         <input type="password" name="token" autocomplete="new-password"
                placeholder="{{ '••••••••' if asaas.token_salvo else 'cole aqui o token do Asaas' }}">
     </label>
+    <label>
+        Mensalidade (R$) <small>(cobrada de quem se cadastra pelo site)</small>
+        <input type="number" name="valor" step="0.01" min="0" value="{{ '%.2f'|format(asaas.valor) }}">
+    </label>
     <div class="form-acoes">
         <button type="submit">Salvar</button>
     </div>
