@@ -1,0 +1,36 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2>Histórico da equipe</h2>
+
+<p class="aviso-cadastro">
+    Registro do que mexeu em dinheiro ou em acesso: baixas, exclusões,
+    importação de extrato, manifestação de nota e mudanças na equipe.
+    Consultar e navegar não entra aqui — senão a lista vira ruído.
+    Mostrando os 200 mais recentes.
+</p>
+
+<div class="table-scroll">
+<table>
+    <thead>
+        <tr><th>Quando</th><th>Quem</th><th>O quê</th><th>Detalhe</th></tr>
+    </thead>
+    <tbody>
+        {% for r in registros %}
+        <tr>
+            <td>{{ r.quando.strftime('%d/%m/%Y %H:%M') }}</td>
+            <td>{{ r.usuario.nome if r.usuario else '—' }}</td>
+            <td>{{ rotulos.get(r.acao, r.acao) }}</td>
+            <td><small>{{ r.detalhe or '—' }}</small></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4">Nada registrado ainda.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
+<div class="form-acoes">
+    <a href="{{ url_for('equipe') }}" class="btn-acao btn-cancelar">Voltar para a equipe</a>
+</div>
+{% endblock %}

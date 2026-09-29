@@ -27,6 +27,9 @@ from models import PAPEL_ADMIN, PAPEL_CONTADOR, PAPEL_USUARIO, Empresa, Usuario,
 
 CHAVE_SESSAO = 'usuario_id'
 
+# Tamanho mínimo da senha, em qualquer lugar que ela seja definida
+SENHA_MINIMA = 8
+
 # Rotas que podem ser abertas sem estar logado
 ROTAS_LIVRES = {'login', 'logout', 'static', 'sem_acesso', 'cadastro'}
 
@@ -203,16 +206,61 @@ def bloquear_escrita_do_contador(app):
 
 
 def autenticar(email, senha):
-    """Confere as credenciais. Retorna (usuario, erro)."""
+    """Confere as credenciais. Retorna (usuario, erro).
+
+    Depois de alguns erros seguidos a conta fica trancada por um tempo — é o
+    que impede alguém de ficar testando senha atrás de senha numa tela que
+    está aberta na internet.
+    """
     email = (email or '').strip().lower()
     usuario = Usuario.query.filter_by(email=email).first()
+
+    if usuario is not None and usuario.em_castigo:
+        return None, (
+            f'Conta temporariamente bloqueada por tentativas de senha erradas. '
+            f'Tente de novo em {usuario.minutos_de_castigo} minuto(s).'
+        )
 
     # Mensagem igual para e-mail inexistente e senha errada: dizer qual dos dois
     # falhou entrega para um estranho quais e-mails existem no sistema.
     if usuario is None or not senha_confere(usuario, senha or ''):
+        if usuario is not None:
+            trancou = usuario.errou_a_senha()
+            db.session.commit()
+            if trancou:
+                return None, (
+                    f'Senha errada demais vezes. A conta ficou bloqueada por '
+                    f'{usuario.minutos_de_castigo} minuto(s).'
+                )
         return None, 'E-mail ou senha incorretos.'
 
+    if usuario.tentativas_erradas or usuario.bloqueado_ate:
+        usuario.acertou_a_senha()
+        db.session.commit()
+
     return usuario, None
+
+
+def trocar_senha(usuario, senha_atual, senha_nova, senha_confirmacao):
+    """Troca a senha conferindo a atual. Retorna (ok, erro)."""
+    if not senha_confere(usuario, senha_atual or ''):
+        return False, 'A senha atual está errada.'
+    ok, erro = senha_aceitavel(senha_nova, senha_confirmacao)
+    if not ok:
+        return False, erro
+    usuario.senha_hash = hash_senha(senha_nova)
+    usuario.acertou_a_senha()
+    db.session.commit()
+    return True, None
+
+
+def senha_aceitavel(senha, confirmacao=None):
+    """Regras mínimas da senha, num lugar só. Retorna (ok, erro)."""
+    if len(senha or '') < SENHA_MINIMA:
+        return False, f'A senha precisa ter pelo menos {SENHA_MINIMA} caracteres.'
+    if confirmacao is not None and senha != confirmacao:
+        return False, 'As duas senhas digitadas não são iguais.'
+    return True, None
 
 
 def entrar(usuario):
@@ -227,21 +275,23 @@ def sair():
     session.clear()
 
 
-def criar_usuario(email, senha, nome, papel=PAPEL_USUARIO, empresa=None, **dados_pessoais):
+def criar_usuario(email, senha, nome, papel=PAPEL_USUARIO, empresa=None, cargo=None,
+                  **dados_pessoais):
     """Cria uma conta já com a senha em hash (a senha em claro nunca é gravada).
 
     `dados_pessoais` aceita cpf_cnpj, endereco, cep, cidade, uf e telefone —
     preenchidos pelo autocadastro, sobretudo no do contador, que não tem
     empresa onde guardá-los.
     """
-    permitidos = ('cpf_cnpj', 'endereco', 'cep', 'cidade', 'uf', 'telefone')
+    permitidos = ('cpf_cnpj', 'endereco', 'cep', 'cidade', 'uf', 'telefone', 'cargo')
     usuario = Usuario(
         email=email.strip().lower(),
         senha_hash=hash_senha(senha),
         nome=nome,
         papel=papel,
         empresa_id=empresa.id if empresa else None,
-        **{c: v for c, v in dados_pessoais.items() if c in permitidos},
+        cargo=cargo,
+        **{c: v for c, v in dados_pessoais.items() if c in permitidos and c != 'cargo'},
     )
     db.session.add(usuario)
     return usuario

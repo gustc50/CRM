@@ -34,6 +34,9 @@ INTERVALO_HORAS = 6
 # Mensalidade cobrada de cada cliente, quando o admin não configurou outra
 VALOR_PADRAO = 99.90
 
+# Quanto custa cada acesso além dos inclusos (models.USUARIOS_INCLUSOS)
+VALOR_USUARIO_PADRAO = 19.90
+
 # Prazo do boleto/pix gerado no autocadastro
 DIAS_PARA_VENCER = 3
 
@@ -50,6 +53,7 @@ def configuracao():
         'token_salvo': bool(sistema_get('asaas_token_cripto')),
         'url': URLS.get(sistema_get('asaas_ambiente', 'sandbox'), URLS['sandbox']),
         'valor': valor_mensalidade(),
+        'valor_usuario': valor_usuario_extra(),
     }
 
 
@@ -82,6 +86,25 @@ def valor_mensalidade():
         return round(float(sistema_get('asaas_valor', '') or VALOR_PADRAO), 2)
     except (TypeError, ValueError):
         return VALOR_PADRAO
+
+
+def valor_usuario_extra():
+    """Quanto custa cada acesso além dos inclusos na mensalidade."""
+    from fiscal_sync import sistema_get
+    try:
+        return round(float(sistema_get('asaas_valor_usuario', '') or VALOR_USUARIO_PADRAO), 2)
+    except (TypeError, ValueError):
+        return VALOR_USUARIO_PADRAO
+
+
+def mensalidade_da_empresa(empresa):
+    """Mensalidade + os acessos que passam do que está incluso.
+
+    O cálculo é feito na hora de cobrar, com a equipe que a empresa tem
+    naquele momento: quem tirou gente da equipe paga menos no mês seguinte,
+    sem precisar avisar ninguém.
+    """
+    return round(valor_mensalidade() + empresa.usuarios_extras * valor_usuario_extra(), 2)
 
 
 def _chamar(metodo, caminho, caminho_chave, url_base=None, **kwargs):
@@ -199,9 +222,9 @@ def criar_cobranca(empresa, caminho_chave, valor=None, url_base=None):
     resposta = _chamar('POST', '/payments', caminho_chave, url_base=url_base, json={
         'customer': cliente_id,
         'billingType': 'UNDEFINED',
-        'value': valor if valor is not None else valor_mensalidade(),
+        'value': valor if valor is not None else mensalidade_da_empresa(empresa),
         'dueDate': vencimento.isoformat(),
-        'description': f'Gestão Financeira — assinatura mensal ({DIAS_POR_PAGAMENTO} dias)',
+        'description': _descricao_cobranca(empresa),
         'externalReference': str(empresa.id),
     })
 
@@ -209,6 +232,15 @@ def criar_cobranca(empresa, caminho_chave, valor=None, url_base=None):
     if not link:
         raise ErroAsaas('O Asaas não devolveu o link de pagamento.')
     return resposta.get('id'), link
+
+
+def _descricao_cobranca(empresa):
+    """Texto que a pessoa lê no boleto/pix, já explicando os acessos extras."""
+    base = f'Gestão Financeira — assinatura mensal ({DIAS_POR_PAGAMENTO} dias)'
+    extras = empresa.usuarios_extras
+    if extras:
+        return f'{base} + {extras} acesso(s) adicional(is)'
+    return base
 
 
 def verificar_empresa(empresa, caminho_chave, url_base=None):

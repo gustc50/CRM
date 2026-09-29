@@ -46,8 +46,12 @@
             <td>{{ u.empresa.nome if u.empresa else '—' }}</td>
             <td>{{ u.ultimo_acesso.strftime('%d/%m/%Y %H:%M') if u.ultimo_acesso else 'nunca entrou' }}</td>
             <td>
-                {% if u.ativo %}<span class="badge-baixado">Ativo</span>
-                {% else %}<span class="badge-cancelada">Bloqueado</span>{% endif %}
+                {% if not u.ativo %}<span class="badge-cancelada">Bloqueado</span>
+                {% elif u.em_castigo %}
+                <span class="badge-cancelada" title="Errou a senha várias vezes">
+                    Trancado {{ u.minutos_de_castigo }} min
+                </span>
+                {% else %}<span class="badge-baixado">Ativo</span>{% endif %}
             </td>
             <td class="acoes">
                 <form action="{{ url_for('admin_usuario_bloqueio', id=u.id) }}" method="POST" class="form-inline"
@@ -56,6 +60,17 @@
                         {{ 'Bloquear' if u.ativo else 'Desbloquear' }}
                     </button>
                 </form>
+                <form action="{{ url_for('admin_usuario_senha', id=u.id) }}" method="POST" class="form-inline"
+                      onsubmit="return confirm('Definir uma nova senha para {{ u.email }}?');">
+                    <input type="password" name="senha" placeholder="Nova senha" minlength="8" required
+                           class="campo-estreito">
+                    <button type="submit" class="btn-acao btn-editar">Redefinir</button>
+                </form>
+                {% if u.em_castigo %}
+                <form action="{{ url_for('admin_usuario_destravar', id=u.id) }}" method="POST" class="form-inline">
+                    <button type="submit" class="btn-acao btn-reabrir">Destravar</button>
+                </form>
+                {% endif %}
             </td>
         </tr>
         {% endfor %}

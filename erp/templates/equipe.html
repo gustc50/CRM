@@ -1,0 +1,113 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2>Equipe</h2>
+
+<p class="aviso-cadastro">
+    Cada pessoa entra com o <strong>próprio e-mail e a própria senha</strong>, e
+    enxerga os dados desta empresa. O <strong>sócio</strong> administra a equipe;
+    o <strong>funcionário</strong> usa o sistema mas não adiciona nem remove
+    ninguém. O <strong>contador não entra aqui</strong>: ele se cadastra sozinho
+    e você libera o acesso dele informando o e-mail na aba
+    <a href="{{ url_for('contabilidade') }}">Contabilidade</a>.
+</p>
+
+<div class="dashboard">
+    <div class="card">
+        <h3>Pessoas com acesso</h3>
+        <h2>{{ pessoas|length }}</h2>
+        <small>{{ inclusos }} inclusas na mensalidade</small>
+    </div>
+    <div class="card {{ 'pagar' if empresa.usuarios_extras else '' }}">
+        <h3>Acessos adicionais</h3>
+        <h2>{{ empresa.usuarios_extras }}</h2>
+        <small>R$ {{ '%.2f'|format(valor_extra)|replace('.', ',') }} cada</small>
+    </div>
+    <div class="card">
+        <h3>Mensalidade atual</h3>
+        <h2>R$ {{ '%.2f'|format(mensalidade)|replace('.', ',') }}</h2>
+        <small>cobrada na próxima renovação</small>
+    </div>
+</div>
+
+<div class="exportar">
+    <a href="{{ url_for('equipe_historico') }}" class="btn-acao btn-exportar">
+        🕘 Ver histórico de quem fez o quê
+    </a>
+</div>
+
+<div class="table-scroll">
+<table>
+    <thead>
+        <tr><th>Nome</th><th>E-mail</th><th>Cargo</th><th>Último acesso</th><th>Ação</th></tr>
+    </thead>
+    <tbody>
+        {% for p in pessoas %}
+        <tr>
+            <td>{{ p.nome }}{% if p.id == eu.id %} <small>(você)</small>{% endif %}</td>
+            <td>{{ p.email }}</td>
+            <td>{{ rotulo_cargo.get(p.cargo, '—') }}</td>
+            <td>{{ p.ultimo_acesso.strftime('%d/%m/%Y %H:%M') if p.ultimo_acesso else 'nunca entrou' }}</td>
+            <td class="acoes">
+                {% if sou_socio and p.id != eu.id %}
+                <form action="{{ url_for('equipe_remover', id=p.id) }}" method="POST" class="form-inline"
+                      onsubmit="return confirm('Tirar o acesso de {{ p.email }}? Os lançamentos que essa pessoa criou continuam no sistema.');">
+                    <button type="submit" class="btn-acao btn-excluir">Tirar acesso</button>
+                </form>
+                {% else %}
+                <small>—</small>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
+{% if sou_socio %}
+<h3 class="titulo-secao">Adicionar pessoa</h3>
+
+{% if empresa.vagas_livres %}
+<p class="aviso-cadastro">
+    Ainda cabem <strong>{{ empresa.vagas_livres }}</strong> pessoa(s) sem custo
+    adicional.
+</p>
+{% else %}
+<p class="aviso-cadastro">
+    As {{ inclusos }} vagas inclusas já estão ocupadas. Cada nova pessoa soma
+    <strong>R$ {{ '%.2f'|format(valor_extra)|replace('.', ',') }}</strong> na
+    mensalidade, cobrados na próxima renovação.
+</p>
+{% endif %}
+
+<form action="{{ url_for('equipe_adicionar') }}" method="POST" class="form-coluna form-config">
+    <label>
+        Nome
+        <input type="text" name="nome" maxlength="150" required>
+    </label>
+    <label>
+        E-mail <small>(será o login dela)</small>
+        <input type="email" name="email" maxlength="150" required>
+    </label>
+    <label>
+        Senha provisória <small>(mínimo de 8 caracteres; a pessoa troca depois em Minha conta)</small>
+        <input type="password" name="senha" minlength="8" autocomplete="new-password" required>
+    </label>
+    <label>
+        Cargo
+        <select name="cargo" required>
+            {% for valor, rotulo in cargos %}
+            <option value="{{ valor }}">{{ rotulo }}</option>
+            {% endfor %}
+        </select>
+    </label>
+    <div class="form-acoes">
+        <button type="submit">Adicionar à equipe</button>
+    </div>
+</form>
+{% else %}
+<p class="aviso-cadastro">
+    Só um sócio pode adicionar ou remover pessoas da equipe.
+</p>
+{% endif %}
+{% endblock %}

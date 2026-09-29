@@ -817,12 +817,136 @@ Três suítes contra banco limpo, todas passando:
   caixa, e encolhiam até o tamanho do texto porque o `form` base é uma linha
   flex. Só apareceu na captura de tela.
 
+## Décima quarta rodada: correções da virada para SaaS e equipe
+
+### Três rotinas que tinham parado de rodar
+
+Quando o sistema era um programa de mesa, a pessoa abria o executável todo dia
+e, na abertura, tudo se punha em dia. Hospedado, o servidor passa semanas
+ligado — e três tarefas continuavam presas à inicialização:
+
+| Rotina | O que acontecia |
+|---|---|
+| Lançamentos recorrentes | Aluguel e salários só eram gerados no boot ou no botão |
+| Backup do banco | Servidor de pé há um mês tinha **um** backup |
+| Sincronização de notas | Só quando alguém clicava |
+
+Agora existe uma **rotina diária**: uma thread acorda de meia em meia hora e,
+quando o dia vira, percorre empresa por empresa gerando as recorrências,
+buscando as notas de quem tem certificado e fazendo o backup. A data da última
+execução fica no banco (não na memória), então reiniciar no meio do dia não
+refaz tudo, nem deixa o dia passar em branco. Falha numa empresa não impede as
+outras, e o resultado aparece no painel do admin.
+
+### O contador não conseguia baixar nada
+
+A aba Contabilidade existe para o cliente não precisar gerar arquivo. Mas o
+único jeito de o pacote sair era o botão **Enviar ao contador**, que é POST —
+e POST é bloqueado para o contador. Ele via a lista de anexos e não tinha como
+pegá-los.
+
+Agora há **Baixar tudo (.zip)**, em GET, com a planilha, o texto e os XMLs do
+período. Serve ao cliente e ao contador. O formulário de envio por e-mail
+deixou de aparecer para o contador, já que é ação do cliente.
+
+### Senhas e freio no login
+
+- **Trocar a própria senha** em *Minha conta*, exigindo a senha atual. Vale
+  para os três papéis.
+- **O admin redefine** a senha de quem perdeu o acesso, direto na lista de
+  usuários.
+- **Quatro senhas erradas trancam a conta por 30 minutos.** O contador de
+  erros e o fim do castigo ficam no banco, então o bloqueio sobrevive a um
+  reinício do servidor; acertar a senha zera o contador. O admin enxerga quem
+  está trancado e destrava sem esperar.
+
+> Efeito colateral aceito: como o bloqueio é por conta, alguém que saiba o
+> e-mail de um usuário pode trancá-lo de propósito por 30 minutos. O admin
+> destrava na hora, e a alternativa (bloquear por IP) não protege contra
+> quem troca de rede.
+
+### E-mails automáticos
+
+O sistema ganhou uma **conta SMTP própria**, configurada pelo admin em
+*Assinaturas* e separada do SMTP de cada empresa (aquele serve para o cliente
+mandar documentos ao contador dele). Com ela o serviço manda:
+
+- **boas-vindas** a quem acabou de criar conta;
+- **pagamento confirmado**, quando o acesso é liberado;
+- **aviso de vencimento**, 3 dias antes;
+- **aviso de bloqueio**, quando a assinatura vence;
+- **resumo diário para o admin**, com quem está vencendo.
+
+Cada empresa recebe um aviso por vencimento, não um por dia. Sem SMTP
+configurado, nada é enviado e o resto funciona igual — cobrar e liberar acesso
+não depende de o e-mail ter saído.
+
+### Equipe: até 3 pessoas inclusas
+
+Uma empresa deixou de ser uma pessoa só. Na aba **Equipe**, o sócio cadastra
+quem mais vai usar o sistema, cada um com **e-mail e senha próprios**:
+
+- **Sócio** administra a equipe (adiciona, remove) e usa o sistema.
+- **Funcionário** usa o sistema, mas não convida nem remove ninguém.
+- **Contador não entra aqui** — ele tem cadastro próprio e é liberado pelo
+  e-mail informado na aba Contabilidade, sempre somente leitura. Escolher
+  "contador" como cargo é recusado.
+
+**Três acessos estão inclusos na mensalidade.** A partir do quarto, cada
+pessoa soma um valor por cabeça (padrão R$ 19,90, definido pelo admin), e a
+tela avisa isso antes e depois de adicionar. A cobrança é calculada na hora de
+gerar a mensalidade, com a equipe que a empresa tem naquele momento — quem
+tira gente paga menos no mês seguinte, sem precisar avisar ninguém. A empresa
+nunca fica sem sócio, e ninguém remove a si mesmo.
+
+### Primeiros passos e categorias prontas
+
+Empresa nova nascia com tudo vazio. Agora vem com **oito categorias** já
+criadas (Vendas, Aluguel, Salários, Impostos…) e a tela Início mostra um
+quadro de **primeiros passos** que some sozinho quando tudo estiver feito.
+
+### Histórico de quem fez o quê
+
+Com mais de uma pessoa na mesma empresa, passou a importar quem deu baixa em
+qual conta. O sistema registra o que mexe em dinheiro ou em acesso — baixas,
+exclusões, importação de OFX, manifestação de NF-e, download do pacote,
+entradas e saídas da equipe, trocas de senha — e a lista fica em
+*Equipe → Histórico*. Consultar e navegar não entram, senão viraria ruído.
+
+### Outros
+
+- **Aviso de certificado A1 vencendo**, 30 dias antes e depois de vencido —
+  sem ele, a busca de notas parava sem ninguém ligar uma coisa à outra.
+- **Páginas 404, 403 e 500 amigáveis**, com o botão de suporte. Registro de
+  outra empresa cai na mesma página de 404, sem revelar que existe.
+- **Correção de responsividade em todas as telas internas**: no celular, o
+  conteúdo crescia até a largura da tabela e empurrava a página inteira para o
+  lado. Era um defeito antigo, que apareceu ao medir a largura das telas
+  novas.
+
+### Como foi testado
+
+Suíte nova com 65 conferências, mais as quatro anteriores, todas em banco
+limpo: bloqueio do login (inclusive a senha certa barrada durante o castigo),
+troca e redefinição de senha, equipe com as três vagas e a cobrança do quarto
+acesso, funcionário barrado de administrar, remoção de usuário de outra
+empresa devolvendo 404, rotina diária, download do pacote pelos dois papéis,
+primeiros passos sumindo quando completos, aviso de certificado nos três
+estados e as páginas de erro. As telas foram conferidas em captura no
+computador e no celular.
+
 ## Limitações conhecidas (fora do escopo desta revisão)
 
 - Banco de dados SQLite, com um worker só. Aguenta bem dezenas de empresas;
   para muito mais que isso, migre para PostgreSQL antes de aumentar os
   workers.
-- Não há recuperação de senha por e-mail — quem redefine é o admin.
+- Não há recuperação de senha por e-mail com link: quem redefine é o admin,
+  pela lista de usuários.
+- O histórico da equipe guarda tudo, sem limpeza automática; num uso muito
+  intenso convém apagar os registros antigos de tempos em tempos.
+- A rotina diária roda no mesmo processo do servidor. Com o worker único que
+  o SQLite pede isso está certo; ao migrar para PostgreSQL e vários workers,
+  ela precisa virar um processo à parte, senão roda duplicada.
 - O cadastro não confirma o e-mail nem valida o dígito verificador do
   CNPJ/CPF: confere só o formato e o tamanho.
 - O limite de cadastros é por endereço de origem e fica na memória do

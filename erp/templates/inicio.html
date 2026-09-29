@@ -32,6 +32,47 @@
 {% block content %}
 <h2>Início <small class="subtitulo">visão geral de {{ mes_atual.rotulo }}</small></h2>
 
+{% if aviso_certificado %}
+<p class="aviso-certificado {{ 'vencido' if aviso_certificado.vencido else '' }}">
+    {% if aviso_certificado.vencido %}
+    ⚠️ Seu certificado digital <strong>venceu em
+    {{ aviso_certificado.data.strftime('%d/%m/%Y') }}</strong> — a busca
+    automática de notas fiscais parou de funcionar.
+    {% else %}
+    ⚠️ Seu certificado digital vence em
+    <strong>{{ aviso_certificado.data.strftime('%d/%m/%Y') }}</strong>
+    ({{ aviso_certificado.dias }} dia(s)). Depois disso o sistema não consegue
+    mais buscar as notas fiscais.
+    {% endif %}
+    <a href="{{ url_for('configuracoes') }}">Enviar o certificado novo</a>
+</p>
+{% endif %}
+
+{% if passos %}
+<section class="painel primeiros-passos">
+    <p class="rotulo-painel">Primeiros passos</p>
+    <p class="nota-grafico">
+        Este quadro some sozinho quando tudo estiver pronto. Os itens opcionais
+        podem ficar para depois.
+    </p>
+    <ul class="lista-passos">
+        {% for passo in passos %}
+        <li class="{{ 'passo-feito' if passo.feito else '' }}">
+            <span class="passo-marca">{{ '✓' if passo.feito else '○' }}</span>
+            <span class="passo-corpo">
+                {% if passo.feito %}
+                <strong>{{ passo.titulo }}</strong>
+                {% else %}
+                <a href="{{ passo.url }}"><strong>{{ passo.titulo }}</strong></a>
+                <small>{{ passo.texto }}</small>
+                {% endif %}
+            </span>
+        </li>
+        {% endfor %}
+    </ul>
+</section>
+{% endif %}
+
 <!-- Resultado do mês: o número que a tela lidera -->
 <section class="painel destaque-resultado">
     <div>

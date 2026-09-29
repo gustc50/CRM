@@ -1,0 +1,49 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2>Minha conta</h2>
+
+<div class="dashboard">
+    <div class="card">
+        <h3>Nome</h3>
+        <h2 class="valor-texto">{{ usuario.nome }}</h2>
+    </div>
+    <div class="card">
+        <h3>E-mail de acesso</h3>
+        <h2 class="valor-texto">{{ usuario.email }}</h2>
+    </div>
+    <div class="card">
+        <h3>Função</h3>
+        <h2 class="valor-texto">
+            {% if usuario.eh_admin %}Administrador do sistema
+            {% elif usuario.eh_contador %}Contador
+            {% else %}{{ cargos.get(usuario.cargo, 'Cliente') }}{% endif %}
+        </h2>
+    </div>
+</div>
+
+<h3 class="titulo-secao">Trocar a senha</h3>
+<p class="aviso-cadastro">
+    Não existe recuperação por e-mail: se você esquecer a senha, quem redefine
+    é o administrador do sistema. Guarde-a em lugar seguro.
+</p>
+
+<form action="{{ url_for('minha_conta') }}" method="POST" class="form-coluna form-config">
+    <label>
+        Senha atual
+        <input type="password" name="senha_atual" autocomplete="current-password" required>
+    </label>
+    <label>
+        Nova senha <small>(mínimo de 8 caracteres)</small>
+        <input type="password" name="senha_nova" minlength="8" autocomplete="new-password" required>
+    </label>
+    <label>
+        Repita a nova senha
+        <input type="password" name="senha_confirmacao" minlength="8"
+               autocomplete="new-password" required>
+    </label>
+    <div class="form-acoes">
+        <button type="submit">Salvar nova senha</button>
+    </div>
+</form>
+{% endblock %}

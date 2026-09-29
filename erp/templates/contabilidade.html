@@ -51,6 +51,8 @@
         <input type="date" name="fim" value="{{ fim.isoformat() }}">
     </label>
     <button type="submit">Ver o que será enviado</button>
+    <a href="{{ url_for('contabilidade_baixar', inicio=inicio.isoformat(), fim=fim.isoformat()) }}"
+       class="btn-acao btn-exportar">⬇ Baixar tudo (.zip)</a>
 </form>
 
 <div class="dashboard">
@@ -93,6 +95,13 @@
 </table>
 </div>
 
+{% if somente_leitura() %}
+<p class="aviso-cadastro">
+    Você está como contador, em modo somente leitura: use
+    <strong>Baixar tudo (.zip)</strong> acima para levar os documentos do
+    período. O envio por e-mail é feito pelo próprio cliente.
+</p>
+{% else %}
 <h3 class="titulo-secao">Envio</h3>
 <form action="{{ url_for('contabilidade_enviar') }}" method="POST" class="form-coluna form-config"
       onsubmit="return confirm('Enviar os documentos de {{ inicio.strftime('%d/%m/%Y') }} a {{ fim.strftime('%d/%m/%Y') }} por e-mail?');">
@@ -113,4 +122,5 @@
         <button type="submit" {{ 'disabled' if not smtp_ok else '' }}>Enviar ao contador</button>
     </div>
 </form>
+{% endif %}
 {% endblock %}

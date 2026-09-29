@@ -182,7 +182,15 @@ body {
 
 @media (max-width: 860px) {
     body { padding: 12px; }
-    .app { flex-direction: column; }
+    .app {
+        flex-direction: column;
+        /* Empilhado, o `flex-start` herdado fazia cada bloco crescer até a
+           largura do seu conteúdo — e uma tabela larga empurrava a página
+           inteira para o lado. Esticando, a tabela rola dentro da própria
+           moldura e a página continua do tamanho da tela. */
+        align-items: stretch;
+    }
+    .conteudo { width: 100%; max-width: 100%; }
     .lateral {
         width: auto;
         align-self: stretch;
@@ -903,3 +911,57 @@ input[type="file"] {
 @media (max-width: 460px) {
     .acoes-lado-a-lado { flex-direction: column; }
 }
+
+/* ---- Primeiros passos e avisos da tela Início ---- */
+
+.primeiros-passos { margin-bottom: 20px; }
+.lista-passos {
+    list-style: none;
+    margin: 10px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.lista-passos li {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+}
+.passo-marca {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    background: #e7f1ff;
+    color: #0056b3;
+}
+.passo-feito .passo-marca { background: #d1e7dd; color: #0f5132; }
+.passo-feito .passo-corpo strong { color: #8a8a86; font-weight: normal; }
+.passo-corpo { display: flex; flex-direction: column; gap: 2px; }
+.passo-corpo a { color: #0056b3; text-decoration: none; }
+.passo-corpo a:hover { text-decoration: underline; }
+.passo-corpo small { color: #555; font-size: 12px; }
+
+.aviso-certificado {
+    background: #fff3cd;
+    border: 1px solid #ffe69c;
+    color: #664d03;
+    padding: 10px 15px;
+    border-radius: 4px;
+    margin-bottom: 20px;
+    font-size: 14px;
+}
+.aviso-certificado.vencido {
+    background: #f8d7da;
+    border-color: #f5c2c7;
+    color: #842029;
+}
+.aviso-certificado a { color: inherit; font-weight: bold; }
+
+.campo-estreito { max-width: 130px; }
+.valor-texto { font-size: 16px; word-break: break-word; }

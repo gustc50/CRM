@@ -7,6 +7,7 @@ import re
 import sqlite3
 import sys
 import time
+import unicodedata
 import zipfile
 import threading
 import uuid
@@ -24,6 +25,7 @@ from werkzeug.utils import secure_filename
 
 import asaas
 import auth
+import avisos
 import envio_email
 import fiscal_certificado
 import fiscal_manifestacao
@@ -32,7 +34,11 @@ import fiscal_nfse
 import fiscal_sync
 import ofx_parser
 from models import (
+    CARGO_FUNCIONARIO,
+    CARGO_SOCIO,
+    CARGOS,
     DIAS_POR_PAGAMENTO,
+    MINUTOS_DE_BLOQUEIO,
     PAPEL_ADMIN,
     PAPEL_CONTADOR,
     PAPEL_USUARIO,
@@ -46,7 +52,9 @@ from models import (
     NotaEletronica,
     NotaServico,
     Pagamento,
+    RegistroAuditoria,
     Transacao,
+    USUARIOS_INCLUSOS,
     Usuario,
     db,
 )
@@ -88,6 +96,109 @@ def buscar(model, id):
 def novo_registro(model, **dados):
     """Cria um registro já carimbado com a empresa da requisição."""
     return model(empresa_id=auth.empresa_atual_id(), **dados)
+
+
+# Categorias que já vêm prontas quando a empresa é criada, para a pessoa não
+# começar diante de uma tela vazia. São as mais comuns de qualquer negócio
+# pequeno; dá para editar e apagar à vontade depois.
+CATEGORIAS_INICIAIS = [
+    ('Vendas', 'Receber', None),
+    ('Serviços prestados', 'Receber', None),
+    ('Aluguel', 'Pagar', 'Administrativo'),
+    ('Água, luz e internet', 'Pagar', 'Administrativo'),
+    ('Salários e encargos', 'Pagar', 'Pessoal'),
+    ('Impostos', 'Pagar', 'Tributos'),
+    ('Fornecedores', 'Pagar', 'Operacional'),
+    ('Tarifas bancárias', 'Pagar', 'Financeiro'),
+]
+
+
+def criar_categorias_iniciais(empresa):
+    """Deixa a empresa nova com o básico já classificado."""
+    for nome, tipo, centro in CATEGORIAS_INICIAIS:
+        db.session.add(Categoria(empresa_id=empresa.id, nome=nome, tipo=tipo,
+                                 centro_custo=centro))
+
+
+def primeiros_passos(empresa_id):
+    """O que ainda falta a empresa configurar, para o cartão da tela Início.
+
+    Some sozinho quando tudo estiver feito: um guia que fica para sempre na
+    tela de quem já sabe usar vira estorvo.
+    """
+    if empresa_id is None:
+        return []
+
+    tem_conta = ContaBancaria.query.filter_by(empresa_id=empresa_id).first() is not None
+    tem_lancamento = Transacao.query.filter_by(empresa_id=empresa_id).first() is not None
+    tem_contraparte = (
+        Fornecedor.query.filter_by(empresa_id=empresa_id).first() is not None
+        or Cliente.query.filter_by(empresa_id=empresa_id).first() is not None
+    )
+    tem_certificado = fiscal_sync.certificado_configurado(empresa_id=empresa_id)
+    tem_contador = bool(fiscal_sync.config_get('email_contador', empresa_id=empresa_id))
+
+    passos = [
+        {'feito': tem_conta, 'titulo': 'Cadastre sua conta bancária',
+         'texto': 'Dá para importar o extrato em OFX e conciliar os lançamentos.',
+         'url': url_for('contas_listar')},
+        {'feito': tem_contraparte, 'titulo': 'Cadastre um fornecedor ou cliente',
+         'texto': 'Cada lançamento fica ligado a quem paga ou recebe.',
+         'url': url_for('fornecedores_listar')},
+        {'feito': tem_lancamento, 'titulo': 'Lance a primeira conta',
+         'texto': 'A partir daí os painéis desta tela começam a mostrar números.',
+         'url': url_for('lancamentos')},
+        {'feito': tem_certificado, 'titulo': 'Envie seu certificado digital (opcional)',
+         'texto': 'Com ele o sistema busca sozinho as NFS-e e NF-e da sua empresa.',
+         'url': url_for('configuracoes')},
+        {'feito': tem_contador, 'titulo': 'Informe o e-mail do seu contador (opcional)',
+         'texto': 'Ele passa a ver seus dados sem você precisar mandar arquivo.',
+         'url': url_for('contabilidade')},
+    ]
+    return [] if all(p['feito'] for p in passos) else passos
+
+
+# A partir de quantos dias antes do vencimento o certificado vira aviso
+DIAS_AVISO_CERTIFICADO = 30
+
+
+def _certificado_vencendo(empresa_id=None):
+    """Aviso quando o certificado A1 está perto de vencer (ou já venceu).
+
+    Vale um ano; quando expira, a busca de notas simplesmente para de
+    funcionar, e sem aviso ninguém liga uma coisa à outra.
+    """
+    validade = fiscal_sync.config_get('cert_validade', empresa_id=empresa_id)
+    if not validade:
+        return None
+    vence_em = parse_data(validade)
+    if vence_em is None:
+        return None
+
+    dias = (vence_em - date.today()).days
+    if dias > DIAS_AVISO_CERTIFICADO:
+        return None
+    return {'dias': dias, 'data': vence_em, 'vencido': dias < 0}
+
+
+def registrar_acao(acao, detalhe=None, empresa_id=None):
+    """Anota no histórico quem fez o quê.
+
+    Só para o que altera dinheiro ou acesso — navegar e consultar não entram,
+    senão o histórico vira ruído e ninguém acha o que procura. Nunca derruba
+    a operação em si: falhar ao anotar não pode desfazer o que foi feito.
+    """
+    try:
+        usuario = auth.usuario_logado()
+        db.session.add(RegistroAuditoria(
+            empresa_id=empresa_id if empresa_id is not None else auth.empresa_atual_id(),
+            usuario_id=usuario.id if usuario else None,
+            acao=acao,
+            detalhe=(detalhe or '')[:300] or None,
+        ))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
 
 
 TIPOS_VALIDOS = {'Receber', 'Pagar'}
@@ -327,6 +438,9 @@ def migrar_schema():
     if 'usuario' in tabelas:
         colunas_usuario = {c['name'] for c in inspector.get_columns('usuario')}
         comandos_usuario = {
+            'cargo': 'ALTER TABLE usuario ADD COLUMN cargo VARCHAR(20)',
+            'tentativas_erradas': 'ALTER TABLE usuario ADD COLUMN tentativas_erradas INTEGER NOT NULL DEFAULT 0',
+            'bloqueado_ate': 'ALTER TABLE usuario ADD COLUMN bloqueado_ate DATETIME',
             'cpf_cnpj': 'ALTER TABLE usuario ADD COLUMN cpf_cnpj VARCHAR(20)',
             'endereco': 'ALTER TABLE usuario ADD COLUMN endereco VARCHAR(200)',
             'cep': 'ALTER TABLE usuario ADD COLUMN cep VARCHAR(10)',
@@ -340,6 +454,14 @@ def migrar_schema():
             with db.engine.begin() as conn:
                 for sql in pendentes_usuario:
                     conn.execute(db.text(sql))
+
+        # Quem já era cliente antes do cargo existir vira sócio: é a conta que
+        # abriu a empresa, e sem isso ninguém poderia administrar os usuários.
+        with db.engine.begin() as conn:
+            conn.execute(db.text(
+                "UPDATE usuario SET cargo = :socio "
+                "WHERE papel = :papel AND (cargo IS NULL OR cargo = '')"
+            ), {'socio': CARGO_SOCIO, 'papel': PAPEL_USUARIO})
 
     if 'categoria' in tabelas:
         colunas_categoria = {c['name'] for c in inspector.get_columns('categoria')}
@@ -586,9 +708,15 @@ MENU_LATERAL = [
      'ativo_em': ('contas_listar', 'contas_editar', 'contas_movimentacoes')},
     {'icone': '📨', 'rotulo': 'Contabilidade', 'endpoint': 'contabilidade',
      'ativo_em': ('contabilidade',)},
+    {'icone': '👤', 'rotulo': 'Equipe', 'endpoint': 'equipe',
+     'ativo_em': ('equipe',)},
     {'icone': '⚙️', 'rotulo': 'Configurações', 'endpoint': 'configuracoes',
      'ativo_em': ('configuracoes',)},
 ]
+
+# Todo mundo, seja qual for o papel, precisa poder trocar a própria senha.
+ITEM_MINHA_CONTA = {'icone': '🔑', 'rotulo': 'Minha conta', 'endpoint': 'minha_conta',
+                    'ativo_em': ('minha_conta',)}
 
 MENU_ADMIN = [
     {'icone': '📊', 'rotulo': 'Painel', 'endpoint': 'admin_painel',
@@ -617,15 +745,17 @@ def menu_do_usuario():
     if usuario is None:
         return []
     if usuario.eh_admin:
-        return MENU_ADMIN
+        return MENU_ADMIN + [ITEM_MINHA_CONTA]
     if usuario.eh_contador:
         if auth.empresa_atual() is None:
-            return MENU_CONTADOR
+            return MENU_CONTADOR + [ITEM_MINHA_CONTA]
         # Dentro de um cliente: as telas de leitura, sem os cadastros
         somente_leitura = ('inicio', 'lancamentos', 'relatorio', 'notas_servico',
                            'notas_eletronicas', 'contabilidade')
-        return MENU_CONTADOR + [i for i in MENU_LATERAL if i['endpoint'] in somente_leitura]
-    return MENU_LATERAL
+        return (MENU_CONTADOR
+                + [i for i in MENU_LATERAL if i['endpoint'] in somente_leitura]
+                + [ITEM_MINHA_CONTA])
+    return MENU_LATERAL + [ITEM_MINHA_CONTA]
 
 
 app.jinja_env.globals['MENU_LATERAL'] = MENU_LATERAL
@@ -1193,6 +1323,7 @@ def contas_importar_ofx(id):
     db.session.commit()
 
     if novos:
+        registrar_acao('ofx_importado', f'{novos} movimentação(ões) na conta {conta.nome}')
         flash(f'{novos} movimentação(ões) importada(s) com sucesso.', 'sucesso')
     else:
         flash('Nenhuma movimentação nova encontrada neste arquivo (já haviam sido importadas).', 'sucesso')
@@ -1453,6 +1584,7 @@ def login():
 
         motivo = auth.motivo_de_bloqueio(usuario)
         auth.entrar(usuario)
+        registrar_acao('login', empresa_id=usuario.empresa_id)
         if motivo:
             return redirect(url_for('sem_acesso', motivo=motivo))
 
@@ -1471,6 +1603,172 @@ def logout():
     auth.sair()
     flash('Você saiu do sistema.', 'sucesso')
     return redirect(url_for('login'))
+
+
+@app.route('/minha-conta', methods=['GET', 'POST'])
+def minha_conta():
+    """Dados de quem está logado e troca da própria senha."""
+    usuario = auth.usuario_logado()
+
+    if request.method == 'POST':
+        ok, erro = auth.trocar_senha(
+            usuario,
+            request.form.get('senha_atual', ''),
+            request.form.get('senha_nova', ''),
+            request.form.get('senha_confirmacao', ''),
+        )
+        if not ok:
+            flash(erro, 'erro')
+        else:
+            registrar_acao('senha_trocada', 'pelo próprio usuário')
+            flash('Senha alterada.', 'sucesso')
+        return redirect(url_for('minha_conta'))
+
+    return render_template('minha_conta.html', usuario=usuario, cargos=dict(CARGOS))
+
+
+# ------------------------------------------------------------------ #
+# Equipe da empresa (sócios e funcionários)
+# ------------------------------------------------------------------ #
+
+def _socio_logado():
+    """Quem pode mexer na equipe. Funcionário usa o sistema, mas não convida."""
+    usuario = auth.usuario_logado()
+    return usuario if (usuario is not None and usuario.eh_socio) else None
+
+
+@app.route('/equipe')
+def equipe():
+    empresa = auth.empresa_atual()
+    if empresa is None or auth.somente_leitura():
+        flash('Essa área é da equipe da empresa.', 'erro')
+        return redirect(url_for('inicio'))
+
+    return render_template(
+        'equipe.html',
+        empresa=empresa,
+        pessoas=[u for u in empresa.usuarios if u.papel == PAPEL_USUARIO],
+        cargos=CARGOS,
+        rotulo_cargo=dict(CARGOS),
+        eu=auth.usuario_logado(),
+        sou_socio=_socio_logado() is not None,
+        inclusos=USUARIOS_INCLUSOS,
+        valor_extra=asaas.valor_usuario_extra(),
+        mensalidade=asaas.mensalidade_da_empresa(empresa),
+    )
+
+
+ROTULOS_AUDITORIA = {
+    'login': 'Entrou no sistema',
+    'lancamento_excluido': 'Excluiu um lançamento',
+    'baixa_dada': 'Deu baixa',
+    'baixa_desfeita': 'Reabriu um lançamento',
+    'ofx_importado': 'Importou extrato OFX',
+    'nfe_manifestada': 'Manifestou uma NF-e',
+    'pacote_baixado': 'Baixou o pacote contábil',
+    'usuario_adicionado': 'Adicionou alguém à equipe',
+    'usuario_removido': 'Tirou o acesso de alguém',
+    'senha_trocada': 'Trocou a senha',
+    'senha_redefinida': 'Redefiniu uma senha',
+    'login_destravado': 'Destravou um login',
+    'pagamento_confirmado': 'Pagamento confirmado',
+}
+
+
+@app.route('/equipe/historico')
+def equipe_historico():
+    """Quem fez o quê nesta empresa."""
+    empresa = auth.empresa_atual()
+    if empresa is None or auth.somente_leitura():
+        flash('Essa área é da equipe da empresa.', 'erro')
+        return redirect(url_for('inicio'))
+
+    registros = (RegistroAuditoria.query
+                 .filter_by(empresa_id=empresa.id)
+                 .order_by(RegistroAuditoria.quando.desc())
+                 .limit(200).all())
+    return render_template('equipe_historico.html', registros=registros,
+                           rotulos=ROTULOS_AUDITORIA)
+
+
+@app.route('/equipe/adicionar', methods=['POST'])
+def equipe_adicionar():
+    if _socio_logado() is None:
+        flash('Só um sócio pode adicionar pessoas à equipe.', 'erro')
+        return redirect(url_for('equipe'))
+
+    empresa = auth.empresa_atual()
+    nome = request.form.get('nome', '').strip()
+    email = request.form.get('email', '').strip().lower()
+    cargo = request.form.get('cargo', '')
+
+    # Contador não entra por aqui: ele tem cadastro próprio e ganha acesso
+    # pelo e-mail informado na aba Contabilidade, sempre somente leitura.
+    if cargo not in (CARGO_SOCIO, CARGO_FUNCIONARIO):
+        flash('Escolha se a pessoa é sócio ou funcionário. Contador não entra '
+              'na equipe: ele se cadastra sozinho e você o libera na aba '
+              'Contabilidade.', 'erro')
+        return redirect(url_for('equipe'))
+
+    if not nome or len(nome) > 150:
+        return _erro_equipe('Informe o nome da pessoa.')
+    if not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email) or len(email) > 150:
+        return _erro_equipe('E-mail inválido.')
+    if not auth.email_disponivel(email):
+        return _erro_equipe(f'Já existe uma conta com o e-mail {email}.')
+
+    ok, erro = auth.senha_aceitavel(request.form.get('senha', ''))
+    if not ok:
+        return _erro_equipe(erro)
+
+    era_extra = empresa.vagas_livres == 0
+    auth.criar_usuario(email, request.form['senha'], nome,
+                       papel=PAPEL_USUARIO, empresa=empresa, cargo=cargo)
+    db.session.commit()
+    registrar_acao('usuario_adicionado', f'{email} como {dict(CARGOS)[cargo]}')
+
+    if era_extra:
+        flash(f'{nome} entrou na equipe. Como passou de {USUARIOS_INCLUSOS} pessoas, '
+              f'a próxima mensalidade inclui R$ {asaas.valor_usuario_extra():.2f} '
+              f'por este acesso.'.replace('.', ','), 'sucesso')
+    else:
+        flash(f'{nome} entrou na equipe. Combine a senha provisória com a pessoa — '
+              f'ela pode trocá-la em Minha conta.', 'sucesso')
+    return redirect(url_for('equipe'))
+
+
+def _erro_equipe(mensagem):
+    flash(mensagem, 'erro')
+    return redirect(url_for('equipe'))
+
+
+@app.route('/equipe/<int:id>/remover', methods=['POST'])
+def equipe_remover(id):
+    if _socio_logado() is None:
+        flash('Só um sócio pode remover pessoas da equipe.', 'erro')
+        return redirect(url_for('equipe'))
+
+    empresa = auth.empresa_atual()
+    pessoa = Usuario.query.filter_by(id=id, empresa_id=empresa.id,
+                                     papel=PAPEL_USUARIO).first()
+    if pessoa is None:
+        abort(404)
+    if pessoa.id == auth.usuario_logado().id:
+        return _erro_equipe('Você não pode remover a si mesmo.')
+
+    # A empresa não pode ficar sem nenhum sócio: sobraria uma conta sem quem
+    # administre a equipe nem contrate de novo.
+    socios = [u for u in empresa.usuarios
+              if u.papel == PAPEL_USUARIO and u.cargo == CARGO_SOCIO]
+    if pessoa.cargo == CARGO_SOCIO and len(socios) <= 1:
+        return _erro_equipe('A empresa precisa de pelo menos um sócio.')
+
+    email = pessoa.email
+    db.session.delete(pessoa)
+    db.session.commit()
+    registrar_acao('usuario_removido', email, empresa_id=empresa.id)
+    flash(f'{email} não tem mais acesso.', 'sucesso')
+    return redirect(url_for('equipe'))
 
 
 @app.route('/sem-acesso')
@@ -1525,8 +1823,6 @@ UFS = ('AC', 'AL', 'AM', 'AP', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MG', 'MS',
        'MT', 'PA', 'PB', 'PE', 'PI', 'PR', 'RJ', 'RN', 'RO', 'RR', 'RS', 'SC',
        'SE', 'SP', 'TO')
 
-SENHA_MINIMA = 8
-
 # Quantas contas podem sair do mesmo endereço por hora. O cadastro é aberto a
 # qualquer um, então sem um teto um robô encheria o banco em minutos.
 LIMITE_CADASTROS_POR_HORA = 5
@@ -1576,10 +1872,9 @@ def validar_autocadastro(form):
         return None, 'Já existe uma conta com esse e-mail. Tente entrar ou use outro endereço.'
 
     senha = form.get('senha', '')
-    if len(senha) < SENHA_MINIMA:
-        return None, f'A senha precisa ter pelo menos {SENHA_MINIMA} caracteres.'
-    if senha != form.get('senha_confirmacao', ''):
-        return None, 'As duas senhas digitadas não são iguais.'
+    senha_ok, erro_senha = auth.senha_aceitavel(senha, form.get('senha_confirmacao', ''))
+    if not senha_ok:
+        return None, erro_senha
 
     documento = re.sub(r'\D', '', form.get('cpf_cnpj', ''))
     if len(documento) not in (11, 14):
@@ -1667,6 +1962,7 @@ def cadastro():
         )
         db.session.commit()
         _registrar_cadastro(origem)
+        avisar(contador.email, avisos.boas_vindas(contador, _endereco_do_sistema()))
         auth.entrar(contador)
         flash('Conta criada! Peça ao seu cliente para informar o seu e-mail na aba '
               'Contabilidade do sistema dele — é isso que libera o acesso.', 'sucesso')
@@ -1686,13 +1982,16 @@ def cadastro():
     )
     db.session.add(empresa)
     db.session.flush()  # precisa do id para vincular o usuário
+    criar_categorias_iniciais(empresa)
 
     usuario = auth.criar_usuario(
         dados['email'], dados['senha'], dados['nome'], papel=PAPEL_USUARIO,
-        empresa=empresa, cpf_cnpj=dados['cpf_cnpj'], telefone=dados['telefone'],
+        empresa=empresa, cargo=CARGO_SOCIO,  # quem abre a empresa é sócio dela
+        cpf_cnpj=dados['cpf_cnpj'], telefone=dados['telefone'],
     )
     db.session.commit()
     _registrar_cadastro(origem)
+    avisar(usuario.email, avisos.boas_vindas(usuario, _endereco_do_sistema()))
 
     # Entra já logado em todos os casos. Mandar de volta para o login deixava
     # a pessoa sem entender o que aconteceu com a conta que acabou de criar;
@@ -1767,6 +2066,11 @@ def assinatura_conferir():
         return redirect(url_for('sem_acesso'))
 
     if creditados:
+        registrar_acao('pagamento_confirmado',
+                       f'liberado até {empresa.assinatura_ate:%d/%m/%Y}')
+        avisar(auth.usuario_logado().email,
+               avisos.pagamento_confirmado(empresa, auth.usuario_logado(),
+                                           _endereco_do_sistema()))
         flash(f'Pagamento confirmado! Acesso liberado até '
               f'{empresa.assinatura_ate.strftime("%d/%m/%Y")}.', 'sucesso')
         return redirect(url_for('inicio'))
@@ -1831,6 +2135,8 @@ def inicio():
         comprometido=comprometido,
         atrasados=len(atrasados),
         valor_atrasado=sum(t.valor for t in atrasados),
+        passos=primeiros_passos(auth.empresa_atual_id()),
+        aviso_certificado=_certificado_vencendo(),
     )
 
 
@@ -1998,8 +2304,10 @@ def excluir(id):
     # Uma nota fiscal vinculada a este lançamento volta a permitir "Gerar Lançamento"
     da_empresa(NotaServico).filter_by(transacao_id=id).update({'transacao_id': None})
     da_empresa(NotaEletronica).filter_by(transacao_id=id).update({'transacao_id': None})
+    descricao, valor = transacao.descricao, transacao.valor
     db.session.delete(transacao)
     db.session.commit()
+    registrar_acao('lancamento_excluido', f'{descricao} — R$ {valor:.2f}')
     flash('Lançamento excluído.', 'sucesso')
     return redirect(url_for('lancamentos'))
 
@@ -2024,6 +2332,9 @@ def concluir(id):
     transacao.status = 'Concluído'
     transacao.data_pagamento = data_pagamento
     db.session.commit()
+    registrar_acao('baixa_dada',
+                   f'{transacao.descricao} — R$ {transacao.valor:.2f} '
+                   f'em {data_pagamento:%d/%m/%Y}')
     return redirect(_destino_voltar())
 
 
@@ -2033,6 +2344,7 @@ def reabrir(id):
     transacao.status = 'Pendente'
     transacao.data_pagamento = None
     db.session.commit()
+    registrar_acao('baixa_desfeita', f'{transacao.descricao} — R$ {transacao.valor:.2f}')
     return redirect(url_for('lancamentos'))
 
 
@@ -2327,6 +2639,47 @@ def _contador_com_acesso(email_contador):
     if not email:
         return None
     return Usuario.query.filter_by(email=email, papel=PAPEL_CONTADOR).first()
+
+
+@app.route('/contabilidade/baixar')
+def contabilidade_baixar():
+    """Baixa o pacote do período num .zip só.
+
+    É GET de propósito: o contador tem acesso somente de leitura e qualquer
+    POST dele é barrado. Sem esta rota ele dependeria de o cliente mandar o
+    e-mail, que é justamente o trabalho que a aba existe para evitar.
+    """
+    hoje = datetime.now().date()
+    inicio = parse_data(request.args.get('inicio', '')) or hoje.replace(day=1)
+    fim = parse_data(request.args.get('fim', '')) or hoje
+    if inicio > fim:
+        inicio, fim = fim, inicio
+
+    anexos, total_lancamentos, _ = _anexos_contabilidade(inicio, fim)
+
+    empresa = auth.empresa_atual()
+    periodo = f'{inicio.isoformat()}_a_{fim.isoformat()}'
+    # Sem acento no nome do arquivo: o cabeçalho Content-Disposition só é
+    # previsível entre navegadores quando o nome fica em ASCII.
+    sem_acento = unicodedata.normalize('NFKD', empresa.nome if empresa else 'empresa')
+    sem_acento = sem_acento.encode('ascii', 'ignore').decode()
+    identificacao = re.sub(r'\W+', '-', sem_acento).strip('-').lower() or 'empresa'
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as pacote:
+        for nome, conteudo in anexos:
+            pacote.writestr(nome, conteudo)
+    buffer.seek(0)
+
+    registrar_acao('pacote_baixado', f'período {inicio:%d/%m/%Y} a {fim:%d/%m/%Y}, '
+                                     f'{total_lancamentos} lançamento(s)')
+
+    return Response(
+        buffer.getvalue(),
+        mimetype='application/zip',
+        headers={'Content-Disposition':
+                 f'attachment; filename="contabilidade_{identificacao}_{periodo}.zip"'},
+    )
 
 
 @app.route('/contabilidade/contador', methods=['POST'])
@@ -2798,6 +3151,8 @@ def nfe_dar_ciencia(id):
     nota.manifestacao_em = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     nota.manifestacao_protocolo = resultado.get('protocolo')
     db.session.commit()
+    registrar_acao('nfe_manifestada',
+                   f'chave {nota.chave} — protocolo {resultado.get("protocolo") or "—"}')
 
     flash(
         f'Ciência registrada na SEFAZ ({resultado["cstat"]} {resultado["xmotivo"]}). '
@@ -3197,8 +3552,10 @@ def admin_empresa_nova():
         empresa.creditar_dias(int(dias))
     db.session.add(empresa)
     db.session.flush()
+    criar_categorias_iniciais(empresa)
 
-    auth.criar_usuario(email, senha, nome_usuario, papel=PAPEL_USUARIO, empresa=empresa)
+    auth.criar_usuario(email, senha, nome_usuario, papel=PAPEL_USUARIO,
+                       empresa=empresa, cargo=CARGO_SOCIO)
     db.session.commit()
 
     flash(f'Empresa "{nome}" criada com o usuário {email}.', 'sucesso')
@@ -3266,7 +3623,8 @@ def admin_usuario_novo():
             flash('Escolha a empresa deste usuário.', 'erro')
             return redirect(url_for('admin_usuarios'))
 
-    auth.criar_usuario(email, senha, nome or email, papel=papel, empresa=empresa)
+    auth.criar_usuario(email, senha, nome or email, papel=papel, empresa=empresa,
+                       cargo=CARGO_SOCIO if papel == PAPEL_USUARIO else None)
     db.session.commit()
 
     if papel == PAPEL_CONTADOR:
@@ -3297,6 +3655,102 @@ def admin_usuario_bloqueio(id):
     return redirect(url_for('admin_usuarios'))
 
 
+@app.route('/admin/smtp', methods=['POST'])
+@auth.exigir_papel(PAPEL_ADMIN)
+def admin_smtp():
+    """Conta de e-mail que o sistema usa para falar com os clientes.
+
+    É diferente do SMTP de cada empresa (aquele serve para o cliente mandar
+    documentos ao contador dele). Este aqui manda boas-vindas, confirmação de
+    pagamento e aviso de vencimento em nome do serviço.
+    """
+    provedor = request.form.get('provedor', 'outro')
+    if provedor not in envio_email.PROVEDORES_SMTP:
+        provedor = 'outro'
+    preset = envio_email.PROVEDORES_SMTP[provedor]
+
+    servidor = request.form.get('servidor', '').strip() or preset.get('servidor', '')
+    porta = request.form.get('porta', '').strip() or str(preset.get('porta', 587))
+    seguranca = request.form.get('seguranca', '') or preset.get('seguranca', 'tls')
+    if seguranca not in dict(envio_email.SEGURANCAS):
+        seguranca = 'tls'
+
+    remetente = request.form.get('remetente', '').strip()
+    if remetente and not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', remetente):
+        flash('E-mail remetente inválido.', 'erro')
+        return redirect(url_for('admin_assinaturas'))
+
+    fiscal_sync.sistema_set('sistema_smtp_provedor', provedor)
+    fiscal_sync.sistema_set('sistema_smtp_servidor', servidor)
+    fiscal_sync.sistema_set('sistema_smtp_porta', porta)
+    fiscal_sync.sistema_set('sistema_smtp_seguranca', seguranca)
+    fiscal_sync.sistema_set('sistema_smtp_usuario',
+                            request.form.get('usuario', '').strip() or remetente)
+    fiscal_sync.sistema_set('sistema_smtp_remetente', remetente)
+    fiscal_sync.sistema_set('sistema_smtp_nome',
+                            request.form.get('remetente_nome', '').strip() or avisos.NOME_DO_SERVICO)
+    fiscal_sync.sistema_set('sistema_endereco', request.form.get('endereco', '').strip())
+
+    senha = request.form.get('senha', '')
+    if senha:
+        fiscal_sync.sistema_set(
+            'sistema_smtp_senha_cripto',
+            fiscal_certificado.criptografar_senha(senha, data_path('.chave_secreta')))
+
+    flash('E-mail do sistema salvo.', 'sucesso')
+    return redirect(url_for('admin_assinaturas'))
+
+
+@app.route('/admin/smtp/testar', methods=['POST'])
+@auth.exigir_papel(PAPEL_ADMIN)
+def admin_smtp_testar():
+    """Manda um e-mail de teste para o próprio administrador."""
+    destino = auth.usuario_logado().email
+    ok, erro = avisos.enviar(
+        destino,
+        'Teste — Gestão Financeira',
+        'Se você está lendo isto, o e-mail do sistema está funcionando.',
+        data_path('.chave_secreta'))
+    flash(f'E-mail de teste enviado para {destino}.' if ok
+          else f'Não foi possível enviar: {erro}', 'sucesso' if ok else 'erro')
+    return redirect(url_for('admin_assinaturas'))
+
+
+@app.route('/admin/usuarios/<int:id>/senha', methods=['POST'])
+@auth.exigir_papel(PAPEL_ADMIN)
+def admin_usuario_senha(id):
+    """Redefine a senha de alguém que perdeu o acesso.
+
+    Não existe recuperação por e-mail: é o administrador quem define uma
+    senha nova e a combina com a pessoa por fora.
+    """
+    usuario = Usuario.query.get_or_404(id)
+    ok, erro = auth.senha_aceitavel(request.form.get('senha', ''))
+    if not ok:
+        flash(erro, 'erro')
+        return redirect(url_for('admin_usuarios'))
+
+    usuario.senha_hash = auth.hash_senha(request.form['senha'])
+    usuario.acertou_a_senha()  # some junto o bloqueio por tentativa errada
+    db.session.commit()
+    registrar_acao('senha_redefinida', f'do usuário {usuario.email}')
+    flash(f'Senha de {usuario.email} redefinida. Combine a nova senha com a pessoa.',
+          'sucesso')
+    return redirect(url_for('admin_usuarios'))
+
+
+@app.route('/admin/usuarios/<int:id>/destravar', methods=['POST'])
+@auth.exigir_papel(PAPEL_ADMIN)
+def admin_usuario_destravar(id):
+    """Libera quem se trancou sozinho errando a senha, sem esperar os 30 minutos."""
+    usuario = Usuario.query.get_or_404(id)
+    usuario.acertou_a_senha()
+    db.session.commit()
+    registrar_acao('login_destravado', f'do usuário {usuario.email}')
+    flash(f'{usuario.email} pode tentar entrar de novo.', 'sucesso')
+    return redirect(url_for('admin_usuarios'))
+
+
 @app.route('/admin/assinaturas')
 @auth.exigir_papel(PAPEL_ADMIN)
 def admin_assinaturas():
@@ -3308,6 +3762,13 @@ def admin_assinaturas():
         ultima_verificacao=fiscal_sync.sistema_get('asaas_ultima_verificacao') or '',
         ultimo_resultado=fiscal_sync.sistema_get('asaas_ultimo_resultado') or '',
         suporte_whatsapp=fiscal_sync.sistema_get('suporte_whatsapp'),
+        inclusos=USUARIOS_INCLUSOS,
+        smtp_sistema=avisos.configuracao(),
+        endereco_sistema=_endereco_do_sistema(),
+        provedores_smtp=envio_email.PROVEDORES_SMTP,
+        segurancas_smtp=envio_email.SEGURANCAS,
+        rotina_execucao=fiscal_sync.sistema_get('rotina_ultima_execucao'),
+        rotina_resultado=fiscal_sync.sistema_get('rotina_ultimo_resultado'),
     )
 
 
@@ -3334,14 +3795,17 @@ def admin_asaas_configurar():
         return redirect(url_for('admin_assinaturas'))
     fiscal_sync.sistema_set('suporte_whatsapp', whatsapp)
 
-    valor = request.form.get('valor', '').strip().replace(',', '.')
-    if valor:
+    for campo, chave, rotulo in (('valor', 'asaas_valor', 'da mensalidade'),
+                                 ('valor_usuario', 'asaas_valor_usuario', 'do acesso adicional')):
+        bruto = request.form.get(campo, '').strip().replace(',', '.')
+        if not bruto:
+            continue
         try:
-            if float(valor) < 0:
+            if float(bruto) < 0:
                 raise ValueError
-            fiscal_sync.sistema_set('asaas_valor', f'{float(valor):.2f}')
+            fiscal_sync.sistema_set(chave, f'{float(bruto):.2f}')
         except ValueError:
-            flash('Valor da mensalidade inválido — o resto foi salvo.', 'erro')
+            flash(f'Valor {rotulo} inválido — o resto foi salvo.', 'erro')
             return redirect(url_for('admin_assinaturas'))
 
     flash('Configuração do Asaas salva.', 'sucesso')
@@ -3406,6 +3870,201 @@ def verificar_pagamentos_em_segundo_plano():
                 fiscal_sync.sistema_set(
                     'asaas_ultima_verificacao', f'{datetime.now():%d/%m/%Y %H:%M}'
                 )
+
+    threading.Thread(target=rodar, daemon=True).start()
+
+
+# ------------------------------------------------------------------ #
+# Páginas de erro
+# ------------------------------------------------------------------ #
+
+def _pagina_de_erro(codigo, icone, titulo, mensagem):
+    try:
+        link = link_do_suporte(auth.usuario_logado())
+    except Exception:
+        link = None
+    return render_template('erro.html', codigo=codigo, icone=icone, titulo=titulo,
+                           mensagem=mensagem, link_suporte=link), codigo
+
+
+@app.errorhandler(404)
+def erro_404(_):
+    return _pagina_de_erro(
+        404, '🔍', 'Página não encontrada',
+        'O endereço que você abriu não existe, ou o registro que você procurava '
+        'não é da sua empresa.')
+
+
+@app.errorhandler(403)
+def erro_403(_):
+    return _pagina_de_erro(
+        403, '🚫', 'Sem permissão',
+        'Sua conta não tem acesso a essa parte do sistema.')
+
+
+@app.errorhandler(500)
+def erro_500(erro):
+    # Sessão suja derruba todas as telas seguintes, então é descartada aqui.
+    db.session.rollback()
+    app.logger.exception('Erro não tratado: %s', erro)
+    return _pagina_de_erro(
+        500, '⚠️', 'Algo deu errado',
+        'O sistema não conseguiu concluir essa operação. Seus dados não foram '
+        'perdidos.')
+
+
+# ------------------------------------------------------------------ #
+# Avisos por e-mail
+# ------------------------------------------------------------------ #
+
+def _endereco_do_sistema():
+    return fiscal_sync.sistema_get('sistema_endereco', '')
+
+
+def avisar(destinatario, assunto_e_corpo):
+    """Dispara um aviso do sistema. Falha aqui nunca interrompe o fluxo."""
+    assunto, corpo = assunto_e_corpo
+    ok, erro = avisos.enviar(destinatario, assunto, corpo, data_path('.chave_secreta'))
+    if not ok and erro and 'não configurado' not in erro:
+        app.logger.warning('Aviso não enviado para %s: %s', destinatario, erro)
+    return ok
+
+
+def avisar_assinaturas_vencendo():
+    """Avisa quem está prestes a vencer e quem acabou de vencer.
+
+    Cada empresa recebe um aviso por vencimento, não um por dia: o controle
+    fica gravado com a data da assinatura, então renovar zera o aviso e o
+    ciclo seguinte volta a avisar.
+    """
+    if not avisos.configurado():
+        return 0, [], []
+
+    hoje = date.today()
+    enviados = 0
+    a_vencer, vencidas = [], []
+    endereco = _endereco_do_sistema()
+
+    for empresa in Empresa.query.filter(Empresa.assinatura_ate.isnot(None)).all():
+        dias = avisos.dias_para_vencer(empresa, hoje)
+        socios = [u for u in empresa.usuarios
+                  if u.papel == PAPEL_USUARIO and u.ativo]
+        if not socios:
+            continue
+
+        if 0 < dias <= avisos.DIAS_DE_AVISO:
+            a_vencer.append(empresa)
+            marca = f'vencendo:{empresa.assinatura_ate.isoformat()}'
+        elif dias < 0:
+            vencidas.append(empresa)
+            marca = f'venceu:{empresa.assinatura_ate.isoformat()}'
+        else:
+            continue
+
+        # Já avisamos sobre este vencimento? Evita repetir todo dia.
+        if fiscal_sync.config_get('ultimo_aviso_assinatura', empresa_id=empresa.id) == marca:
+            continue
+
+        for pessoa in socios:
+            if dias < 0:
+                enviados += avisar(pessoa.email, avisos.venceu(empresa, pessoa, endereco))
+            else:
+                enviados += avisar(pessoa.email, avisos.vencendo(empresa, pessoa, dias, endereco))
+        fiscal_sync.config_set('ultimo_aviso_assinatura', marca, empresa_id=empresa.id)
+
+    # E o administrador recebe o panorama
+    admin = Usuario.query.filter_by(papel=PAPEL_ADMIN, ativo=True).first()
+    if admin is not None and (a_vencer or vencidas):
+        avisar(admin.email, avisos.resumo_do_admin(
+            fiscal_sync.sistema_get('rotina_ultimo_resultado', '—'),
+            a_vencer, vencidas, endereco))
+
+    return enviados, a_vencer, vencidas
+
+
+# ------------------------------------------------------------------ #
+# Rotina diária
+# ------------------------------------------------------------------ #
+
+# De quanto em quanto tempo o laço acorda para ver se o dia virou
+INTERVALO_DA_RONDA_MINUTOS = 30
+
+
+def tarefas_do_dia():
+    """Tudo que precisa acontecer uma vez por dia, empresa por empresa.
+
+    Enquanto o sistema era um programa de mesa, isso rodava toda vez que a
+    pessoa abria o executável. Hospedado, o servidor passa semanas ligado: sem
+    esta rotina, o aluguel nunca é lançado sozinho e o backup congela no dia
+    da última reinicialização.
+
+    Retorna um resumo do que foi feito, que vai para o painel do admin.
+    """
+    resumo = {'recorrentes': 0, 'notas': 0, 'empresas': 0, 'erros': []}
+
+    backup = fazer_backup()
+    resumo['backup'] = os.path.basename(backup) if backup else 'já existia'
+
+    for empresa in Empresa.query.all():
+        resumo['empresas'] += 1
+        try:
+            resumo['recorrentes'] += gerar_lancamentos_recorrentes(empresa.id)
+            resumo['notas'] += fiscal_sync.gerar_lancamentos_pendentes(empresa.id)
+        except Exception as exc:
+            # Problema numa empresa não pode impedir o dia das outras
+            db.session.rollback()
+            resumo['erros'].append(f'{empresa.nome}: {exc}')
+
+        # Notas fiscais: só para quem tem certificado, e sem travar a ronda —
+        # a sincronização já roda em thread própria e se protege de repetição.
+        try:
+            if fiscal_sync.certificado_configurado(empresa_id=empresa.id):
+                for tipo in ('nfse', 'nfe'):
+                    sync_fiscal.iniciar(tipo, empresa.id)
+        except Exception as exc:
+            resumo['erros'].append(f'{empresa.nome} (notas): {exc}')
+
+    return resumo
+
+
+def _texto_do_resumo(resumo):
+    partes = [f"{resumo['empresas']} empresa(s)",
+              f"{resumo['recorrentes']} recorrente(s)",
+              f"{resumo['notas']} lançamento(s) de nota",
+              f"backup: {resumo['backup']}"]
+    if resumo['erros']:
+        partes.append(f"{len(resumo['erros'])} erro(s)")
+    return ', '.join(partes) + '.'
+
+
+def rotina_diaria_em_segundo_plano():
+    """Acorda de meia em meia hora e, quando o dia vira, põe tudo em dia.
+
+    Guarda a data da última execução no banco, e não na memória: assim um
+    reinício no meio do dia não faz tudo rodar de novo, nem deixa o dia passar
+    em branco se o servidor tiver sido reiniciado.
+    """
+    def rodar():
+        while True:
+            try:
+                with app.app_context():
+                    hoje = date.today().isoformat()
+                    if fiscal_sync.sistema_get('rotina_ultimo_dia') != hoje:
+                        resumo = tarefas_do_dia()
+                        fiscal_sync.sistema_set('rotina_ultimo_dia', hoje)
+                        fiscal_sync.sistema_set('rotina_ultimo_resultado',
+                                                _texto_do_resumo(resumo))
+                        fiscal_sync.sistema_set('rotina_ultima_execucao',
+                                                f'{datetime.now():%d/%m/%Y %H:%M}')
+                        avisar_assinaturas_vencendo()
+            except Exception as exc:
+                # O laço não pode morrer: amanhã ele tenta de novo.
+                try:
+                    with app.app_context():
+                        fiscal_sync.sistema_set('rotina_ultimo_resultado', f'Erro: {exc}')
+                except Exception:
+                    pass
+            time.sleep(INTERVALO_DA_RONDA_MINUTOS * 60)
 
     threading.Thread(target=rodar, daemon=True).start()
 
@@ -3490,8 +4149,10 @@ def criar_contas_de_teste():
                 empresa.assinatura_ate = date.today() - timedelta(days=1)
             db.session.add(empresa)
             db.session.flush()
+            criar_categorias_iniciais(empresa)
 
-        auth.criar_usuario(email, senha, nome, papel=papel, empresa=empresa)
+        auth.criar_usuario(email, senha, nome, papel=papel, empresa=empresa,
+                           cargo=CARGO_SOCIO if papel == PAPEL_USUARIO else None)
 
     db.session.commit()
 
@@ -3540,9 +4201,11 @@ def iniciar_sistema():
             print(' TROQUE ESSAS SENHAS ANTES DE COLOCAR NO AR.')
             print('=' * 62 + '\n')
 
+        # Põe tudo em dia já na subida, sem esperar a virada do dia
         gerar_pendencias_de_todos()
 
     verificar_pagamentos_em_segundo_plano()
+    rotina_diaria_em_segundo_plano()
 
 
 iniciar_sistema()

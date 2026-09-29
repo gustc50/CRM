@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ titulo }} — Gestão Financeira</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="tela-login">
+    <div class="caixa-login">
+        <div class="marca">
+            <span class="marca-icone">{{ icone }}</span>
+            <span class="marca-nome">{{ titulo }}</span>
+        </div>
+
+        <p>{{ mensagem }}</p>
+
+        {% if codigo == 500 %}
+        <p>
+            O erro foi registrado. Se continuar acontecendo, fale com o suporte
+            contando o que você estava fazendo.
+        </p>
+        {% endif %}
+
+        <div class="form-acoes">
+            <a href="{{ url_for('inicio') }}" class="btn-acao btn-editar">Voltar ao início</a>
+        </div>
+        {% if link_suporte %}
+        <div class="form-acoes">
+            <a href="{{ link_suporte }}" target="_blank" rel="noopener"
+               class="btn-acao btn-whatsapp">💬 Falar com o suporte</a>
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>

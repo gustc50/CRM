@@ -10,8 +10,25 @@ PAPEL_USUARIO = 'user'       # cliente final, dono de uma empresa
 PAPEL_CONTADOR = 'contador'  # vê, só de leitura, os clientes que o indicaram
 PAPEIS = (PAPEL_ADMIN, PAPEL_USUARIO, PAPEL_CONTADOR)
 
+# Cargo de quem trabalha na empresa cliente. Contador não entra aqui de
+# propósito: ele tem cadastro próprio, é liberado pelo e-mail informado na aba
+# Contabilidade e enxerga os dados somente de leitura.
+CARGO_SOCIO = 'socio'
+CARGO_FUNCIONARIO = 'funcionario'
+CARGOS = (
+    (CARGO_SOCIO, 'Sócio'),
+    (CARGO_FUNCIONARIO, 'Funcionário'),
+)
+
+# Quantos usuários cabem na mensalidade antes de começar a cobrar por cabeça
+USUARIOS_INCLUSOS = 3
+
 # Cada pagamento confirmado no Asaas libera este tanto de acesso
 DIAS_POR_PAGAMENTO = 30
+
+# Login: quantos erros seguidos trancam a conta, e por quanto tempo
+TENTATIVAS_ATE_BLOQUEIO = 4
+MINUTOS_DE_BLOQUEIO = 30
 
 
 class Empresa(db.Model):
@@ -48,6 +65,21 @@ class Empresa(db.Model):
         if self.assinatura_ate is None:
             return None
         return (self.assinatura_ate - dt.date.today()).days
+
+    @property
+    def usuarios_ativos(self):
+        """Quantas pessoas da empresa têm acesso (o contador não entra: ele
+        não é da empresa e não ocupa vaga)."""
+        return len([u for u in self.usuarios if u.papel == PAPEL_USUARIO])
+
+    @property
+    def usuarios_extras(self):
+        """Quantos passam do que a mensalidade já inclui."""
+        return max(0, self.usuarios_ativos - USUARIOS_INCLUSOS)
+
+    @property
+    def vagas_livres(self):
+        return max(0, USUARIOS_INCLUSOS - self.usuarios_ativos)
 
     def creditar_dias(self, dias=DIAS_POR_PAGAMENTO, a_partir_de=None):
         """Estende a assinatura. Se ainda está em dia, soma ao prazo que resta;
@@ -89,6 +121,16 @@ class Usuario(db.Model):
     empresa_id = db.Column(db.Integer, db.ForeignKey('empresa.id'), nullable=True)
     empresa = db.relationship('Empresa', backref='usuarios')
 
+    # O que a pessoa é dentro da empresa. Só o sócio administra os usuários —
+    # funcionário usa o sistema mas não convida nem remove ninguém.
+    cargo = db.Column(db.String(20), nullable=True)
+
+    # Freio contra tentativa de adivinhar senha. Fica no banco, e não na
+    # memória, para o bloqueio sobreviver a um reinício do servidor e para o
+    # administrador conseguir enxergar e liberar.
+    tentativas_erradas = db.Column(db.Integer, nullable=False, default=0)
+    bloqueado_ate = db.Column(db.DateTime, nullable=True)
+
     @property
     def eh_admin(self):
         return self.papel == PAPEL_ADMIN
@@ -96,6 +138,34 @@ class Usuario(db.Model):
     @property
     def eh_contador(self):
         return self.papel == PAPEL_CONTADOR
+
+    @property
+    def eh_socio(self):
+        return self.papel == PAPEL_USUARIO and self.cargo == CARGO_SOCIO
+
+    @property
+    def em_castigo(self):
+        """Trancado por errar a senha várias vezes seguidas."""
+        return self.bloqueado_ate is not None and self.bloqueado_ate > dt.datetime.now()
+
+    @property
+    def minutos_de_castigo(self):
+        if not self.em_castigo:
+            return 0
+        faltam = (self.bloqueado_ate - dt.datetime.now()).total_seconds() / 60
+        return max(1, int(faltam + 0.5))
+
+    def errou_a_senha(self):
+        """Conta o erro e, no limite, tranca a conta por um tempo."""
+        self.tentativas_erradas = (self.tentativas_erradas or 0) + 1
+        if self.tentativas_erradas >= TENTATIVAS_ATE_BLOQUEIO:
+            self.bloqueado_ate = dt.datetime.now() + dt.timedelta(minutes=MINUTOS_DE_BLOQUEIO)
+            self.tentativas_erradas = 0
+        return self.em_castigo
+
+    def acertou_a_senha(self):
+        self.tentativas_erradas = 0
+        self.bloqueado_ate = None
 
 
 class Pagamento(db.Model):
@@ -246,6 +316,22 @@ class LancamentoRecorrente(db.Model):
 
     conta_bancaria_id = db.Column(db.Integer, db.ForeignKey('conta_bancaria.id'), nullable=True)
     conta_bancaria = db.relationship('ContaBancaria')
+
+
+class RegistroAuditoria(db.Model):
+    """Quem fez o quê, nas ações que mexem em dinheiro ou em acesso.
+
+    Não registra navegação nem consulta: só o que altera algo e, por isso,
+    alguém pode precisar explicar depois. Com mais de uma pessoa usando a
+    mesma empresa, é o que responde "quem deu baixa nessa conta?".
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    empresa_id = db.Column(db.Integer, db.ForeignKey('empresa.id'), nullable=True, index=True)
+    usuario_id = db.Column(db.Integer, db.ForeignKey('usuario.id'), nullable=True)
+    usuario = db.relationship('Usuario')
+    quando = db.Column(db.DateTime, nullable=False, default=dt.datetime.now, index=True)
+    acao = db.Column(db.String(40), nullable=False)
+    detalhe = db.Column(db.String(300), nullable=True)
 
 
 class ConfiguracaoSistema(db.Model):
