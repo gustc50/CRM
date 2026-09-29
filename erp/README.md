@@ -1,7 +1,12 @@
 # ERP Financeiro (Contas a Pagar/Receber)
 
-Aplicação Flask simples para controle de contas a pagar e a receber. A
-navegação fica em um menu lateral, com estas seções:
+Sistema web (SaaS) de contas a pagar e a receber, em Flask. Roda **hospedado
+em um servidor**: cada cliente entra pelo navegador com e-mail e senha, e
+enxerga apenas os dados da própria empresa. Há três papéis — administrador,
+cliente e contador — descritos na seção
+[Papéis de acesso](#papéis-de-acesso-admin-cliente-e-contador).
+
+A navegação fica em um menu lateral, com estas seções:
 
 - **Início**: tela de abertura, com o resultado do mês em destaque (a margem
   de lucro ou prejuízo e a variação contra o mês anterior), o gráfico de
@@ -35,38 +40,99 @@ navegação fica em um menu lateral, com estas seções:
 - **⚙ Configurações**: certificado digital, ambientes, controle de
   sincronização, envio de e-mail (SMTP) e backup do banco de dados.
 
-## Como gerar o executável (.exe) no Windows
+## Como colocar no ar (servidor hospedado)
 
-Pré-requisito: ter o [Python 3.10+](https://www.python.org/downloads/) instalado
-(na instalação, marque a opção **"Add python.exe to PATH"**).
+Pré-requisito: um servidor Linux com Python 3.10+.
 
-1. Copie a pasta `erp` inteira para o seu computador Windows.
-2. Dentro da pasta `erp`, dê duplo clique em **`build.bat`**.
-3. O script vai criar um ambiente virtual, instalar as dependências e gerar o
-   executável em `dist\ERP-Financeiro.exe`. Isso leva 1–2 minutos na primeira vez.
-4. Copie `dist\ERP-Financeiro.exe` para onde quiser (área de trabalho, pasta do
-   sistema, etc.) e rode com duplo clique.
+```bash
+git clone <este repositório>
+cd erp
+./iniciar.sh
+```
 
-Ao rodar o `.exe`:
-- Uma janela preta (console) abre mostrando os logs do servidor — **não feche
-  essa janela**, ela precisa ficar aberta enquanto o programa está em uso.
-  Fechá-la encerra o programa.
-- O navegador abre automaticamente em `http://127.0.0.1:5000`.
-- Um arquivo `erp.db` (banco de dados SQLite) é criado **ao lado do .exe** na
-  primeira execução. Esse arquivo guarda todos os lançamentos — faça backup
-  dele periodicamente (ex.: copiar para um pendrive/nuvem) e não delete.
-- Uma pasta `anexos` também é criada ao lado do `.exe`, guardando os
-  comprovantes/notas fiscais anexados aos lançamentos. Inclua-a no backup
-  junto com o `erp.db`.
+O `iniciar.sh` cria o ambiente virtual, instala as dependências e sobe o
+serviço com **gunicorn** em `127.0.0.1:5000`. Para mudar a porta:
+`ERP_PORT=8080 ./iniciar.sh`.
 
-## Rodar em modo desenvolvimento (sem gerar .exe)
+**Um worker, várias threads** (é o que o script faz). O banco é SQLite: mais
+de um processo gravando no mesmo arquivo dá erro de *database is locked*, e as
+rotinas de fundo (consulta ao Asaas, sincronização fiscal) rodariam
+duplicadas. Se um dia o volume exigir vários workers, o passo anterior é
+migrar para PostgreSQL.
+
+### HTTPS é obrigatório
+
+O sistema trafega senha, dados financeiros e certificado digital. Deixe o
+gunicorn escutando só em `127.0.0.1` e ponha um proxy na frente cuidando do
+certificado (exemplo com nginx + Let's Encrypt):
+
+```nginx
+server {
+    server_name seudominio.com.br;
+    location / {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        client_max_body_size 30M;   # upload de certificado e de OFX
+    }
+}
+```
+
+```bash
+sudo certbot --nginx -d seudominio.com.br
+```
+
+### Subir sozinho depois de reiniciar a máquina (systemd)
+
+`/etc/systemd/system/erp.service`:
+
+```ini
+[Unit]
+Description=ERP Financeiro
+After=network.target
+
+[Service]
+User=erp
+WorkingDirectory=/opt/erp
+ExecStart=/opt/erp/venv/bin/gunicorn --workers 1 --threads 8 --timeout 120 --bind 127.0.0.1:5000 wsgi:app
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl enable --now erp
+```
+
+### O que precisa entrar no backup
+
+Tudo fica na pasta do projeto e **não** está no Git:
+
+| Arquivo/pasta    | O que guarda                                        |
+|------------------|-----------------------------------------------------|
+| `erp.db`         | banco inteiro: lançamentos, notas, usuários, empresas |
+| `anexos/`        | comprovantes anexados aos lançamentos                |
+| `certificados/`  | certificados digitais A1, uma subpasta por empresa   |
+| `.chave_secreta` | chave que decifra senha do certificado, SMTP e Asaas |
+| `.chave_sessao`  | chave que assina os cookies de login                 |
+| `backups/`       | cópias automáticas do `erp.db`                       |
+
+Perder o `.chave_secreta` não perde os lançamentos, mas obriga a cadastrar de
+novo a senha do certificado, o SMTP e o token do Asaas. A aba
+**⚙ Configurações** tem um backup do banco sob demanda, e o sistema também faz
+cópias sozinho em `backups/`.
+
+## Rodar na sua máquina (desenvolvimento)
 
 ```bash
 pip install -r requirements.txt
 python app.py
 ```
 
-Acesse `http://127.0.0.1:5000`.
+Acesse `http://127.0.0.1:5000`. `ERP_DEBUG=1` liga o recarregamento
+automático — **nunca** use isso em servidor no ar.
 
 ## Revisão de código feita
 
@@ -273,9 +339,14 @@ portadas para dentro do ERP, integradas ao fluxo de contas a pagar/receber.
 
 ### Privacidade
 
-O certificado e a senha ficam **apenas no seu computador**. As conexões são
-feitas diretamente com os servidores oficiais do governo (Portal Nacional
-da NFS-e e SEFAZ) — nada é enviado para servidores de terceiros.
+O certificado e a senha ficam no servidor onde o sistema está hospedado, em
+uma pasta separada por empresa, e a senha é guardada criptografada. As
+conexões são feitas diretamente com os servidores oficiais do governo (Portal
+Nacional da NFS-e e SEFAZ) — nada é enviado para servidores de terceiros.
+
+> Quando o sistema ainda era um programa de mesa, isso tudo ficava só na
+> máquina do usuário. Hospedado, quem responde pela guarda do certificado é
+> quem opera o servidor.
 
 ## Sétima rodada: Categorias com tipo/centro de custo e Contas com OFX
 
@@ -520,12 +591,134 @@ praticamente iguais. Azul e laranja separam ΔE 24,7. No resto do sistema o
 verde e o vermelho continuam, porque lá sempre vêm ao lado da palavra
 ("Receber"/"Pagar") — a cor não é o único sinal.
 
+## Décima terceira rodada: virou SaaS (login, papéis e cobrança)
+
+O sistema deixou de ser um programa de mesa para um usuário e passou a ser um
+serviço hospedado, com contas separadas e assinatura mensal.
+
+### Papéis de acesso (admin, cliente e contador)
+
+| Papel        | Enxerga                                        | Pode gravar |
+|--------------|------------------------------------------------|-------------|
+| **admin**    | empresas, usuários, assinaturas e pagamentos    | sim (gestão do serviço, não dados financeiros) |
+| **user**     | só os dados da própria empresa                  | sim         |
+| **contador** | os clientes que informaram o e-mail dele        | **não** — somente leitura |
+
+- O **admin** é o dono do serviço. Cadastra empresas e usuários, bloqueia e
+  desbloqueia quem quiser, vê quantos clientes estão ativos e pagos, e
+  configura o Asaas. Ele não tem lançamentos próprios.
+- O **user** é o cliente final. Cada um pertence a uma empresa e tem um
+  contador só.
+- O **contador** não é cadastrado pelo cliente nem pelo admin: ele ganha
+  acesso quando o cliente digita o e-mail dele na aba **Contabilidade**.
+  Enquanto estiver lá, o contador abre os dados daquele cliente direto no
+  sistema, **sem o cliente precisar gerar nem enviar arquivo nenhum**. Apagar
+  o e-mail tira o acesso na hora — a permissão é conferida a cada requisição,
+  não no login. Se preferir, o envio por e-mail com XLSX/TXT/XMLs continua
+  funcionando do mesmo jeito.
+
+### Isolamento entre empresas
+
+Toda tabela de dados ganhou `empresa_id`, e as consultas passam por três
+funções (`da_empresa`, `buscar_ou_404`, `novo_registro`) em vez de irem
+direto no `Model.query`. Registro de outra empresa devolve **404**, inclusive
+quando o id é digitado na URL na mão.
+
+Isso é requisito de segurança, então tem teste automatizado: o
+`test_isolamento.py` semeia dados com marcas distintas em duas empresas,
+percorre as 12 telas com cada login exigindo que a marca alheia nunca
+apareça, tenta abrir 7 registros do vizinho pelo id e tenta excluir um
+lançamento da outra empresa. Foi assim que apareceu um vazamento real durante
+o desenvolvimento: a validação de `fornecedor_id` no POST ainda usava
+`Model.query` e aceitaria o id de outra empresa.
+
+### Assinatura e cobrança pelo Asaas
+
+- O admin cadastra o **token do Asaas** em *Assinaturas* (sandbox ou
+  produção). Ele é guardado criptografado, com a mesma chave do certificado
+  digital, e nunca mais aparece na tela.
+- Cada empresa é ligada ao cliente correspondente do Asaas pelo
+  **ID do cliente** (`cus_...`), em *Clientes*. É esse vínculo que diz de quem
+  é cada cobrança paga.
+- De 6 em 6 horas o servidor pergunta ao Asaas quais cobranças foram
+  recebidas e **credita 30 dias** para quem pagou. Dá para conferir na hora
+  pelo botão *Verificar agora*. É consulta periódica, não webhook: não
+  depende de domínio nem de porta aberta, em troca o pagamento pode levar
+  alguns minutos para refletir.
+- **Passou dos 30 dias, bloqueia sozinho.** O usuário continua entrando, mas
+  cai em uma tela explicando que a assinatura venceu.
+- Cada cobrança credita **uma vez só** (o `asaas_id` é único). Renovação soma
+  a partir do vencimento, não da data do pagamento, então quem paga adiantado
+  não perde dias.
+- Cobrança de cliente que não está vinculado a nenhuma empresa não é
+  descartada em silêncio: aparece no resumo como "sem empresa vinculada".
+
+### Contas de teste
+
+Quando o banco está vazio, o sistema cria estas contas e mostra as senhas no
+terminal:
+
+| Papel    | E-mail                  | Senha                | Situação                    |
+|----------|-------------------------|----------------------|-----------------------------|
+| admin    | `admin@teste.com.br`    | `admin-teste-123`    | —                           |
+| user     | `cliente1@teste.com.br` | `cliente-teste-123`  | assinatura em dia (30 dias) |
+| user     | `cliente2@teste.com.br` | `cliente-teste-123`  | **assinatura vencida**, para testar o bloqueio |
+| contador | `contador@teste.com.br` | `contador-teste-123` | atende a Padaria (é o e-mail indicado lá) |
+
+> ⚠️ **São senhas de teste, públicas neste README.** Antes de colocar o
+> sistema no ar, troque todas — ou apague esses usuários e crie os seus pelo
+> painel do admin. Elas só são criadas em banco vazio, então um banco já em
+> uso não ganha essas contas de volta.
+
+Para testar o fluxo completo: entre como `cliente2` e veja o bloqueio; entre
+como admin, vincule a empresa dele a um cliente do Asaas e clique em
+*Verificar agora*; volte como `cliente2` e o acesso estará liberado por 30
+dias.
+
+### Outras mudanças desta rodada
+
+- **Ajustes do sistema saíram da tabela das empresas.** Token do Asaas e
+  resultado da última verificação foram para uma tabela própria
+  (`ConfiguracaoSistema`), porque não pertencem a nenhuma empresa. Antes
+  disso, salvar a configuração do Asaas quebrava (`Configuração sem empresa
+  definida`) e a verificação automática em segundo plano teria quebrado junto,
+  já que ela roda fora de uma requisição.
+- **A chave de sessão passou a ser gravada em disco** (`.chave_sessao`). Com
+  `os.urandom` a cada boot, todo reinício do servidor deslogava todo mundo.
+- **Certificados digitais foram separados por empresa**, em
+  `certificados/<id da empresa>/`.
+- **E-mail inexistente e senha errada dão a mesma mensagem**, para a tela de
+  login não virar uma forma de descobrir quem é cliente.
+- **O `.exe` deixou de ser o produto.** `build.bat` saiu; entraram `wsgi.py` e
+  `iniciar.sh` (gunicorn), e o servidor não abre mais o navegador sozinho.
+- **Banco antigo não sobe por engano**: se o `erp.db` for da versão sem login,
+  o servidor recusa a subir com um recado explicando o que fazer, em vez de
+  misturar dados sem dono.
+
+### Como foi testado
+
+Três suítes contra banco limpo, todas passando:
+
+- **Papéis e bloqueio** (22 conferências): login, senha errada, redirecionamento
+  de quem não está logado, bloqueio por assinatura vencida, painel do admin,
+  cliente comum barrado na área do admin, bloquear/desbloquear usuário,
+  contador vendo só quem o indicou e impedido de gravar, logout.
+- **Isolamento entre empresas**: descrito acima.
+- **Fluxo de pagamento**, contra um Asaas de mentira rodando em `localhost`:
+  token salvo criptografado, cobrança paga creditando 30 dias, cliente
+  destravando sozinho, verificação repetida **não** duplicando o prazo,
+  renovação somando a partir do vencimento, cobrança sem dono reportada,
+  vencimento automático e token inválido virando recado em português.
+
 ## Limitações conhecidas (fora do escopo desta revisão)
 
-- Não há autenticação/login — qualquer pessoa com acesso à máquina/rede onde
-  o programa roda pode ver e editar os lançamentos. Adequado para uso local
-  de um único usuário; não exponha essa porta na internet.
-- Banco de dados local (SQLite), sem sincronização entre computadores.
+- Banco de dados SQLite, com um worker só. Aguenta bem dezenas de empresas;
+  para muito mais que isso, migre para PostgreSQL antes de aumentar os
+  workers.
+- Não há autocadastro: quem cria empresa e usuário é o admin, pelo painel.
+- Não há recuperação de senha por e-mail — quem redefine é o admin.
+- A cobrança é conferida por consulta periódica (6 em 6 horas). Com webhook o
+  crédito seria imediato, mas exigiria domínio e HTTPS publicados.
 - A sincronização de notas é disparada por botão (ou ao abrir a aba). Para
   uso intenso, o ideal seria uma rotina agendada de 1x por hora.
 - A manifestação do destinatário disponível é a **Ciência da Operação**, que

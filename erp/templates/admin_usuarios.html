@@ -1,0 +1,65 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2>Usuários</h2>
+
+<h3 class="titulo-secao">Criar usuário</h3>
+<p class="aviso-cadastro">
+    <strong>Cliente</strong> precisa de uma empresa e enxerga só os dados dela.
+    <strong>Contador</strong> não escolhe cliente aqui: ele passa a ver uma empresa
+    quando o próprio cliente informa este e-mail na aba Contabilidade.
+    <strong>Administrador</strong> gerencia o sistema e não tem dados financeiros.
+</p>
+<form action="{{ url_for('admin_usuario_novo') }}" method="POST">
+    <input type="text" name="nome" placeholder="Nome" maxlength="150">
+    <input type="email" name="email" placeholder="E-mail" maxlength="150" required>
+    <input type="password" name="senha" placeholder="Senha provisória (mín. 8)" minlength="8" required>
+    <select name="papel">
+        <option value="user">Cliente</option>
+        <option value="contador">Contador</option>
+        <option value="admin">Administrador</option>
+    </select>
+    <select name="empresa_id">
+        <option value="">Empresa (só para Cliente)</option>
+        {% for e in empresas %}
+        <option value="{{ e.id }}">{{ e.nome }}</option>
+        {% endfor %}
+    </select>
+    <button type="submit">Criar usuário</button>
+</form>
+
+<div class="table-scroll">
+<table>
+    <thead>
+        <tr><th>Nome</th><th>E-mail</th><th>Papel</th><th>Empresa</th><th>Último acesso</th><th>Situação</th><th>Ação</th></tr>
+    </thead>
+    <tbody>
+        {% for u in usuarios %}
+        <tr class="{{ '' if u.ativo else 'atrasado' }}">
+            <td>{{ u.nome }}</td>
+            <td>{{ u.email }}</td>
+            <td>
+                {% if u.papel == 'admin' %}Administrador
+                {% elif u.papel == 'contador' %}Contador
+                {% else %}Cliente{% endif %}
+            </td>
+            <td>{{ u.empresa.nome if u.empresa else '—' }}</td>
+            <td>{{ u.ultimo_acesso.strftime('%d/%m/%Y %H:%M') if u.ultimo_acesso else 'nunca entrou' }}</td>
+            <td>
+                {% if u.ativo %}<span class="badge-baixado">Ativo</span>
+                {% else %}<span class="badge-cancelada">Bloqueado</span>{% endif %}
+            </td>
+            <td class="acoes">
+                <form action="{{ url_for('admin_usuario_bloqueio', id=u.id) }}" method="POST" class="form-inline"
+                      onsubmit="return confirm('{{ 'Bloquear' if u.ativo else 'Desbloquear' }} {{ u.email }}?');">
+                    <button type="submit" class="btn-acao {{ 'btn-excluir' if u.ativo else 'btn-concluir' }}">
+                        {{ 'Bloquear' if u.ativo else 'Desbloquear' }}
+                    </button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endblock %}

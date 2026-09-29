@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Acesso bloqueado — Gestão Financeira</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="tela-login">
+    <div class="caixa-login">
+        <div class="marca">
+            <span class="marca-icone">🔒</span>
+            <span class="marca-nome">Acesso<br>bloqueado</span>
+        </div>
+
+        {% if motivo == 'assinatura' %}
+        <p>
+            Olá, {{ usuario.nome }}. O acesso da empresa
+            <strong>{{ empresa.nome if empresa else '' }}</strong> está suspenso porque a
+            assinatura venceu
+            {% if empresa and empresa.assinatura_ate %}em {{ empresa.assinatura_ate.strftime('%d/%m/%Y') }}{% endif %}.
+        </p>
+        <p>
+            Assim que o pagamento for confirmado, o acesso volta sozinho por mais 30 dias —
+            pode levar alguns minutos até o sistema conferir.
+        </p>
+        {% elif motivo == 'bloqueado' %}
+        <p>
+            Olá, {{ usuario.nome }}. Sua conta foi bloqueada pelo administrador do sistema.
+        </p>
+        <p>Fale com ele para entender o motivo e liberar o acesso.</p>
+        {% else %}
+        <p>
+            Olá, {{ usuario.nome }}. Sua conta ainda não está ligada a nenhuma empresa,
+            então não há dados para mostrar.
+        </p>
+        <p>O administrador do sistema precisa concluir esse cadastro.</p>
+        {% endif %}
+
+        <div class="form-acoes">
+            <a href="{{ url_for('logout') }}" class="btn-acao btn-cancelar">Sair</a>
+        </div>
+    </div>
+</body>
+</html>

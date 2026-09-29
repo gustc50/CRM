@@ -18,6 +18,71 @@ body {
     padding-top: 6px;
 }
 
+/* ---- Login e acesso bloqueado ---- */
+
+.tela-login {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 90vh;
+}
+.caixa-login {
+    background: #fff;
+    border-radius: 14px;
+    padding: 28px;
+    width: 100%;
+    max-width: 380px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.1);
+}
+.caixa-login .marca { border-bottom: 1px solid #eee; }
+.caixa-login .form-coluna {
+    max-width: none;
+    box-shadow: none;
+    padding: 0;
+    margin-bottom: 0;
+}
+.caixa-login .form-acoes button { width: 100%; }
+.caixa-login p { color: #555; font-size: 14px; line-height: 1.5; }
+.rodape-login {
+    margin: 16px 0 0;
+    font-size: 12px;
+    color: #8a8a86;
+    text-align: center;
+}
+
+/* ---- Rodapé do menu com o usuário logado ---- */
+
+.usuario-logado {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid #eee;
+    font-size: 12px;
+    color: var(--tinta-secundaria, #52514e);
+}
+.usuario-logado strong { display: block; color: #333; }
+.usuario-logado .papel {
+    display: inline-block;
+    margin-top: 4px;
+    padding: 1px 7px;
+    border-radius: 10px;
+    background: #f1f4f8;
+    font-size: 11px;
+}
+.usuario-logado a {
+    display: inline-block;
+    margin-top: 8px;
+    color: #0056b3;
+    text-decoration: none;
+}
+.aviso-vencimento {
+    margin-top: 8px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: #fff3cd;
+    color: #664d03;
+    font-size: 11px;
+}
+
 /* ---- Menu lateral ---- */
 
 .lateral {

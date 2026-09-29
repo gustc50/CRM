@@ -6,17 +6,22 @@ import os
 import re
 import sqlite3
 import sys
+import time
 import zipfile
 import threading
 import uuid
-import webbrowser
 from datetime import date, datetime, timedelta
 
-from flask import Flask, Response, flash, jsonify, redirect, render_template, request, send_from_directory, url_for
+from flask import (
+    Flask, Response, abort, flash, jsonify, redirect, render_template, request,
+    send_from_directory, session, url_for,
+)
 from openpyxl import Workbook
 from openpyxl.styles import Font
 from werkzeug.utils import secure_filename
 
+import asaas
+import auth
 import envio_email
 import fiscal_certificado
 import fiscal_manifestacao
@@ -25,17 +30,62 @@ import fiscal_nfse
 import fiscal_sync
 import ofx_parser
 from models import (
+    PAPEL_ADMIN,
+    PAPEL_CONTADOR,
+    PAPEL_USUARIO,
     Categoria,
     Cliente,
     ContaBancaria,
     ContaMovimentacao,
+    Empresa,
     Fornecedor,
     LancamentoRecorrente,
     NotaEletronica,
     NotaServico,
+    Pagamento,
     Transacao,
+    Usuario,
     db,
 )
+
+
+# ------------------------------------------------------------------ #
+# Isolamento entre clientes
+#
+# Todo dado financeiro pertence a uma empresa. Estas três funções são o
+# único caminho para chegar nesses dados: quem escrever `Model.query`
+# direto numa tela de cliente abre a porta para um cliente enxergar o
+# outro. O teste de isolamento confere isso rota a rota.
+# ------------------------------------------------------------------ #
+
+def da_empresa(model):
+    """Consulta restrita à empresa da requisição."""
+    return model.query.filter_by(empresa_id=auth.empresa_atual_id())
+
+
+def buscar_ou_404(model, id):
+    """Registro por id, mas só se for da empresa da requisição.
+
+    Substitui o `query.get_or_404`, que ignora qualquer filtro: com ele,
+    trocar o número na URL abriria o registro de outro cliente.
+    """
+    registro = da_empresa(model).filter_by(id=id).first()
+    if registro is None:
+        abort(404)
+    return registro
+
+
+def buscar(model, id):
+    """Como `buscar_ou_404`, mas devolve None em vez de erro (validações)."""
+    if id is None:
+        return None
+    return da_empresa(model).filter_by(id=id).first()
+
+
+def novo_registro(model, **dados):
+    """Cria um registro já carimbado com a empresa da requisição."""
+    return model(empresa_id=auth.empresa_atual_id(), **dados)
+
 
 TIPOS_VALIDOS = {'Receber', 'Pagar'}
 STATUS_VALIDOS = {'Pendente', 'Concluído'}
@@ -74,7 +124,7 @@ BANCOS_BRASIL = [
 ]
 BANCOS_BRASIL_MAPA = dict(BANCOS_BRASIL)
 
-HOST = '127.0.0.1'
+HOST = '0.0.0.0'  # servidor hospedado: aceita acesso de fora da máquina
 PORT = 5000
 
 
@@ -189,8 +239,15 @@ app = Flask(
 app.config['SQLALCHEMY_DATABASE_URI'] = f"sqlite:///{data_path('erp.db')}"
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # limite de 10 MB por anexo
-app.secret_key = os.urandom(24)  # suficiente para assinar as mensagens flash desta sessão
 db.init_app(app)
+
+# Sessões duram uma semana sem atividade; depois disso pede login de novo.
+app.permanent_session_lifetime = timedelta(days=7)
+
+# Liga o login: define a chave de sessão (persistida em disco, para o reinício
+# do servidor não deslogar todo mundo) e instala o porteiro das requisições.
+auth.registrar(app, data_path('.chave_sessao'))
+auth.bloquear_escrita_do_contador(app)
 
 
 @app.errorhandler(413)
@@ -319,9 +376,9 @@ def _normalizar_cnpj_cpf_existentes():
 # Se uma migração futura der errado, o estado anterior continua recuperável.
 fazer_backup()
 
-with app.app_context():
-    db.create_all()
-    migrar_schema()
+# A preparação do banco ficou no fim do arquivo (função `iniciar_sistema`):
+# ela depende de funções definidas mais abaixo, como a criação das contas de
+# teste e a geração de pendências de cada empresa.
 
 # Sincronização de documentos fiscais (NFS-e / NF-e) via certificado digital
 sync_fiscal = fiscal_sync.SyncFiscal(
@@ -335,7 +392,7 @@ def _validar_id_existente(valor, model):
     """Confirma que o id recebido do <select> corresponde a um registro real (campo obrigatório)."""
     if not valor or not valor.isdigit():
         return None
-    registro = model.query.get(int(valor))
+    registro = buscar(model, int(valor))
     return registro.id if registro else None
 
 
@@ -350,7 +407,7 @@ def _validar_id_opcional(valor, model):
         return None, True
     if not valor.isdigit():
         return None, False
-    registro = model.query.get(int(valor))
+    registro = buscar(model, int(valor))
     if not registro:
         return None, False
     return registro.id, True
@@ -362,7 +419,7 @@ def _validar_categoria_opcional(valor, tipo_esperado):
     categoria_id, ok = _validar_id_opcional(valor, Categoria)
     if not ok or categoria_id is None:
         return categoria_id, ok
-    categoria = Categoria.query.get(categoria_id)
+    categoria = buscar(Categoria, categoria_id)
     if categoria.tipo != tipo_esperado:
         return None, False
     return categoria_id, True
@@ -494,7 +551,49 @@ MENU_LATERAL = [
      'ativo_em': ('configuracoes',)},
 ]
 
+MENU_ADMIN = [
+    {'icone': '📊', 'rotulo': 'Painel', 'endpoint': 'admin_painel',
+     'ativo_em': ('admin_painel',)},
+    {'icone': '🏢', 'rotulo': 'Clientes', 'endpoint': 'admin_empresas',
+     'ativo_em': ('admin_empresas', 'admin_empresa_nova')},
+    {'icone': '👥', 'rotulo': 'Usuários', 'endpoint': 'admin_usuarios',
+     'ativo_em': ('admin_usuarios', 'admin_usuario_novo')},
+    {'icone': '💳', 'rotulo': 'Assinaturas', 'endpoint': 'admin_assinaturas',
+     'ativo_em': ('admin_assinaturas',)},
+]
+
+MENU_CONTADOR = [
+    {'icone': '🏢', 'rotulo': 'Meus clientes', 'endpoint': 'contador_clientes',
+     'ativo_em': ('contador_clientes',)},
+]
+
+
+def menu_do_usuario():
+    """Itens do menu conforme o papel de quem está logado.
+
+    O contador só ganha as abas do cliente depois de escolher um: antes disso
+    não há dado nenhum para mostrar.
+    """
+    usuario = auth.usuario_logado()
+    if usuario is None:
+        return []
+    if usuario.eh_admin:
+        return MENU_ADMIN
+    if usuario.eh_contador:
+        if auth.empresa_atual() is None:
+            return MENU_CONTADOR
+        # Dentro de um cliente: as telas de leitura, sem os cadastros
+        somente_leitura = ('inicio', 'lancamentos', 'relatorio', 'notas_servico',
+                           'notas_eletronicas', 'contabilidade')
+        return MENU_CONTADOR + [i for i in MENU_LATERAL if i['endpoint'] in somente_leitura]
+    return MENU_LATERAL
+
+
 app.jinja_env.globals['MENU_LATERAL'] = MENU_LATERAL
+app.jinja_env.globals['menu_do_usuario'] = menu_do_usuario
+app.jinja_env.globals['usuario_logado'] = auth.usuario_logado
+app.jinja_env.globals['empresa_atual'] = auth.empresa_atual
+app.jinja_env.globals['somente_leitura'] = auth.somente_leitura
 
 
 def validar_cadastro(form, tipo_categoria, model=None, id_atual=None):
@@ -516,7 +615,7 @@ def validar_cadastro(form, tipo_categoria, model=None, id_atual=None):
         return None, 'CNPJ/CPF inválido (informe 11 dígitos para CPF ou 14 para CNPJ).'
 
     if model is not None:
-        ja_existe = model.query.filter_by(cnpj_cpf=digitos).first()
+        ja_existe = da_empresa(model).filter_by(cnpj_cpf=digitos).first()
         if ja_existe is not None and ja_existe.id != id_atual:
             return None, (
                 f'O CNPJ/CPF {formatar_cnpj_cpf(digitos)} já está cadastrado '
@@ -618,13 +717,13 @@ def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo, coluna_
     """
 
     def _categorias():
-        return Categoria.query.filter_by(tipo=tipo_categoria).order_by(Categoria.nome).all()
+        return da_empresa(Categoria).filter_by(tipo=tipo_categoria).order_by(Categoria.nome).all()
 
     def _contas_bancarias():
-        return ContaBancaria.query.order_by(ContaBancaria.nome).all()
+        return da_empresa(ContaBancaria).order_by(ContaBancaria.nome).all()
 
     def listar():
-        registros = model.query.order_by(model.nome).all()
+        registros = da_empresa(model).order_by(model.nome).all()
 
         # Cadastros antigos podiam repetir o mesmo CNPJ/CPF escrito de formas
         # diferentes; depois da normalização eles ficam idênticos. Marcar os
@@ -651,13 +750,13 @@ def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo, coluna_
         if erro:
             flash(erro, 'erro')
         else:
-            db.session.add(model(**dados))
+            db.session.add(novo_registro(model, **dados))
             db.session.commit()
             flash(f'{nome_singular} cadastrado com sucesso.', 'sucesso')
         return redirect(url_for(f'{prefixo}_listar'))
 
     def editar(id):
-        registro = model.query.get_or_404(id)
+        registro = buscar_ou_404(model, id)
 
         if request.method == 'POST':
             dados, erro = validar_cadastro(request.form, tipo_categoria, model=model, id_atual=id)
@@ -686,9 +785,9 @@ def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo, coluna_
         )
 
     def excluir(id):
-        registro = model.query.get_or_404(id)
+        registro = buscar_ou_404(model, id)
 
-        em_uso = Transacao.query.filter(coluna_fk == id).first() is not None
+        em_uso = da_empresa(Transacao).filter(coluna_fk == id).first() is not None
         if em_uso:
             flash(
                 f'Não é possível excluir: existem lançamentos vinculados a este {nome_singular.lower()}.',
@@ -702,7 +801,7 @@ def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo, coluna_
         return redirect(url_for(f'{prefixo}_listar'))
 
     def exportar():
-        registros = model.query.order_by(model.nome).all()
+        registros = da_empresa(model).order_by(model.nome).all()
         cabecalho = ['CNPJ/CPF', 'Nome', 'Endereço', 'Telefone', 'E-mail', 'Categoria Padrão', 'Conta Padrão']
         linhas = [
             [
@@ -745,7 +844,7 @@ def validar_categoria(form):
 
 @app.route('/categorias')
 def categorias_listar():
-    registros = Categoria.query.order_by(Categoria.tipo, Categoria.nome).all()
+    registros = da_empresa(Categoria).order_by(Categoria.tipo, Categoria.nome).all()
     return render_template('categorias.html', registros=registros)
 
 
@@ -755,7 +854,7 @@ def categorias_adicionar():
     if erro:
         flash(erro, 'erro')
     else:
-        db.session.add(Categoria(**dados))
+        db.session.add(novo_registro(Categoria, **dados))
         db.session.commit()
         flash('Categoria cadastrada com sucesso.', 'sucesso')
     return redirect(url_for('categorias_listar'))
@@ -763,7 +862,7 @@ def categorias_adicionar():
 
 @app.route('/categorias/editar/<int:id>', methods=['GET', 'POST'])
 def categorias_editar(id):
-    registro = Categoria.query.get_or_404(id)
+    registro = buscar_ou_404(Categoria, id)
     if request.method == 'POST':
         dados, erro = validar_categoria(request.form)
         if erro:
@@ -780,12 +879,12 @@ def categorias_editar(id):
 
 @app.route('/categorias/excluir/<int:id>', methods=['POST'])
 def categorias_excluir(id):
-    registro = Categoria.query.get_or_404(id)
+    registro = buscar_ou_404(Categoria, id)
     em_uso = (
-        Transacao.query.filter_by(categoria_id=id).first() is not None
-        or Fornecedor.query.filter_by(categoria_id=id).first() is not None
-        or Cliente.query.filter_by(categoria_id=id).first() is not None
-        or LancamentoRecorrente.query.filter_by(categoria_id=id).first() is not None
+        da_empresa(Transacao).filter_by(categoria_id=id).first() is not None
+        or da_empresa(Fornecedor).filter_by(categoria_id=id).first() is not None
+        or da_empresa(Cliente).filter_by(categoria_id=id).first() is not None
+        or da_empresa(LancamentoRecorrente).filter_by(categoria_id=id).first() is not None
     )
     if em_uso:
         flash(
@@ -825,7 +924,7 @@ def validar_conta_bancaria(form):
 
 @app.route('/contas')
 def contas_listar():
-    registros = ContaBancaria.query.order_by(ContaBancaria.nome).all()
+    registros = da_empresa(ContaBancaria).order_by(ContaBancaria.nome).all()
     return render_template('contas.html', registros=registros)
 
 
@@ -835,7 +934,7 @@ def contas_adicionar():
     if erro:
         flash(erro, 'erro')
     else:
-        db.session.add(ContaBancaria(**dados))
+        db.session.add(novo_registro(ContaBancaria, **dados))
         db.session.commit()
         flash('Conta cadastrada com sucesso.', 'sucesso')
     return redirect(url_for('contas_listar'))
@@ -843,7 +942,7 @@ def contas_adicionar():
 
 @app.route('/contas/editar/<int:id>', methods=['GET', 'POST'])
 def contas_editar(id):
-    registro = ContaBancaria.query.get_or_404(id)
+    registro = buscar_ou_404(ContaBancaria, id)
     if request.method == 'POST':
         dados, erro = validar_conta_bancaria(request.form)
         if erro:
@@ -861,15 +960,15 @@ def contas_editar(id):
 
 @app.route('/contas/excluir/<int:id>', methods=['POST'])
 def contas_excluir(id):
-    registro = ContaBancaria.query.get_or_404(id)
+    registro = buscar_ou_404(ContaBancaria, id)
     em_uso = (
-        Transacao.query.filter_by(conta_bancaria_id=id).first() is not None
-        or LancamentoRecorrente.query.filter_by(conta_bancaria_id=id).first() is not None
+        da_empresa(Transacao).filter_by(conta_bancaria_id=id).first() is not None
+        or da_empresa(LancamentoRecorrente).filter_by(conta_bancaria_id=id).first() is not None
     )
     if em_uso:
         flash('Não é possível excluir: existem lançamentos vinculados a esta conta.', 'erro')
         return redirect(url_for('contas_listar'))
-    ContaMovimentacao.query.filter_by(conta_bancaria_id=id).delete()
+    da_empresa(ContaMovimentacao).filter_by(conta_bancaria_id=id).delete()
     db.session.delete(registro)
     db.session.commit()
     flash('Conta excluída.', 'sucesso')
@@ -886,7 +985,7 @@ def _periodo_movimentacoes(args):
 
 
 def _movimentacoes_do_periodo(conta_id, inicio, fim):
-    return ContaMovimentacao.query.filter(
+    return da_empresa(ContaMovimentacao).filter(
         ContaMovimentacao.conta_bancaria_id == conta_id,
         ContaMovimentacao.data >= inicio,
         ContaMovimentacao.data <= fim,
@@ -899,7 +998,7 @@ def _transacoes_conciliaveis(tipo):
     vinculadas = db.session.query(ContaMovimentacao.transacao_id).filter(
         ContaMovimentacao.transacao_id.isnot(None)
     )
-    return Transacao.query.filter(
+    return da_empresa(Transacao).filter(
         Transacao.tipo == tipo,
         Transacao.status == 'Pendente',
         ~Transacao.id.in_(vinculadas),
@@ -922,7 +1021,7 @@ def _sugerir_transacao(mov, candidatas):
 
 @app.route('/contas/<int:id>/movimentacoes')
 def contas_movimentacoes(id):
-    conta = ContaBancaria.query.get_or_404(id)
+    conta = buscar_ou_404(ContaBancaria, id)
     inicio, fim = _periodo_movimentacoes(request.args)
     movimentos = _movimentacoes_do_periodo(id, inicio, fim)
 
@@ -956,7 +1055,7 @@ def contas_movimentacoes(id):
 
 @app.route('/contas/<int:id>/movimentacoes/<int:mov_id>/vincular', methods=['POST'])
 def contas_movimentacoes_vincular(id, mov_id):
-    mov = ContaMovimentacao.query.filter_by(id=mov_id, conta_bancaria_id=id).first_or_404()
+    mov = da_empresa(ContaMovimentacao).filter_by(id=mov_id, conta_bancaria_id=id).first_or_404()
     destino = url_for('contas_movimentacoes', id=id, inicio=request.args.get('inicio', ''), fim=request.args.get('fim', ''))
 
     transacao_id = request.form.get('transacao_id', '')
@@ -964,7 +1063,7 @@ def contas_movimentacoes_vincular(id, mov_id):
         flash('Selecione um lançamento para vincular a esta movimentação.', 'erro')
         return redirect(destino)
 
-    transacao = Transacao.query.get(int(transacao_id))
+    transacao = da_empresa(Transacao).get(int(transacao_id))
     if not transacao:
         flash('Lançamento não encontrado.', 'erro')
         return redirect(destino)
@@ -974,7 +1073,7 @@ def contas_movimentacoes_vincular(id, mov_id):
         flash('Esse lançamento não é compatível com o tipo do movimento (crédito → Receber, débito → Pagar).', 'erro')
         return redirect(destino)
 
-    outra_movimentacao = ContaMovimentacao.query.filter(
+    outra_movimentacao = da_empresa(ContaMovimentacao).filter(
         ContaMovimentacao.transacao_id == transacao.id,
         ContaMovimentacao.id != mov.id,
     ).first()
@@ -999,7 +1098,7 @@ def contas_movimentacoes_vincular(id, mov_id):
 
 @app.route('/contas/<int:id>/movimentacoes/<int:mov_id>/desvincular', methods=['POST'])
 def contas_movimentacoes_desvincular(id, mov_id):
-    mov = ContaMovimentacao.query.filter_by(id=mov_id, conta_bancaria_id=id).first_or_404()
+    mov = da_empresa(ContaMovimentacao).filter_by(id=mov_id, conta_bancaria_id=id).first_or_404()
     mov.transacao_id = None
     db.session.commit()
     flash('Vínculo removido. O lançamento mantém o status atual — reabra-o manualmente se necessário.', 'sucesso')
@@ -1008,7 +1107,7 @@ def contas_movimentacoes_desvincular(id, mov_id):
 
 @app.route('/contas/<int:id>/importar-ofx', methods=['POST'])
 def contas_importar_ofx(id):
-    conta = ContaBancaria.query.get_or_404(id)
+    conta = buscar_ou_404(ContaBancaria, id)
     arquivo = request.files.get('ofx_arquivo')
     if not arquivo or not arquivo.filename:
         flash('Selecione um arquivo OFX para importar.', 'erro')
@@ -1039,10 +1138,11 @@ def contas_importar_ofx(id):
 
     novos = 0
     for mov in extrato.movimentos:
-        existe = ContaMovimentacao.query.filter_by(conta_bancaria_id=id, fitid=mov.fitid).first()
+        existe = da_empresa(ContaMovimentacao).filter_by(conta_bancaria_id=id, fitid=mov.fitid).first()
         if existe:
             continue
-        db.session.add(ContaMovimentacao(
+        db.session.add(novo_registro(
+            ContaMovimentacao,
             conta_bancaria_id=id,
             fitid=mov.fitid,
             data=mov.data,
@@ -1069,8 +1169,8 @@ def contas_importar_ofx(id):
 
 @app.route('/contas/<int:id>/limpar-movimentacoes', methods=['POST'])
 def contas_limpar_movimentacoes(id):
-    ContaBancaria.query.get_or_404(id)
-    total = ContaMovimentacao.query.filter_by(conta_bancaria_id=id).delete()
+    buscar_ou_404(ContaBancaria, id)
+    total = da_empresa(ContaMovimentacao).filter_by(conta_bancaria_id=id).delete()
     db.session.commit()
     flash(f'{total} movimentação(ões) removida(s). Você pode importar o OFX novamente.', 'sucesso')
     return redirect(url_for('contas_movimentacoes', id=id))
@@ -1078,7 +1178,7 @@ def contas_limpar_movimentacoes(id):
 
 @app.route('/contas/<int:id>/movimentacoes/exportar')
 def contas_movimentacoes_exportar(id):
-    conta = ContaBancaria.query.get_or_404(id)
+    conta = buscar_ou_404(ContaBancaria, id)
     inicio, fim = _periodo_movimentacoes(request.args)
     movimentos = _movimentacoes_do_periodo(id, inicio, fim)
 
@@ -1134,16 +1234,16 @@ def data_da_competencia(comp, dia):
     return date(ano, mes, min(dia, ultimo_dia_do_mes))
 
 
-def gerar_lancamentos_recorrentes():
-    """Cria os lançamentos de cada mês em que uma recorrência ativa ainda não
-    gerou um lançamento, até o mês atual (permite "colocar em dia" caso o
-    programa fique um tempo sem ser aberto). Idempotente: pode ser chamada
-    quantas vezes for preciso sem duplicar lançamentos.
+def gerar_lancamentos_recorrentes(empresa_id):
+    """Cria os lançamentos de cada mês em que uma recorrência ativa da empresa
+    ainda não gerou um lançamento, até o mês atual (coloca em dia quem ficou
+    um tempo sem entrar). Idempotente: pode ser chamada quantas vezes for
+    preciso sem duplicar lançamentos.
     """
     competencia_atual = competencia(datetime.now().date())
     total_gerado = 0
 
-    for tpl in LancamentoRecorrente.query.filter_by(ativo=True).all():
+    for tpl in LancamentoRecorrente.query.filter_by(empresa_id=empresa_id, ativo=True).all():
         proxima = (
             proxima_competencia(tpl.ultima_geracao_mes)
             if tpl.ultima_geracao_mes
@@ -1151,9 +1251,12 @@ def gerar_lancamentos_recorrentes():
         )
         while proxima <= competencia_atual:
             vencimento = data_da_competencia(proxima, tpl.dia_vencimento)
-            ja_existe = Transacao.query.filter_by(recorrente_id=tpl.id, data_vencimento=vencimento).first()
+            ja_existe = Transacao.query.filter_by(
+                empresa_id=empresa_id, recorrente_id=tpl.id, data_vencimento=vencimento
+            ).first()
             if not ja_existe:
                 db.session.add(Transacao(
+                    empresa_id=empresa_id,
                     tipo=tpl.tipo,
                     descricao=tpl.descricao,
                     valor=tpl.valor,
@@ -1264,7 +1367,7 @@ def resultado_do_mes(referencia):
     tudo — senão um mês sem baixas apareceria como prejuízo que não existe.
     """
     inicio, fim = _limites_do_mes(referencia)
-    transacoes = Transacao.query.filter(
+    transacoes = da_empresa(Transacao).filter(
         Transacao.data_vencimento >= inicio,
         Transacao.data_vencimento <= fim,
     ).all()
@@ -1294,8 +1397,68 @@ def _variacao(atual, anterior):
     return (atual - anterior) / abs(anterior) * 100
 
 
+# ------------------------------------------------------------------ #
+# Entrada e saída do sistema
+# ------------------------------------------------------------------ #
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if auth.usuario_logado() and request.method == 'GET':
+        return redirect(url_for('inicio'))
+
+    if request.method == 'POST':
+        usuario, erro = auth.autenticar(request.form.get('email'), request.form.get('senha'))
+        if erro:
+            flash(erro, 'erro')
+            return redirect(url_for('login'))
+
+        motivo = auth.motivo_de_bloqueio(usuario)
+        auth.entrar(usuario)
+        if motivo:
+            return redirect(url_for('sem_acesso', motivo=motivo))
+
+        destino = request.form.get('proximo', '')
+        # Só aceita caminho interno: um "próximo" apontando para fora viraria
+        # um redirecionamento aberto, útil para golpe de phishing.
+        if destino.startswith('/') and not destino.startswith('//'):
+            return redirect(destino)
+        return redirect(url_for('inicio'))
+
+    return render_template('login.html', proximo=request.args.get('proximo', ''))
+
+
+@app.route('/logout')
+def logout():
+    auth.sair()
+    flash('Você saiu do sistema.', 'sucesso')
+    return redirect(url_for('login'))
+
+
+@app.route('/sem-acesso')
+def sem_acesso():
+    """Explica por que o acesso está barrado, em vez de só mandar para o login."""
+    usuario = auth.usuario_logado()
+    if usuario is None:
+        return redirect(url_for('login'))
+
+    motivo = auth.motivo_de_bloqueio(usuario) or request.args.get('motivo', '')
+    if not motivo:
+        return redirect(url_for('inicio'))
+
+    return render_template('sem_acesso.html', usuario=usuario, motivo=motivo,
+                           empresa=usuario.empresa)
+
+
 @app.route('/')
 def inicio():
+    usuario = auth.usuario_logado()
+    # Admin e contador não têm dados financeiros próprios: cada um vai para
+    # a sua área em vez de ver um painel vazio.
+    if usuario.eh_admin:
+        return redirect(url_for('admin_painel'))
+    if usuario.eh_contador and auth.empresa_atual() is None:
+        return redirect(url_for('contador_clientes'))
+
     hoje = datetime.now().date()
     mes_atual = resultado_do_mes(hoje)
     mes_passado = resultado_do_mes(_mes_anterior(hoje))
@@ -1310,11 +1473,11 @@ def inicio():
     teto = max([max(m['entradas'], m['saidas']) for m in serie] or [0])
 
     # Caixa: o que existe em conta contra o que já está comprometido
-    contas_com_saldo = ContaBancaria.query.filter(ContaBancaria.saldo.isnot(None)).all()
+    contas_com_saldo = da_empresa(ContaBancaria).filter(ContaBancaria.saldo.isnot(None)).all()
     saldo_contas = sum(c.saldo for c in contas_com_saldo) if contas_com_saldo else None
     saldo_data = max((c.saldo_data for c in contas_com_saldo if c.saldo_data), default=None)
 
-    pendentes = Transacao.query.filter_by(status='Pendente').all()
+    pendentes = da_empresa(Transacao).filter_by(status='Pendente').all()
     a_pagar = sum(t.valor for t in pendentes if t.tipo == 'Pagar')
     a_receber = sum(t.valor for t in pendentes if t.tipo == 'Receber')
     atrasados = [t for t in pendentes if t.tipo == 'Pagar' and t.data_vencimento < hoje]
@@ -1346,12 +1509,12 @@ def inicio():
 
 @app.route('/lancamentos')
 def lancamentos():
-    todas_transacoes = Transacao.query.all()
+    todas_transacoes = da_empresa(Transacao).all()
     total_receber = sum(t.valor for t in todas_transacoes if t.tipo == 'Receber' and t.status == 'Pendente')
     total_pagar = sum(t.valor for t in todas_transacoes if t.tipo == 'Pagar' and t.status == 'Pendente')
     sem_categoria_count = sum(1 for t in todas_transacoes if t.categoria_id is None)
 
-    contas_com_saldo = ContaBancaria.query.filter(ContaBancaria.saldo.isnot(None)).all()
+    contas_com_saldo = da_empresa(ContaBancaria).filter(ContaBancaria.saldo.isnot(None)).all()
     saldo_contas = sum(c.saldo for c in contas_com_saldo) if contas_com_saldo else None
     saldo_contas_data = max((c.saldo_data for c in contas_com_saldo if c.saldo_data), default=None)
 
@@ -1368,7 +1531,7 @@ def lancamentos():
     if filtro_inicio and filtro_fim and filtro_inicio > filtro_fim:
         filtro_inicio, filtro_fim = filtro_fim, filtro_inicio
 
-    query = Transacao.query
+    query = da_empresa(Transacao)
     if busca:
         termo = f'%{busca}%'
         query = query.outerjoin(Transacao.fornecedor).outerjoin(Transacao.cliente).filter(db.or_(
@@ -1401,12 +1564,12 @@ def lancamentos():
         sem_categoria_count=sem_categoria_count,
         saldo_contas=saldo_contas,
         saldo_contas_data=saldo_contas_data,
-        fornecedores=Fornecedor.query.order_by(Fornecedor.nome).all(),
-        clientes=Cliente.query.order_by(Cliente.nome).all(),
-        categorias=Categoria.query.order_by(Categoria.nome).all(),
-        categorias_pagar=Categoria.query.filter_by(tipo='Pagar').order_by(Categoria.nome).all(),
-        categorias_receber=Categoria.query.filter_by(tipo='Receber').order_by(Categoria.nome).all(),
-        contas_bancarias=ContaBancaria.query.order_by(ContaBancaria.nome).all(),
+        fornecedores=da_empresa(Fornecedor).order_by(Fornecedor.nome).all(),
+        clientes=da_empresa(Cliente).order_by(Cliente.nome).all(),
+        categorias=da_empresa(Categoria).order_by(Categoria.nome).all(),
+        categorias_pagar=da_empresa(Categoria).filter_by(tipo='Pagar').order_by(Categoria.nome).all(),
+        categorias_receber=da_empresa(Categoria).filter_by(tipo='Receber').order_by(Categoria.nome).all(),
+        contas_bancarias=da_empresa(ContaBancaria).order_by(ContaBancaria.nome).all(),
         hoje=datetime.now().date(),
         busca=busca,
         filtro_tipo=filtro_tipo,
@@ -1425,7 +1588,7 @@ def adicionar():
         flash(erro, 'erro')
         return redirect(url_for('lancamentos'))
 
-    db.session.add(Transacao(**dados))
+    db.session.add(novo_registro(Transacao, **dados))
     db.session.commit()
     flash('Lançamento adicionado com sucesso.', 'sucesso')
     return redirect(url_for('lancamentos'))
@@ -1433,7 +1596,7 @@ def adicionar():
 
 @app.route('/editar/<int:id>', methods=['GET', 'POST'])
 def editar(id):
-    transacao = Transacao.query.get_or_404(id)
+    transacao = buscar_ou_404(Transacao, id)
 
     if request.method == 'POST':
         dados, erro = validar_transacao(request.form)
@@ -1492,22 +1655,22 @@ def editar(id):
     return render_template(
         'editar.html',
         t=transacao,
-        fornecedores=Fornecedor.query.order_by(Fornecedor.nome).all(),
-        clientes=Cliente.query.order_by(Cliente.nome).all(),
-        categorias_pagar=Categoria.query.filter_by(tipo='Pagar').order_by(Categoria.nome).all(),
-        categorias_receber=Categoria.query.filter_by(tipo='Receber').order_by(Categoria.nome).all(),
-        contas_bancarias=ContaBancaria.query.order_by(ContaBancaria.nome).all(),
+        fornecedores=da_empresa(Fornecedor).order_by(Fornecedor.nome).all(),
+        clientes=da_empresa(Cliente).order_by(Cliente.nome).all(),
+        categorias_pagar=da_empresa(Categoria).filter_by(tipo='Pagar').order_by(Categoria.nome).all(),
+        categorias_receber=da_empresa(Categoria).filter_by(tipo='Receber').order_by(Categoria.nome).all(),
+        contas_bancarias=da_empresa(ContaBancaria).order_by(ContaBancaria.nome).all(),
     )
 
 
 @app.route('/excluir/<int:id>', methods=['POST'])
 def excluir(id):
-    transacao = Transacao.query.get_or_404(id)
+    transacao = buscar_ou_404(Transacao, id)
     if transacao.anexo_arquivo:
         _apagar_anexo(transacao.anexo_arquivo)
     # Uma nota fiscal vinculada a este lançamento volta a permitir "Gerar Lançamento"
-    NotaServico.query.filter_by(transacao_id=id).update({'transacao_id': None})
-    NotaEletronica.query.filter_by(transacao_id=id).update({'transacao_id': None})
+    da_empresa(NotaServico).filter_by(transacao_id=id).update({'transacao_id': None})
+    da_empresa(NotaEletronica).filter_by(transacao_id=id).update({'transacao_id': None})
     db.session.delete(transacao)
     db.session.commit()
     flash('Lançamento excluído.', 'sucesso')
@@ -1524,7 +1687,7 @@ def _destino_voltar():
 
 @app.route('/concluir/<int:id>', methods=['POST'])
 def concluir(id):
-    transacao = Transacao.query.get_or_404(id)
+    transacao = buscar_ou_404(Transacao, id)
 
     data_pagamento = parse_data(request.form.get('data_pagamento', '').strip())
     if not data_pagamento:
@@ -1539,7 +1702,7 @@ def concluir(id):
 
 @app.route('/reabrir/<int:id>', methods=['POST'])
 def reabrir(id):
-    transacao = Transacao.query.get_or_404(id)
+    transacao = buscar_ou_404(Transacao, id)
     transacao.status = 'Pendente'
     transacao.data_pagamento = None
     db.session.commit()
@@ -1548,7 +1711,7 @@ def reabrir(id):
 
 @app.route('/anexos/<int:id>')
 def baixar_anexo(id):
-    transacao = Transacao.query.get_or_404(id)
+    transacao = buscar_ou_404(Transacao, id)
     if not transacao.anexo_arquivo:
         flash('Este lançamento não possui anexo.', 'erro')
         return redirect(url_for('lancamentos'))
@@ -1583,7 +1746,7 @@ def periodo_dos_parametros(args):
 
 
 def transacoes_do_periodo(inicio, fim, status_filtro, categoria_filtro='', conta_filtro=''):
-    query = Transacao.query.filter(
+    query = da_empresa(Transacao).filter(
         Transacao.data_vencimento >= inicio,
         Transacao.data_vencimento <= fim,
     )
@@ -1666,8 +1829,8 @@ def relatorio():
         saldo=saldo,
         por_categoria=agrupar_transacoes(transacoes, _rotulo_categoria),
         por_centro_custo=agrupar_transacoes(transacoes, _rotulo_centro_custo),
-        categorias=Categoria.query.order_by(Categoria.tipo, Categoria.nome).all(),
-        contas_bancarias=ContaBancaria.query.order_by(ContaBancaria.nome).all(),
+        categorias=da_empresa(Categoria).order_by(Categoria.tipo, Categoria.nome).all(),
+        contas_bancarias=da_empresa(ContaBancaria).order_by(ContaBancaria.nome).all(),
         atalhos=atalhos,
         hoje=hoje,
     )
@@ -1723,13 +1886,13 @@ def _exportar_xlsx(transacoes, nome_arquivo):
 
 def _notas_do_periodo(inicio, fim):
     """NFS-e e NF-e emitidas dentro do período, com XML guardado."""
-    servico = NotaServico.query.filter(
+    servico = da_empresa(NotaServico).filter(
         NotaServico.data_emissao >= inicio,
         NotaServico.data_emissao <= fim,
         NotaServico.xml_gzip.isnot(None),
     ).order_by(NotaServico.data_emissao).all()
 
-    eletronica = NotaEletronica.query.filter(
+    eletronica = da_empresa(NotaEletronica).filter(
         NotaEletronica.data_emissao >= inicio,
         NotaEletronica.data_emissao <= fim,
         NotaEletronica.xml_gzip.isnot(None),
@@ -1764,7 +1927,7 @@ def _zip_das_notas(notas_servico, notas_eletronicas):
 
 def _anexos_contabilidade(inicio, fim):
     """Monta os anexos do período: planilha, texto e o pacote de XMLs."""
-    transacoes = Transacao.query.filter(
+    transacoes = da_empresa(Transacao).filter(
         Transacao.data_vencimento >= inicio,
         Transacao.data_vencimento <= fim,
     ).order_by(Transacao.data_vencimento).all()
@@ -1809,6 +1972,7 @@ def contabilidade():
 
     anexos, total_lancamentos, total_notas = _anexos_contabilidade(inicio, fim)
     tamanho_mb = sum(len(conteudo) for _, conteudo in anexos) / (1024 * 1024)
+    email_contador = fiscal_sync.config_get('email_contador')
 
     return render_template(
         'contabilidade.html',
@@ -1821,8 +1985,53 @@ def contabilidade():
         limite_mb=envio_email.LIMITE_ANEXOS_MB,
         smtp_ok=_smtp_configurado(),
         empresa=_identificacao_empresa(),
-        email_contador=fiscal_sync.config_get('email_contador'),
+        email_contador=email_contador,
+        contador_com_acesso=_contador_com_acesso(email_contador),
     )
+
+
+def _contador_com_acesso(email_contador):
+    """Conta de contador que hoje enxerga esta empresa, se houver.
+
+    Serve para o cliente ver, na própria tela, quem está com acesso aos dados
+    dele — o vínculo é criado pelo simples fato de ele informar o e-mail.
+    """
+    email = (email_contador or '').strip().lower()
+    if not email:
+        return None
+    return Usuario.query.filter_by(email=email, papel=PAPEL_CONTADOR).first()
+
+
+@app.route('/contabilidade/contador', methods=['POST'])
+def contabilidade_contador():
+    """Grava o e-mail do contador — é o que libera o acesso dele aos dados.
+
+    Fica separado do envio porque o cliente pode querer só dar o acesso, sem
+    mandar nenhum arquivo: com a conta ligada, o contador busca sozinho.
+    """
+    email = request.form.get('email_contador', '').strip().lower()
+    if email and not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email):
+        flash('Informe um e-mail válido para o contador.', 'erro')
+        return redirect(url_for('contabilidade'))
+
+    fiscal_sync.config_set('email_contador', email)
+
+    if not email:
+        flash('Contador removido: ninguém mais tem acesso aos seus dados.', 'sucesso')
+    elif _contador_com_acesso(email):
+        flash(
+            f'Contador {email} salvo. Ele já pode entrar e ver seus dados '
+            '(somente leitura), sem você precisar enviar nada.',
+            'sucesso',
+        )
+    else:
+        flash(
+            f'Contador {email} salvo. Ainda não existe conta de contador com esse '
+            'e-mail — assim que ela for criada, o acesso é liberado sozinho. '
+            'Enquanto isso, dá para enviar os documentos por e-mail aqui embaixo.',
+            'sucesso',
+        )
+    return redirect(url_for('contabilidade'))
 
 
 @app.route('/contabilidade/enviar', methods=['POST'])
@@ -1939,15 +2148,15 @@ def exportar_relatorio_agrupado(por):
 
 @app.route('/recorrentes')
 def recorrentes_listar():
-    registros = LancamentoRecorrente.query.order_by(LancamentoRecorrente.descricao).all()
+    registros = da_empresa(LancamentoRecorrente).order_by(LancamentoRecorrente.descricao).all()
     return render_template(
         'recorrentes.html',
         registros=registros,
-        fornecedores=Fornecedor.query.order_by(Fornecedor.nome).all(),
-        clientes=Cliente.query.order_by(Cliente.nome).all(),
-        categorias_pagar=Categoria.query.filter_by(tipo='Pagar').order_by(Categoria.nome).all(),
-        categorias_receber=Categoria.query.filter_by(tipo='Receber').order_by(Categoria.nome).all(),
-        contas_bancarias=ContaBancaria.query.order_by(ContaBancaria.nome).all(),
+        fornecedores=da_empresa(Fornecedor).order_by(Fornecedor.nome).all(),
+        clientes=da_empresa(Cliente).order_by(Cliente.nome).all(),
+        categorias_pagar=da_empresa(Categoria).filter_by(tipo='Pagar').order_by(Categoria.nome).all(),
+        categorias_receber=da_empresa(Categoria).filter_by(tipo='Receber').order_by(Categoria.nome).all(),
+        contas_bancarias=da_empresa(ContaBancaria).order_by(ContaBancaria.nome).all(),
     )
 
 
@@ -1958,7 +2167,7 @@ def recorrentes_adicionar():
         flash(erro, 'erro')
         return redirect(url_for('recorrentes_listar'))
 
-    novo = LancamentoRecorrente(**dados)
+    novo = novo_registro(LancamentoRecorrente, **dados)
     novo.ultima_geracao_mes = competencia_anterior(competencia(datetime.now().date()))
     db.session.add(novo)
     db.session.commit()
@@ -1968,7 +2177,7 @@ def recorrentes_adicionar():
 
 @app.route('/recorrentes/editar/<int:id>', methods=['GET', 'POST'])
 def recorrentes_editar(id):
-    tpl = LancamentoRecorrente.query.get_or_404(id)
+    tpl = buscar_ou_404(LancamentoRecorrente, id)
 
     if request.method == 'POST':
         dados, erro = validar_recorrente(request.form)
@@ -1985,17 +2194,17 @@ def recorrentes_editar(id):
     return render_template(
         'recorrentes_editar.html',
         t=tpl,
-        fornecedores=Fornecedor.query.order_by(Fornecedor.nome).all(),
-        clientes=Cliente.query.order_by(Cliente.nome).all(),
-        categorias_pagar=Categoria.query.filter_by(tipo='Pagar').order_by(Categoria.nome).all(),
-        categorias_receber=Categoria.query.filter_by(tipo='Receber').order_by(Categoria.nome).all(),
-        contas_bancarias=ContaBancaria.query.order_by(ContaBancaria.nome).all(),
+        fornecedores=da_empresa(Fornecedor).order_by(Fornecedor.nome).all(),
+        clientes=da_empresa(Cliente).order_by(Cliente.nome).all(),
+        categorias_pagar=da_empresa(Categoria).filter_by(tipo='Pagar').order_by(Categoria.nome).all(),
+        categorias_receber=da_empresa(Categoria).filter_by(tipo='Receber').order_by(Categoria.nome).all(),
+        contas_bancarias=da_empresa(ContaBancaria).order_by(ContaBancaria.nome).all(),
     )
 
 
 @app.route('/recorrentes/excluir/<int:id>', methods=['POST'])
 def recorrentes_excluir(id):
-    tpl = LancamentoRecorrente.query.get_or_404(id)
+    tpl = buscar_ou_404(LancamentoRecorrente, id)
     db.session.delete(tpl)
     db.session.commit()
     flash('Lançamento recorrente excluído.', 'sucesso')
@@ -2004,7 +2213,7 @@ def recorrentes_excluir(id):
 
 @app.route('/recorrentes/gerar', methods=['POST'])
 def recorrentes_gerar():
-    total = gerar_lancamentos_recorrentes()
+    total = gerar_lancamentos_recorrentes(auth.empresa_atual_id())
     if total:
         flash(f'{total} lançamento(s) gerado(s) com sucesso.', 'sucesso')
     else:
@@ -2064,7 +2273,7 @@ def _contexto_fiscal_comum():
 def notas_servico():
     inicio, fim = _periodo_simples(request.args)
 
-    query = NotaServico.query.filter(
+    query = da_empresa(NotaServico).filter(
         NotaServico.data_emissao >= inicio,
         NotaServico.data_emissao <= fim,
     ).order_by(NotaServico.data_emissao.desc(), NotaServico.id.desc())
@@ -2087,10 +2296,10 @@ def notas_servico():
         fim=fim,
         emitidas=emitidas,
         recebidas=recebidas,
-        fora_do_periodo=NotaServico.query.count() - len(notas),
+        fora_do_periodo=da_empresa(NotaServico).count() - len(notas),
         totais_emitidas=_totais(emitidas),
         totais_recebidas=_totais(recebidas),
-        sync=sync_fiscal.status('nfse'),
+        sync=sync_fiscal.status('nfse', auth.empresa_atual_id()),
         ultima_sync=fiscal_sync.config_get('nfse_ultima_sync'),
         ultimo_status=fiscal_sync.config_get('nfse_ultimo_status'),
         **_contexto_fiscal_comum(),
@@ -2102,7 +2311,7 @@ def notas_eletronicas():
     inicio, fim = _periodo_simples(request.args)
 
     # Notas sem data de emissão sempre aparecem (não dá para saber o período)
-    query = NotaEletronica.query.filter(
+    query = da_empresa(NotaEletronica).filter(
         db.or_(
             NotaEletronica.data_emissao.is_(None),
             db.and_(
@@ -2129,13 +2338,13 @@ def notas_eletronicas():
         fim=fim,
         emitidas=emitidas,
         recebidas=recebidas,
-        fora_do_periodo=NotaEletronica.query.count() - len(notas),
+        fora_do_periodo=da_empresa(NotaEletronica).count() - len(notas),
         totais_emitidas=_totais(emitidas),
         totais_recebidas=_totais(recebidas),
-        sync=sync_fiscal.status('nfe'),
+        sync=sync_fiscal.status('nfe', auth.empresa_atual_id()),
         ultima_sync=fiscal_sync.config_get('nfe_ultima_sync'),
         ultimo_status=fiscal_sync.config_get('nfe_ultimo_status'),
-        minutos_espera=sync_fiscal.nfe_minutos_de_espera(),
+        minutos_espera=sync_fiscal.nfe_minutos_de_espera(auth.empresa_atual_id()),
         **_contexto_fiscal_comum(),
     )
 
@@ -2145,7 +2354,7 @@ def nfse_sincronizar():
     if not fiscal_sync.certificado_configurado():
         flash('Configure o certificado digital na aba Configurações antes de sincronizar.', 'erro')
         return redirect(url_for('configuracoes'))
-    if sync_fiscal.iniciar('nfse'):
+    if sync_fiscal.iniciar('nfse', auth.empresa_atual_id()):
         flash('Sincronização das NFS-e iniciada.', 'sucesso')
     else:
         flash('Já existe uma sincronização de NFS-e em andamento.', 'erro')
@@ -2159,7 +2368,7 @@ def nfe_sincronizar():
         return redirect(url_for('configuracoes'))
 
     forcar = request.form.get('forcar') == '1'
-    espera = sync_fiscal.nfe_minutos_de_espera()
+    espera = sync_fiscal.nfe_minutos_de_espera(auth.empresa_atual_id())
     if espera > 0 and not forcar:
         flash(
             f'A SEFAZ exige intervalo de 1 hora entre consultas sem novidade. '
@@ -2168,7 +2377,7 @@ def nfe_sincronizar():
         )
         return redirect(url_for('notas_eletronicas'))
 
-    if sync_fiscal.iniciar('nfe'):
+    if sync_fiscal.iniciar('nfe', auth.empresa_atual_id()):
         flash('Sincronização das NF-e iniciada.', 'sucesso')
     else:
         flash('Já existe uma sincronização de NF-e em andamento.', 'erro')
@@ -2177,17 +2386,17 @@ def nfe_sincronizar():
 
 @app.route('/notas-servico/sincronizacao')
 def nfse_status_sincronizacao():
-    return jsonify(sync_fiscal.status('nfse'))
+    return jsonify(sync_fiscal.status('nfse', auth.empresa_atual_id()))
 
 
 @app.route('/notas-eletronicas/sincronizacao')
 def nfe_status_sincronizacao():
-    return jsonify(sync_fiscal.status('nfe'))
+    return jsonify(sync_fiscal.status('nfe', auth.empresa_atual_id()))
 
 
 @app.route('/notas-servico/<int:id>/xml')
 def nfse_baixar_xml(id):
-    nota = NotaServico.query.get_or_404(id)
+    nota = buscar_ou_404(NotaServico, id)
     if not nota.xml_gzip:
         flash('XML desta nota não está disponível.', 'erro')
         return redirect(url_for('notas_servico'))
@@ -2200,7 +2409,7 @@ def nfse_baixar_xml(id):
 
 @app.route('/notas-eletronicas/<int:id>/xml')
 def nfe_baixar_xml(id):
-    nota = NotaEletronica.query.get_or_404(id)
+    nota = buscar_ou_404(NotaEletronica, id)
     if not nota.xml_gzip:
         flash('XML desta nota não está disponível.', 'erro')
         return redirect(url_for('notas_eletronicas'))
@@ -2219,7 +2428,7 @@ def nfe_dar_ciencia(id):
     isso só acontece por ação explícita do usuário, nunca junto da
     sincronização automática.
     """
-    nota = NotaEletronica.query.get_or_404(id)
+    nota = buscar_ou_404(NotaEletronica, id)
     destino = _destino_voltar()
 
     if not fiscal_sync.certificado_configurado():
@@ -2233,7 +2442,7 @@ def nfe_dar_ciencia(id):
         return redirect(destino)
 
     try:
-        caminho, senha = sync_fiscal.credenciais()
+        caminho, senha = sync_fiscal.credenciais(auth.empresa_atual_id())
         with open(caminho, 'rb') as arquivo_pfx:
             chave_privada, certificado, _ = fiscal_certificado.carregar_pfx(arquivo_pfx.read(), senha)
 
@@ -2273,7 +2482,7 @@ def nfe_dar_ciencia(id):
 
 @app.route('/notas-servico/<int:id>/danfse')
 def nfse_baixar_danfse(id):
-    nota = NotaServico.query.get_or_404(id)
+    nota = buscar_ou_404(NotaServico, id)
     if not fiscal_sync.certificado_configurado():
         flash('Configure o certificado digital na aba Configurações.', 'erro')
         return redirect(url_for('notas_servico'))
@@ -2308,7 +2517,7 @@ def nfse_gerar_lancamento(id):
     """Fallback manual: normalmente o lançamento já foi gerado sozinho na
     sincronização. Serve para notas puladas por falta de valor, ou cujo
     lançamento vinculado foi excluído depois."""
-    nota = NotaServico.query.get_or_404(id)
+    nota = buscar_ou_404(NotaServico, id)
     if nota.situacao != 'ATIVA':
         flash('Não é possível gerar lançamento de uma nota cancelada/substituída.', 'erro')
         return redirect(_destino_voltar())
@@ -2333,7 +2542,7 @@ def nfse_gerar_lancamento(id):
 @app.route('/notas-eletronicas/<int:id>/gerar-lancamento', methods=['POST'])
 def nfe_gerar_lancamento(id):
     """Fallback manual (ver nfse_gerar_lancamento)."""
-    nota = NotaEletronica.query.get_or_404(id)
+    nota = buscar_ou_404(NotaEletronica, id)
     if str(nota.situacao or '') in ('2', '3'):
         flash('Não é possível gerar lançamento de uma nota cancelada ou denegada.', 'erro')
         return redirect(_destino_voltar())
@@ -2373,7 +2582,9 @@ def configuracoes():
             if not nome.lower().endswith(('.pfx', '.p12')):
                 flash('O certificado deve ser um arquivo .pfx ou .p12.', 'erro')
                 return redirect(url_for('configuracoes'))
-            pasta = data_path('certificados')
+            # Uma pasta por empresa: com todos os certificados no mesmo lugar,
+            # dois clientes com arquivos de mesmo nome sobrescreveriam um ao outro.
+            pasta = os.path.join(data_path('certificados'), str(auth.empresa_atual_id()))
             os.makedirs(pasta, exist_ok=True)
             caminho = os.path.join(pasta, nome)
             arquivo.save(caminho)
@@ -2591,21 +2802,410 @@ def configuracoes_resetar_nsu(qual):
     return redirect(url_for('configuracoes'))
 
 
-with app.app_context():
-    gerar_lancamentos_recorrentes()
-    # Cobre notas fiscais sincronizadas antes de a geração automática existir
-    fiscal_sync.gerar_lancamentos_pendentes()
+# ------------------------------------------------------------------ #
+# Painel do administrador
+# ------------------------------------------------------------------ #
+
+def _resumo_assinaturas():
+    empresas = Empresa.query.order_by(Empresa.nome).all()
+    em_dia = [e for e in empresas if e.assinatura_em_dia]
+    return {
+        'empresas': empresas,
+        'total': len(empresas),
+        'pagas': len(em_dia),
+        'vencidas': len(empresas) - len(em_dia),
+        'usuarios_ativos': Usuario.query.filter_by(ativo=True).count(),
+        'usuarios_bloqueados': Usuario.query.filter_by(ativo=False).count(),
+    }
 
 
-def _abrir_navegador():
-    webbrowser.open(f'http://{HOST}:{PORT}')
+@app.route('/admin')
+@auth.exigir_papel(PAPEL_ADMIN)
+def admin_painel():
+    resumo = _resumo_assinaturas()
+    return render_template(
+        'admin_painel.html',
+        **resumo,
+        vencendo=[e for e in resumo['empresas']
+                  if e.dias_restantes is not None and 0 <= e.dias_restantes <= 7],
+        ultima_verificacao=fiscal_sync.sistema_get('asaas_ultima_verificacao') or '',
+        ultimos_pagamentos=Pagamento.query.order_by(Pagamento.registrado_em.desc()).limit(10).all(),
+    )
+
+
+@app.route('/admin/clientes')
+@auth.exigir_papel(PAPEL_ADMIN)
+def admin_empresas():
+    return render_template(
+        'admin_empresas.html',
+        empresas=Empresa.query.order_by(Empresa.nome).all(),
+    )
+
+
+@app.route('/admin/clientes/novo', methods=['POST'])
+@auth.exigir_papel(PAPEL_ADMIN)
+def admin_empresa_nova():
+    nome = request.form.get('nome', '').strip()
+    cnpj = re.sub(r'\D', '', request.form.get('cnpj', ''))
+    email = request.form.get('email', '').strip().lower()
+    senha = request.form.get('senha', '')
+    nome_usuario = request.form.get('nome_usuario', '').strip() or nome
+    dias = request.form.get('dias_cortesia', '')
+
+    if not nome:
+        flash('Informe o nome da empresa.', 'erro')
+        return redirect(url_for('admin_empresas'))
+    if not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email):
+        flash('Informe um e-mail válido para o usuário da empresa.', 'erro')
+        return redirect(url_for('admin_empresas'))
+    if len(senha) < 8:
+        flash('A senha precisa ter pelo menos 8 caracteres.', 'erro')
+        return redirect(url_for('admin_empresas'))
+    if Usuario.query.filter_by(email=email).first():
+        flash(f'Já existe um usuário com o e-mail {email}.', 'erro')
+        return redirect(url_for('admin_empresas'))
+
+    empresa = Empresa(nome=nome, cnpj=cnpj or None)
+    if dias.isdigit() and int(dias) > 0:
+        empresa.creditar_dias(int(dias))
+    db.session.add(empresa)
+    db.session.flush()
+
+    auth.criar_usuario(email, senha, nome_usuario, papel=PAPEL_USUARIO, empresa=empresa)
+    db.session.commit()
+
+    flash(f'Empresa "{nome}" criada com o usuário {email}.', 'sucesso')
+    return redirect(url_for('admin_empresas'))
+
+
+@app.route('/admin/clientes/<int:id>/assinatura', methods=['POST'])
+@auth.exigir_papel(PAPEL_ADMIN)
+def admin_empresa_assinatura(id):
+    empresa = Empresa.query.get_or_404(id)
+    acao = request.form.get('acao', '')
+
+    if acao == 'liberar':
+        dias = request.form.get('dias', '30')
+        empresa.creditar_dias(int(dias) if dias.isdigit() else 30)
+        flash(f'Assinatura de "{empresa.nome}" liberada até {empresa.assinatura_ate.strftime("%d/%m/%Y")}.', 'sucesso')
+    elif acao == 'encerrar':
+        empresa.assinatura_ate = None
+        flash(f'Assinatura de "{empresa.nome}" encerrada: o acesso já está bloqueado.', 'sucesso')
+    else:
+        flash('Ação inválida.', 'erro')
+        return redirect(url_for('admin_empresas'))
+
+    db.session.commit()
+    return redirect(url_for('admin_empresas'))
+
+
+@app.route('/admin/usuarios')
+@auth.exigir_papel(PAPEL_ADMIN)
+def admin_usuarios():
+    return render_template(
+        'admin_usuarios.html',
+        usuarios=Usuario.query.order_by(Usuario.papel, Usuario.nome).all(),
+        empresas=Empresa.query.order_by(Empresa.nome).all(),
+        papeis=(PAPEL_ADMIN, PAPEL_USUARIO, PAPEL_CONTADOR),
+    )
+
+
+@app.route('/admin/usuarios/novo', methods=['POST'])
+@auth.exigir_papel(PAPEL_ADMIN)
+def admin_usuario_novo():
+    email = request.form.get('email', '').strip().lower()
+    senha = request.form.get('senha', '')
+    nome = request.form.get('nome', '').strip()
+    papel = request.form.get('papel', PAPEL_USUARIO)
+    empresa_id = request.form.get('empresa_id', '')
+
+    if papel not in (PAPEL_ADMIN, PAPEL_USUARIO, PAPEL_CONTADOR):
+        flash('Papel inválido.', 'erro')
+        return redirect(url_for('admin_usuarios'))
+    if not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email):
+        flash('E-mail inválido.', 'erro')
+        return redirect(url_for('admin_usuarios'))
+    if len(senha) < 8:
+        flash('A senha precisa ter pelo menos 8 caracteres.', 'erro')
+        return redirect(url_for('admin_usuarios'))
+    if Usuario.query.filter_by(email=email).first():
+        flash(f'Já existe um usuário com o e-mail {email}.', 'erro')
+        return redirect(url_for('admin_usuarios'))
+
+    empresa = None
+    if papel == PAPEL_USUARIO:
+        empresa = Empresa.query.get(int(empresa_id)) if empresa_id.isdigit() else None
+        if empresa is None:
+            flash('Escolha a empresa deste usuário.', 'erro')
+            return redirect(url_for('admin_usuarios'))
+
+    auth.criar_usuario(email, senha, nome or email, papel=papel, empresa=empresa)
+    db.session.commit()
+
+    if papel == PAPEL_CONTADOR:
+        flash(
+            f'Contador {email} criado. Ele passa a ver um cliente assim que o próprio '
+            'cliente informar esse e-mail na aba Contabilidade.',
+            'sucesso',
+        )
+    else:
+        flash(f'Usuário {email} criado.', 'sucesso')
+    return redirect(url_for('admin_usuarios'))
+
+
+@app.route('/admin/usuarios/<int:id>/bloqueio', methods=['POST'])
+@auth.exigir_papel(PAPEL_ADMIN)
+def admin_usuario_bloqueio(id):
+    usuario = Usuario.query.get_or_404(id)
+    if usuario.id == auth.usuario_logado().id:
+        flash('Você não pode bloquear a si mesmo.', 'erro')
+        return redirect(url_for('admin_usuarios'))
+
+    usuario.ativo = not usuario.ativo
+    db.session.commit()
+    flash(
+        f'Usuário {usuario.email} {"desbloqueado" if usuario.ativo else "bloqueado"}.',
+        'sucesso',
+    )
+    return redirect(url_for('admin_usuarios'))
+
+
+@app.route('/admin/assinaturas')
+@auth.exigir_papel(PAPEL_ADMIN)
+def admin_assinaturas():
+    return render_template(
+        'admin_assinaturas.html',
+        **_resumo_assinaturas(),
+        pagamentos=Pagamento.query.order_by(Pagamento.registrado_em.desc()).limit(50).all(),
+        asaas=asaas.configuracao(),
+        ultima_verificacao=fiscal_sync.sistema_get('asaas_ultima_verificacao') or '',
+        ultimo_resultado=fiscal_sync.sistema_get('asaas_ultimo_resultado') or '',
+    )
+
+
+@app.route('/admin/asaas', methods=['POST'])
+@auth.exigir_papel(PAPEL_ADMIN)
+def admin_asaas_configurar():
+    ambiente = request.form.get('ambiente', 'sandbox')
+    if ambiente not in asaas.URLS:
+        ambiente = 'sandbox'
+    fiscal_sync.sistema_set('asaas_ambiente', ambiente)
+
+    token = request.form.get('token', '').strip()
+    if token:
+        fiscal_sync.sistema_set(
+            'asaas_token_cripto',
+            fiscal_certificado.criptografar_senha(token, data_path('.chave_secreta')),
+        )
+    flash('Configuração do Asaas salva.', 'sucesso')
+    return redirect(url_for('admin_assinaturas'))
+
+
+@app.route('/admin/asaas/verificar', methods=['POST'])
+@auth.exigir_papel(PAPEL_ADMIN)
+def admin_asaas_verificar():
+    try:
+        resumo = asaas.verificar(
+            data_path('.chave_secreta'),
+            desde=datetime.now().date() - timedelta(days=90),
+            url_base=os.environ.get('ERP_ASAAS_URL'),
+        )
+    except asaas.ErroAsaas as exc:
+        fiscal_sync.sistema_set('asaas_ultimo_resultado', f'Erro: {exc}')
+        flash(str(exc), 'erro')
+        return redirect(url_for('admin_assinaturas'))
+
+    fiscal_sync.sistema_set('asaas_ultima_verificacao', f'{datetime.now():%d/%m/%Y %H:%M}')
+    fiscal_sync.sistema_set('asaas_ultimo_resultado', resumo)
+    flash(resumo, 'sucesso')
+    return redirect(url_for('admin_assinaturas'))
+
+
+@app.route('/admin/clientes/<int:id>/asaas', methods=['POST'])
+@auth.exigir_papel(PAPEL_ADMIN)
+def admin_empresa_asaas(id):
+    """Liga a empresa ao cliente correspondente no Asaas.
+
+    É esse identificador que permite saber de quem é cada cobrança paga.
+    """
+    empresa = Empresa.query.get_or_404(id)
+    empresa.asaas_cliente_id = request.form.get('asaas_cliente_id', '').strip() or None
+    db.session.commit()
+    flash(f'ID do cliente Asaas atualizado para "{empresa.nome}".', 'sucesso')
+    return redirect(url_for('admin_empresas'))
+
+
+def verificar_pagamentos_em_segundo_plano():
+    """Confere o Asaas de tempos em tempos, sem ninguém precisar clicar.
+
+    Falha de rede aqui não pode derrubar o servidor nem parar o laço: o
+    resultado fica registrado e a próxima rodada tenta de novo.
+    """
+    def rodar():
+        while True:
+            time.sleep(asaas.INTERVALO_HORAS * 3600)
+            with app.app_context():
+                if not fiscal_sync.sistema_get('asaas_token_cripto'):
+                    continue
+                try:
+                    resumo = asaas.verificar(
+                        data_path('.chave_secreta'),
+                        desde=datetime.now().date() - timedelta(days=90),
+                        url_base=os.environ.get('ERP_ASAAS_URL'),
+                    )
+                    fiscal_sync.sistema_set('asaas_ultimo_resultado', resumo)
+                except Exception as exc:
+                    fiscal_sync.sistema_set('asaas_ultimo_resultado', f'Erro: {exc}')
+                fiscal_sync.sistema_set(
+                    'asaas_ultima_verificacao', f'{datetime.now():%d/%m/%Y %H:%M}'
+                )
+
+    threading.Thread(target=rodar, daemon=True).start()
+
+
+# ------------------------------------------------------------------ #
+# Área do contador
+# ------------------------------------------------------------------ #
+
+@app.route('/contador')
+@auth.exigir_papel(PAPEL_CONTADOR)
+def contador_clientes():
+    usuario = auth.usuario_logado()
+    session.pop('contador_empresa_id', None)
+    return render_template(
+        'contador_clientes.html',
+        clientes=auth.empresas_do_contador(usuario),
+        email=usuario.email,
+    )
+
+
+@app.route('/contador/abrir/<int:id>')
+@auth.exigir_papel(PAPEL_CONTADOR)
+def contador_abrir(id):
+    usuario = auth.usuario_logado()
+    empresa = Empresa.query.get_or_404(id)
+    if not auth.contador_atende(usuario, empresa):
+        flash('Esse cliente não indicou o seu e-mail na aba Contabilidade.', 'erro')
+        return redirect(url_for('contador_clientes'))
+
+    session['contador_empresa_id'] = empresa.id
+    flash(f'Você está vendo os dados de {empresa.nome} (somente leitura).', 'sucesso')
+    return redirect(url_for('inicio'))
+
+
+def gerar_pendencias_de_todos():
+    """Coloca em dia as recorrências e os lançamentos de notas de cada empresa.
+
+    Roda na inicialização do servidor: como agora são vários clientes no mesmo
+    processo, percorre empresa por empresa em vez de olhar um banco só.
+    """
+    for empresa in Empresa.query.all():
+        gerar_lancamentos_recorrentes(empresa.id)
+        fiscal_sync.gerar_lancamentos_pendentes(empresa.id)
+
+
+# ------------------------------------------------------------------ #
+# Primeira execução
+# ------------------------------------------------------------------ #
+
+# Contas criadas automaticamente quando o banco está vazio, para dar para
+# entrar e testar sem precisar cadastrar nada na mão. As senhas são
+# provisórias e estão no README — troque todas antes de colocar no ar.
+CONTAS_DE_TESTE = [
+    # (e-mail, senha, nome, papel, empresa, dias de assinatura)
+    ('admin@teste.com.br', 'admin-teste-123', 'Administrador do Sistema', PAPEL_ADMIN, None, None),
+    ('cliente1@teste.com.br', 'cliente-teste-123', 'Maria — Padaria Pão Quente',
+     PAPEL_USUARIO, 'Padaria Pão Quente Ltda', 30),
+    ('cliente2@teste.com.br', 'cliente-teste-123', 'João — Oficina Roda Livre',
+     PAPEL_USUARIO, 'Oficina Roda Livre ME', 0),  # 0 = já vencido, para testar o bloqueio
+    ('contador@teste.com.br', 'contador-teste-123', 'Carlos — Escritório Contábil',
+     PAPEL_CONTADOR, None, None),
+]
+
+
+def criar_contas_de_teste():
+    """Semeia as contas de exemplo — só quando ainda não existe usuário nenhum.
+
+    Nunca mexe num banco que já tem gente: se houver qualquer usuário, sai sem
+    fazer nada, para não recriar conta apagada de propósito nem trocar senha.
+    """
+    if Usuario.query.first() is not None:
+        return False
+
+    for email, senha, nome, papel, nome_empresa, dias in CONTAS_DE_TESTE:
+        empresa = None
+        if nome_empresa:
+            empresa = Empresa(nome=nome_empresa)
+            if dias:
+                empresa.creditar_dias(dias)
+            elif dias == 0:
+                # Vencido ontem: serve para ver a tela de bloqueio
+                empresa.assinatura_ate = date.today() - timedelta(days=1)
+            db.session.add(empresa)
+            db.session.flush()
+
+        auth.criar_usuario(email, senha, nome, papel=papel, empresa=empresa)
+
+    db.session.commit()
+
+    # O cliente 1 já aponta para o contador de teste, para o vínculo existir
+    # assim que alguém entrar — é o mesmo que o cliente faria na aba
+    # Contabilidade, digitando o e-mail dele.
+    primeiro = Usuario.query.filter_by(email='cliente1@teste.com.br').first()
+    if primeiro and primeiro.empresa:
+        fiscal_sync.config_set('email_contador', 'contador@teste.com.br',
+                               empresa_id=primeiro.empresa_id)
+    return True
+
+
+def conferir_banco_compativel():
+    """Recusa subir sobre um banco da versão antiga (sem multiusuário).
+
+    Um erp.db do tempo do programa de mesa não tem a coluna empresa_id: se o
+    servidor subisse assim, as telas quebrariam aos poucos em vez de avisar.
+    """
+    inspector = db.inspect(db.engine)
+    tabelas = inspector.get_table_names()
+    if 'transacao' not in tabelas:
+        return  # banco novo, será criado do zero
+
+    colunas = {c['name'] for c in inspector.get_columns('transacao')}
+    if 'empresa_id' not in colunas:
+        raise SystemExit(
+            '\nEste banco de dados é da versão antiga (programa de mesa, sem login).\n'
+            'O SaaS começa com base limpa: mova o erp.db antigo para outro lugar\n'
+            'e suba o servidor de novo — as contas de teste serão criadas.\n'
+        )
+
+
+def iniciar_sistema():
+    """Prepara o banco e deixa o servidor pronto para receber acesso."""
+    with app.app_context():
+        conferir_banco_compativel()
+        db.create_all()
+        migrar_schema()
+
+        if criar_contas_de_teste():
+            print('\n' + '=' * 62)
+            print(' Banco vazio: contas de teste criadas.')
+            for email, senha, _, papel, _, _ in CONTAS_DE_TESTE:
+                print(f'   {papel:<9} {email:<26} senha: {senha}')
+            print(' TROQUE ESSAS SENHAS ANTES DE COLOCAR NO AR.')
+            print('=' * 62 + '\n')
+
+        gerar_pendencias_de_todos()
+
+    verificar_pagamentos_em_segundo_plano()
+
+
+iniciar_sistema()
 
 
 if __name__ == '__main__':
-    if getattr(sys, 'frozen', False):
-        # Executável empacotado: sem reloader (ele tentaria reabrir o próprio
-        # .exe e entraria em loop) e com o navegador abrindo sozinho.
-        threading.Timer(1.0, _abrir_navegador).start()
-        app.run(host=HOST, port=PORT, debug=False, use_reloader=False)
-    else:
-        app.run(host=HOST, port=PORT, debug=True)
+    # Servidor hospedado: sem abrir navegador e escutando em todas as
+    # interfaces, para o serviço ficar acessível fora da máquina local.
+    # Em produção, rode atrás de um servidor WSGI (gunicorn/waitress) e de um
+    # proxy com HTTPS — o servidor embutido do Flask não é feito para isso.
+    modo_debug = os.environ.get('ERP_DEBUG') == '1'
+    app.run(host=os.environ.get('ERP_HOST', HOST), port=int(os.environ.get('ERP_PORT', PORT)),
+            debug=modo_debug)

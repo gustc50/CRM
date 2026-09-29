@@ -1,9 +1,103 @@
+import datetime as dt
+
 from flask_sqlalchemy import SQLAlchemy
 
 db = SQLAlchemy()
 
+# Papéis de usuário
+PAPEL_ADMIN = 'admin'        # dono do sistema: gerencia clientes e assinaturas
+PAPEL_USUARIO = 'user'       # cliente final, dono de uma empresa
+PAPEL_CONTADOR = 'contador'  # vê, só de leitura, os clientes que o indicaram
+PAPEIS = (PAPEL_ADMIN, PAPEL_USUARIO, PAPEL_CONTADOR)
+
+# Cada pagamento confirmado no Asaas libera este tanto de acesso
+DIAS_POR_PAGAMENTO = 30
+
+
+class Empresa(db.Model):
+    """O cliente do SaaS: é a ele que pertence todo dado financeiro.
+
+    Tudo no sistema (lançamentos, notas, contas, configurações) carrega o
+    `empresa_id` — é o que impede um cliente de enxergar o outro.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    nome = db.Column(db.String(150), nullable=False)
+    cnpj = db.Column(db.String(20), nullable=True)
+    criada_em = db.Column(db.DateTime, nullable=False, default=dt.datetime.now)
+
+    # Assinatura: o acesso vale enquanto hoje <= assinatura_ate
+    assinatura_ate = db.Column(db.Date, nullable=True)
+    # Identificador do cliente no Asaas, para casar os pagamentos recebidos
+    asaas_cliente_id = db.Column(db.String(60), nullable=True)
+
+    @property
+    def assinatura_em_dia(self):
+        return self.assinatura_ate is not None and self.assinatura_ate >= dt.date.today()
+
+    @property
+    def dias_restantes(self):
+        if self.assinatura_ate is None:
+            return None
+        return (self.assinatura_ate - dt.date.today()).days
+
+    def creditar_dias(self, dias=DIAS_POR_PAGAMENTO, a_partir_de=None):
+        """Estende a assinatura. Se ainda está em dia, soma ao prazo que resta;
+        se já venceu, conta a partir de hoje (não devolve o tempo parado)."""
+        base = a_partir_de or dt.date.today()
+        if self.assinatura_ate and self.assinatura_ate > base:
+            base = self.assinatura_ate
+        self.assinatura_ate = base + dt.timedelta(days=dias)
+        return self.assinatura_ate
+
+
+class Usuario(db.Model):
+    """Conta de acesso. O papel decide o que a pessoa enxerga."""
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(150), unique=True, nullable=False)
+    senha_hash = db.Column(db.String(255), nullable=False)
+    nome = db.Column(db.String(150), nullable=False)
+    papel = db.Column(db.String(20), nullable=False, default=PAPEL_USUARIO)
+
+    # Bloqueio manual pelo administrador (diferente do bloqueio por falta de
+    # pagamento, que é calculado pela validade da assinatura da empresa)
+    ativo = db.Column(db.Boolean, nullable=False, default=True)
+
+    criado_em = db.Column(db.DateTime, nullable=False, default=dt.datetime.now)
+    ultimo_acesso = db.Column(db.DateTime, nullable=True)
+
+    # Só o papel 'user' tem empresa; admin e contador não têm dados próprios
+    empresa_id = db.Column(db.Integer, db.ForeignKey('empresa.id'), nullable=True)
+    empresa = db.relationship('Empresa', backref='usuarios')
+
+    @property
+    def eh_admin(self):
+        return self.papel == PAPEL_ADMIN
+
+    @property
+    def eh_contador(self):
+        return self.papel == PAPEL_CONTADOR
+
+
+class Pagamento(db.Model):
+    """Cobrança confirmada no Asaas que já rendeu dias de acesso.
+
+    O `asaas_id` é único: é ele que impede a mesma cobrança de creditar
+    30 dias duas vezes quando a consulta periódica a encontrar de novo.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    empresa_id = db.Column(db.Integer, db.ForeignKey('empresa.id'), nullable=False)
+    empresa = db.relationship('Empresa', backref='pagamentos')
+    asaas_id = db.Column(db.String(60), unique=True, nullable=False)
+    valor = db.Column(db.Float, nullable=True)
+    pago_em = db.Column(db.Date, nullable=True)
+    situacao = db.Column(db.String(30), nullable=True)
+    registrado_em = db.Column(db.DateTime, nullable=False, default=dt.datetime.now)
+    # Até quando a assinatura passou a valer por causa deste pagamento
+    liberado_ate = db.Column(db.Date, nullable=True)
+
 
 class Categoria(db.Model):
+    empresa_id = db.Column(db.Integer, db.ForeignKey('empresa.id'), nullable=False, index=True)
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(50), nullable=False)
     tipo = db.Column(db.String(20), nullable=False, default='Pagar')  # 'Receber' | 'Pagar'
@@ -11,6 +105,7 @@ class Categoria(db.Model):
 
 
 class Fornecedor(db.Model):
+    empresa_id = db.Column(db.Integer, db.ForeignKey('empresa.id'), nullable=False, index=True)
     id = db.Column(db.Integer, primary_key=True)
     cnpj_cpf = db.Column(db.String(20), nullable=False)
     nome = db.Column(db.String(150), nullable=False)
@@ -28,6 +123,7 @@ class Fornecedor(db.Model):
 
 
 class Cliente(db.Model):
+    empresa_id = db.Column(db.Integer, db.ForeignKey('empresa.id'), nullable=False, index=True)
     id = db.Column(db.Integer, primary_key=True)
     cnpj_cpf = db.Column(db.String(20), nullable=False)
     nome = db.Column(db.String(150), nullable=False)
@@ -45,6 +141,7 @@ class Cliente(db.Model):
 
 
 class ContaBancaria(db.Model):
+    empresa_id = db.Column(db.Integer, db.ForeignKey('empresa.id'), nullable=False, index=True)
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(80), nullable=False)
     banco = db.Column(db.String(10), nullable=True)  # código Febraban (ou vazio p/ caixa/dinheiro)
@@ -56,6 +153,7 @@ class ContaBancaria(db.Model):
 
 class ContaMovimentacao(db.Model):
     """Lançamento do extrato bancário, importado de um arquivo OFX."""
+    empresa_id = db.Column(db.Integer, db.ForeignKey('empresa.id'), nullable=False, index=True)
     id = db.Column(db.Integer, primary_key=True)
     conta_bancaria_id = db.Column(db.Integer, db.ForeignKey('conta_bancaria.id'), nullable=False)
     conta_bancaria = db.relationship('ContaBancaria')
@@ -74,6 +172,7 @@ class ContaMovimentacao(db.Model):
 
 
 class Transacao(db.Model):
+    empresa_id = db.Column(db.Integer, db.ForeignKey('empresa.id'), nullable=False, index=True)
     id = db.Column(db.Integer, primary_key=True)
     tipo = db.Column(db.String(20), nullable=False)  # 'Receber' ou 'Pagar'
     descricao = db.Column(db.String(100), nullable=False)
@@ -105,6 +204,7 @@ class Transacao(db.Model):
 
 
 class LancamentoRecorrente(db.Model):
+    empresa_id = db.Column(db.Integer, db.ForeignKey('empresa.id'), nullable=False, index=True)
     id = db.Column(db.Integer, primary_key=True)
     tipo = db.Column(db.String(20), nullable=False)
     descricao = db.Column(db.String(100), nullable=False)
@@ -128,17 +228,33 @@ class LancamentoRecorrente(db.Model):
     conta_bancaria = db.relationship('ContaBancaria')
 
 
-class Configuracao(db.Model):
-    """Par chave/valor para as configurações do sistema (certificado digital etc.)."""
+class ConfiguracaoSistema(db.Model):
+    """Par chave/valor que vale para o sistema inteiro, não para uma empresa.
+
+    É onde ficam os ajustes do administrador (token do Asaas, resultado da
+    última verificação de pagamentos). Fica separado da `Configuracao` de
+    propósito: aquela é sempre de uma empresa, e misturar as duas abriria
+    espaço para um cliente enxergar ou sobrescrever ajuste do sistema.
+    """
     id = db.Column(db.Integer, primary_key=True)
-    chave = db.Column(db.String(60), unique=True, nullable=False)
+    chave = db.Column(db.String(60), nullable=False, unique=True)
     valor = db.Column(db.Text, nullable=True)
+
+
+class Configuracao(db.Model):
+    """Par chave/valor para as configurações de UMA empresa (certificado digital etc.)."""
+    empresa_id = db.Column(db.Integer, db.ForeignKey('empresa.id'), nullable=False, index=True)
+    id = db.Column(db.Integer, primary_key=True)
+    chave = db.Column(db.String(60), nullable=False)
+    valor = db.Column(db.Text, nullable=True)
+    __table_args__ = (db.UniqueConstraint('empresa_id', 'chave'),)
 
 
 class NotaServico(db.Model):
     """NFS-e baixada do Ambiente de Dados Nacional (Portal Nacional da NFS-e)."""
+    empresa_id = db.Column(db.Integer, db.ForeignKey('empresa.id'), nullable=False, index=True)
     id = db.Column(db.Integer, primary_key=True)
-    chave_acesso = db.Column(db.String(60), unique=True, nullable=False)
+    chave_acesso = db.Column(db.String(60), nullable=False)
     nsu = db.Column(db.Integer)
     papel = db.Column(db.String(15), nullable=False)  # 'emitida' (a receber) | 'recebida' (a pagar)
     numero = db.Column(db.String(20))
@@ -160,22 +276,28 @@ class NotaServico(db.Model):
     transacao_id = db.Column(db.Integer, db.ForeignKey('transacao.id'), nullable=True)
     transacao = db.relationship('Transacao', backref=db.backref('nota_servico', uselist=False))
 
+    # A mesma nota pode existir para duas empresas (uma emitiu, a outra recebeu),
+    # mas nunca duas vezes dentro da mesma — é o que evita duplicar na sincronização.
+    __table_args__ = (db.UniqueConstraint('empresa_id', 'chave_acesso'),)
+
 
 class NotaServicoEvento(db.Model):
     """Eventos da NFS-e (cancelamentos/substituições) recebidos na distribuição."""
+    empresa_id = db.Column(db.Integer, db.ForeignKey('empresa.id'), nullable=False, index=True)
     id = db.Column(db.Integer, primary_key=True)
     chave_acesso = db.Column(db.String(60), nullable=False)
     nsu = db.Column(db.Integer)
     tipo_evento = db.Column(db.String(10))
     descricao = db.Column(db.String(300))
     dh_evento = db.Column(db.String(40))
-    __table_args__ = (db.UniqueConstraint('chave_acesso', 'tipo_evento', 'nsu'),)
+    __table_args__ = (db.UniqueConstraint('empresa_id', 'chave_acesso', 'tipo_evento', 'nsu'),)
 
 
 class NotaEletronica(db.Model):
     """NF-e distribuída pelo Ambiente Nacional (webservice NFeDistribuicaoDFe)."""
+    empresa_id = db.Column(db.Integer, db.ForeignKey('empresa.id'), nullable=False, index=True)
     id = db.Column(db.Integer, primary_key=True)
-    chave = db.Column(db.String(60), unique=True, nullable=False)
+    chave = db.Column(db.String(60), nullable=False)
     nsu = db.Column(db.String(20))
     tipo_doc = db.Column(db.String(10), nullable=False)  # 'resNFe' (resumo) | 'nfeProc' (completa)
     papel = db.Column(db.String(15), nullable=False)  # 'emitida' (a receber) | 'recebida' (a pagar)
@@ -196,3 +318,5 @@ class NotaEletronica(db.Model):
 
     transacao_id = db.Column(db.Integer, db.ForeignKey('transacao.id'), nullable=True)
     transacao = db.relationship('Transacao', backref=db.backref('nota_eletronica', uselist=False))
+
+    __table_args__ = (db.UniqueConstraint('empresa_id', 'chave'),)

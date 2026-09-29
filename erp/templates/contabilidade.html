@@ -17,6 +17,30 @@
     Identificação usada na mensagem: <strong>{{ empresa }}</strong>.
 </p>
 
+<h3 class="titulo-secao">Seu contador</h3>
+<p class="aviso-cadastro">
+    Informando o e-mail do seu contador, ele passa a acessar seus dados direto
+    no sistema, <strong>somente leitura</strong> e sem você precisar gerar nem
+    enviar arquivo nenhum. Para tirar o acesso, é só apagar o e-mail e salvar.
+</p>
+
+{% if contador_com_acesso %}
+<p class="aviso-cadastro">
+    ✅ <strong>{{ contador_com_acesso.nome }}</strong> ({{ contador_com_acesso.email }})
+    está com acesso de leitura aos seus dados.
+</p>
+{% endif %}
+
+<form action="{{ url_for('contabilidade_contador') }}" method="POST" class="form-inline-bloco">
+    <label>
+        E-mail do contador
+        <input type="email" name="email_contador" value="{{ email_contador }}" maxlength="150"
+               placeholder="contador@escritorio.com.br">
+    </label>
+    <button type="submit">Salvar contador</button>
+</form>
+
+<h3 class="titulo-secao">Enviar por e-mail</h3>
 <form action="{{ url_for('contabilidade') }}" method="GET" class="form-filtro">
     <label>
         De

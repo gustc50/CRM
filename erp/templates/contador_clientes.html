@@ -1,0 +1,45 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2>Meus clientes</h2>
+
+<p class="aviso-cadastro">
+    Você enxerga aqui os clientes que informaram o seu e-mail
+    (<strong>{{ email }}</strong>) na aba Contabilidade do sistema deles.
+    Quem libera o acesso é o próprio cliente — nada aparece sem essa indicação,
+    e o acesso é somente de leitura.
+</p>
+
+<div class="table-scroll">
+<table>
+    <thead>
+        <tr><th>Cliente</th><th>CNPJ</th><th>Situação</th><th>Ação</th></tr>
+    </thead>
+    <tbody>
+        {% for c in clientes %}
+        <tr>
+            <td>{{ c.nome }}</td>
+            <td>{{ formatar_cnpj_cpf(c.cnpj) if c.cnpj else '—' }}</td>
+            <td>
+                {% if c.assinatura_em_dia %}
+                <span class="badge-baixado">Ativo</span>
+                {% else %}
+                <span class="badge-cancelada">Assinatura vencida</span>
+                {% endif %}
+            </td>
+            <td class="acoes">
+                <a href="{{ url_for('contador_abrir', id=c.id) }}" class="btn-acao btn-editar">Abrir</a>
+            </td>
+        </tr>
+        {% else %}
+        <tr>
+            <td colspan="4">
+                Nenhum cliente indicou você ainda. Peça para o cliente abrir a aba
+                <strong>Contabilidade</strong> e informar o e-mail {{ email }}.
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endblock %}

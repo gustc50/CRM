@@ -15,7 +15,7 @@
             </div>
 
             <nav class="menu">
-                {% for item in MENU_LATERAL %}
+                {% for item in menu_do_usuario() %}
                 {% set secao_ativa = request.endpoint in item.ativo_em %}
                 <a href="{{ url_for(item.endpoint) }}" class="menu-item {{ 'ativo' if secao_ativa else '' }}">
                     <span class="menu-icone">{{ item.icone }}</span>
@@ -31,6 +31,32 @@
                 {% endif %}
                 {% endfor %}
             </nav>
+
+            {% set eu = usuario_logado() %}
+            {% if eu %}
+            <div class="usuario-logado">
+                <strong>{{ eu.nome }}</strong>
+                {{ eu.email }}
+                <span class="papel">
+                    {% if eu.eh_admin %}Administrador
+                    {% elif eu.eh_contador %}Contador
+                    {% else %}Cliente{% endif %}
+                </span>
+
+                {% set emp = empresa_atual() %}
+                {% if emp and eu.eh_contador %}
+                <div class="aviso-vencimento">Vendo: {{ emp.nome }}</div>
+                {% elif emp and emp.dias_restantes is not none and emp.dias_restantes <= 7 %}
+                <div class="aviso-vencimento">
+                    {% if emp.dias_restantes < 0 %}Assinatura vencida
+                    {% elif emp.dias_restantes == 0 %}Assinatura vence hoje
+                    {% else %}Assinatura vence em {{ emp.dias_restantes }} dia(s){% endif %}
+                </div>
+                {% endif %}
+
+                <a href="{{ url_for('logout') }}">Sair</a>
+            </div>
+            {% endif %}
         </aside>
 
         <main class="conteudo">

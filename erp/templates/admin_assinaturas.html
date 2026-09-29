@@ -1,0 +1,78 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2>Assinaturas e pagamentos</h2>
+
+<div class="dashboard">
+    <div class="card receber">
+        <h3>Pagos</h3>
+        <h2>{{ pagas }}</h2>
+    </div>
+    <div class="card pagar">
+        <h3>Vencidos</h3>
+        <h2>{{ vencidas }}</h2>
+    </div>
+    <div class="card">
+        <h3>Total de clientes</h3>
+        <h2>{{ total }}</h2>
+    </div>
+</div>
+
+<h3 class="titulo-secao">Conexão com o Asaas</h3>
+<p class="aviso-cadastro">
+    O sistema consulta o Asaas a cada {{ 6 }} horas e credita 30 dias para cada
+    cobrança nova que aparecer como recebida. A mesma cobrança nunca credita
+    duas vezes. Para o sistema saber de quem é cada pagamento, preencha o
+    <strong>ID do cliente no Asaas</strong> (algo como <code>cus_000001</code>)
+    no cadastro de cada cliente.
+</p>
+
+<form action="{{ url_for('admin_asaas_configurar') }}" method="POST" class="form-coluna form-config">
+    <label>
+        Ambiente
+        <select name="ambiente">
+            <option value="sandbox" {{ 'selected' if asaas.ambiente == 'sandbox' else '' }}>Sandbox (testes)</option>
+            <option value="producao" {{ 'selected' if asaas.ambiente == 'producao' else '' }}>Produção</option>
+        </select>
+    </label>
+    <label>
+        Token de acesso {% if asaas.token_salvo %}<small>(já salvo — preencha só para trocar)</small>{% endif %}
+        <input type="password" name="token" autocomplete="new-password"
+               placeholder="{{ '••••••••' if asaas.token_salvo else 'cole aqui o token do Asaas' }}">
+    </label>
+    <div class="form-acoes">
+        <button type="submit">Salvar</button>
+    </div>
+</form>
+
+<form action="{{ url_for('admin_asaas_verificar') }}" method="POST" class="form-inline-bloco">
+    <button type="submit" {{ '' if asaas.token_salvo else 'disabled' }}>Verificar pagamentos agora</button>
+</form>
+
+<p class="nota-grafico">
+    Última verificação: {{ ultima_verificacao or 'ainda não executada' }}.
+    {% if ultimo_resultado %}<br>Resultado: {{ ultimo_resultado }}{% endif %}
+</p>
+
+<h3 class="titulo-secao">Pagamentos registrados</h3>
+<div class="table-scroll">
+<table>
+    <thead>
+        <tr><th>Cliente</th><th>Cobrança (Asaas)</th><th>Pago em</th><th>Valor</th><th>Liberado até</th></tr>
+    </thead>
+    <tbody>
+        {% for p in pagamentos %}
+        <tr>
+            <td>{{ p.empresa.nome if p.empresa else '—' }}</td>
+            <td><small>{{ p.asaas_id }}</small></td>
+            <td>{{ p.pago_em.strftime('%d/%m/%Y') if p.pago_em else '—' }}</td>
+            <td>R$ {{ "%.2f"|format(p.valor or 0) }}</td>
+            <td>{{ p.liberado_ate.strftime('%d/%m/%Y') if p.liberado_ate else '—' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5">Nenhum pagamento registrado ainda.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endblock %}

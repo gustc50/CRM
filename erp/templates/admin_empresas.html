@@ -1,0 +1,71 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2>Clientes</h2>
+
+<h3 class="titulo-secao">Cadastrar novo cliente</h3>
+<p class="aviso-cadastro">
+    Cria a empresa e, junto, o usuário que vai acessá-la. Os dias de cortesia
+    servem para o cliente testar antes do primeiro pagamento — deixe em branco
+    para já nascer bloqueado até pagar.
+</p>
+<form action="{{ url_for('admin_empresa_nova') }}" method="POST">
+    <input type="text" name="nome" placeholder="Nome da empresa" maxlength="150" required>
+    <input type="text" name="cnpj" placeholder="CNPJ (opcional)" maxlength="20">
+    <input type="text" name="nome_usuario" placeholder="Nome do responsável" maxlength="150">
+    <input type="email" name="email" placeholder="E-mail de acesso" maxlength="150" required>
+    <input type="password" name="senha" placeholder="Senha provisória (mín. 8)" minlength="8" required>
+    <input type="number" name="dias_cortesia" placeholder="Dias de cortesia" min="0" max="365">
+    <button type="submit">Criar cliente</button>
+</form>
+
+<div class="table-scroll">
+<table>
+    <thead>
+        <tr>
+            <th>Cliente</th><th>CNPJ</th><th>Assinatura</th>
+            <th>ID no Asaas</th><th>Ação</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for e in empresas %}
+        <tr class="{{ '' if e.assinatura_em_dia else 'atrasado' }}">
+            <td>
+                {{ e.nome }}<br>
+                <small>{{ e.usuarios|map(attribute='email')|join(', ') or 'sem usuário' }}</small>
+            </td>
+            <td>{{ formatar_cnpj_cpf(e.cnpj) if e.cnpj else '—' }}</td>
+            <td>
+                {% if e.assinatura_em_dia %}
+                <span class="badge-baixado">até {{ e.assinatura_ate.strftime('%d/%m/%Y') }}</span>
+                {% else %}
+                <span class="badge-cancelada">bloqueado</span>
+                {% endif %}
+            </td>
+            <td>
+                <form action="{{ url_for('admin_empresa_asaas', id=e.id) }}" method="POST" class="form-inline">
+                    <input type="text" name="asaas_cliente_id" value="{{ e.asaas_cliente_id or '' }}"
+                           placeholder="cus_000..." maxlength="60" size="14">
+                    <button type="submit" class="btn-acao btn-editar">Salvar</button>
+                </form>
+            </td>
+            <td class="acoes">
+                <form action="{{ url_for('admin_empresa_assinatura', id=e.id) }}" method="POST" class="form-inline">
+                    <input type="hidden" name="acao" value="liberar">
+                    <input type="number" name="dias" value="30" min="1" max="365" size="3">
+                    <button type="submit" class="btn-acao btn-concluir">Liberar dias</button>
+                </form>
+                <form action="{{ url_for('admin_empresa_assinatura', id=e.id) }}" method="POST" class="form-inline"
+                      onsubmit="return confirm('Encerrar a assinatura de {{ e.nome }}? O acesso é bloqueado na hora.');">
+                    <input type="hidden" name="acao" value="encerrar">
+                    <button type="submit" class="btn-acao btn-excluir">Encerrar</button>
+                </form>
+            </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5">Nenhum cliente cadastrado ainda.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endblock %}

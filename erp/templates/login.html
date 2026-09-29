@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Entrar — Gestão Financeira</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="tela-login">
+    <div class="caixa-login">
+        <div class="marca">
+            <span class="marca-icone">📒</span>
+            <span class="marca-nome">Gestão<br>Financeira</span>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+            <ul class="flashes">
+                {% for categoria, mensagem in messages %}
+                <li class="{{ categoria }}">{{ mensagem }}</li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+        {% endwith %}
+
+        <form action="{{ url_for('login') }}" method="POST" class="form-coluna">
+            <input type="hidden" name="proximo" value="{{ proximo }}">
+            <label>
+                E-mail
+                <input type="email" name="email" autocomplete="username" required autofocus>
+            </label>
+            <label>
+                Senha
+                <input type="password" name="senha" autocomplete="current-password" required>
+            </label>
+            <div class="form-acoes">
+                <button type="submit">Entrar</button>
+            </div>
+        </form>
+
+        <p class="rodape-login">
+            Esqueceu a senha ou precisa de acesso? Fale com o administrador do sistema.
+        </p>
+    </div>
+</body>
+</html>

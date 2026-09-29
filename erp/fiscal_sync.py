@@ -16,6 +16,7 @@ import time
 from models import (
     Cliente,
     Configuracao,
+    ConfiguracaoSistema,
     Fornecedor,
     NotaEletronica,
     NotaServico,
@@ -61,22 +62,59 @@ def _digitos(valor: str | None) -> str:
 # Configurações (chave/valor no banco)
 # ------------------------------------------------------------------ #
 
-def config_get(chave: str, padrao: str = '') -> str:
-    linha = Configuracao.query.filter_by(chave=chave).first()
+def _empresa_da_vez(empresa_id):
+    """Empresa a usar: a informada, ou a da requisição em andamento.
+
+    A sincronização roda em thread, fora de uma requisição — por isso o
+    `empresa_id` é sempre passado explicitamente por lá. Nas telas, deixar
+    em branco usa a empresa de quem está logado.
+    """
+    if empresa_id is not None:
+        return empresa_id
+    import auth
+    return auth.empresa_atual_id()
+
+
+def config_get(chave: str, padrao: str = '', empresa_id=None) -> str:
+    alvo = _empresa_da_vez(empresa_id)
+    if alvo is None:
+        return padrao
+    linha = Configuracao.query.filter_by(empresa_id=alvo, chave=chave).first()
     return linha.valor if linha and linha.valor is not None else padrao
 
 
-def config_set(chave: str, valor: str | None) -> None:
-    linha = Configuracao.query.filter_by(chave=chave).first()
+def config_set(chave: str, valor: str | None, empresa_id=None) -> None:
+    alvo = _empresa_da_vez(empresa_id)
+    if alvo is None:
+        raise ValueError('Configuração sem empresa definida.')
+    linha = Configuracao.query.filter_by(empresa_id=alvo, chave=chave).first()
     if linha is None:
-        linha = Configuracao(chave=chave)
+        linha = Configuracao(empresa_id=alvo, chave=chave)
         db.session.add(linha)
     linha.valor = valor
     db.session.commit()
 
 
-def certificado_configurado() -> bool:
-    return bool(config_get('cert_caminho') and config_get('cert_senha_cripto'))
+def sistema_get(chave: str, padrao: str = '') -> str:
+    """Ajuste que vale para o sistema todo (não pertence a nenhuma empresa)."""
+    linha = ConfiguracaoSistema.query.filter_by(chave=chave).first()
+    return linha.valor if linha and linha.valor is not None else padrao
+
+
+def sistema_set(chave: str, valor: str | None) -> None:
+    linha = ConfiguracaoSistema.query.filter_by(chave=chave).first()
+    if linha is None:
+        linha = ConfiguracaoSistema(chave=chave)
+        db.session.add(linha)
+    linha.valor = valor
+    db.session.commit()
+
+
+def certificado_configurado(empresa_id=None) -> bool:
+    return bool(
+        config_get('cert_caminho', empresa_id=empresa_id)
+        and config_get('cert_senha_cripto', empresa_id=empresa_id)
+    )
 
 
 # ------------------------------------------------------------------ #
@@ -110,8 +148,12 @@ def classificar_papel_nfe(doc_empresa: str, emitente_doc: str | None) -> str:
 # Geração automática de lançamento a partir de uma nota fiscal
 # ------------------------------------------------------------------ #
 
-def vincular_contraparte(tipo: str, doc: str | None, nome: str | None, endereco_padrao: str | None = None):
+def vincular_contraparte(empresa_id, tipo: str, doc: str | None, nome: str | None,
+                         endereco_padrao: str | None = None):
     """Localiza (pelo CNPJ/CPF) ou cria o fornecedor/cliente da nota.
+
+    A busca é sempre dentro da empresa: o mesmo fornecedor atende vários
+    clientes do sistema, e cada um tem o seu próprio cadastro dele.
 
     Retorna (fornecedor_id, cliente_id) para o lançamento gerado.
     """
@@ -123,9 +165,10 @@ def vincular_contraparte(tipo: str, doc: str | None, nome: str | None, endereco_
     # antigos, normalizados na migração), então dá para consultar direto em vez
     # de trazer a tabela inteira para comparar em Python.
     modelo = Fornecedor if tipo == 'Pagar' else Cliente
-    registro = modelo.query.filter_by(cnpj_cpf=docd).first()
+    registro = modelo.query.filter_by(empresa_id=empresa_id, cnpj_cpf=docd).first()
     if registro is None:
         registro = modelo(
+            empresa_id=empresa_id,
             cnpj_cpf=docd,
             nome=(nome or '')[:150],
             endereco=(endereco_padrao or '(não informado)')[:200],
@@ -154,7 +197,10 @@ def gerar_lancamento_para_nota(nota, tipo: str, contraparte_doc, contraparte_nom
     if not valor or valor <= 0:
         return None, 'A nota não possui valor válido para gerar o lançamento.'
 
-    fornecedor_id, cliente_id = vincular_contraparte(tipo, contraparte_doc, contraparte_nome, endereco_padrao)
+    empresa_id = nota.empresa_id
+    fornecedor_id, cliente_id = vincular_contraparte(
+        empresa_id, tipo, contraparte_doc, contraparte_nome, endereco_padrao
+    )
 
     # Se o fornecedor/cliente já tem categoria e/ou conta bancária padrão
     # cadastradas, o lançamento gerado sozinho já nasce classificado com elas.
@@ -170,6 +216,7 @@ def gerar_lancamento_para_nota(nota, tipo: str, contraparte_doc, contraparte_nom
         conta_bancaria_id = contraparte.conta_bancaria_id
 
     transacao = Transacao(
+        empresa_id=empresa_id,
         tipo=tipo,
         descricao=descricao[:100],
         valor=float(valor),
@@ -196,16 +243,16 @@ def _descricao_nfe(nota, tipo: str) -> str:
     return f"NF-e {chave_num} - {contraparte_nome or nota.emitente_nome or 'sem identificação'}"
 
 
-def gerar_lancamentos_pendentes() -> int:
-    """Gera automaticamente o lançamento de toda nota fiscal ativa que ainda
-    não tem um vinculado. Chamada ao final de cada sincronização e na
-    inicialização do programa (cobre notas já sincronizadas antes desta
-    função existir, e qualquer nota que tenha ficado pendente por algum
-    motivo). Idempotente: nota que já tem lançamento é ignorada.
+def gerar_lancamentos_pendentes(empresa_id) -> int:
+    """Gera automaticamente o lançamento de toda nota fiscal ativa da empresa
+    que ainda não tem um vinculado. Chamada ao final de cada sincronização.
+    Idempotente: nota que já tem lançamento é ignorada.
     """
     total = 0
 
-    for nota in NotaServico.query.filter_by(transacao_id=None, situacao='ATIVA').all():
+    for nota in NotaServico.query.filter_by(
+        empresa_id=empresa_id, transacao_id=None, situacao='ATIVA'
+    ).all():
         tipo = 'Receber' if nota.papel == 'emitida' else 'Pagar'
         contraparte_doc = nota.tomador_doc if tipo == 'Receber' else nota.prestador_doc
         contraparte_nome = nota.tomador_nome if tipo == 'Receber' else nota.prestador_nome
@@ -219,6 +266,7 @@ def gerar_lancamentos_pendentes() -> int:
     # cSitNFe: 1 = autorizada, 2 = denegada, 3 = cancelada. Denegada e cancelada
     # não viram lançamento — nenhuma das duas gera obrigação de pagamento.
     for nota in NotaEletronica.query.filter(
+        NotaEletronica.empresa_id == empresa_id,
         NotaEletronica.transacao_id.is_(None),
         db.or_(NotaEletronica.situacao.is_(None), ~NotaEletronica.situacao.in_(('2', '3'))),
     ).all():
@@ -251,20 +299,22 @@ class SyncFiscal:
         self.caminho_chave = caminho_chave_fernet
         self.ca_extra_path = ca_extra_path
         self._lock = threading.Lock()
-        self._status: dict[str, dict] = {}
+        # Estado por (empresa, serviço): cada cliente sincroniza por conta
+        # própria, e o andamento de um não pode aparecer na tela do outro.
+        self._status: dict[tuple[int, str], dict] = {}
 
     # -------------------------- infra ------------------------------- #
 
-    def status(self, qual: str) -> dict:
+    def status(self, qual: str, empresa_id) -> dict:
         with self._lock:
-            return dict(self._status.get(qual, {'estado': 'ocioso'}))
+            return dict(self._status.get((empresa_id, qual), {'estado': 'ocioso'}))
 
-    def em_execucao(self, qual: str) -> bool:
-        return self.status(qual).get('estado') == 'executando'
+    def em_execucao(self, qual: str, empresa_id) -> bool:
+        return self.status(qual, empresa_id).get('estado') == 'executando'
 
-    def _atualizar(self, qual: str, **campos) -> None:
+    def _atualizar(self, qual: str, empresa_id, **campos) -> None:
         with self._lock:
-            self._status.setdefault(qual, {}).update(campos)
+            self._status.setdefault((empresa_id, qual), {}).update(campos)
 
     def _verify(self):
         """Bundle de CA extra (cadeia ICP-Brasil ou CA de testes), se existir."""
@@ -272,9 +322,9 @@ class SyncFiscal:
             return self.ca_extra_path
         return True
 
-    def _credenciais(self):
-        caminho = config_get('cert_caminho')
-        senha_cripto = config_get('cert_senha_cripto')
+    def _credenciais(self, empresa_id):
+        caminho = config_get('cert_caminho', empresa_id=empresa_id)
+        senha_cripto = config_get('cert_senha_cripto', empresa_id=empresa_id)
         if not caminho or not senha_cripto:
             raise fiscal_certificado.CertificadoInvalido(
                 'Certificado digital não configurado. Informe o caminho e a senha na aba Configurações.'
@@ -282,39 +332,39 @@ class SyncFiscal:
         senha = fiscal_certificado.descriptografar_senha(senha_cripto, self.caminho_chave)
         return caminho, senha
 
-    def credenciais(self):
+    def credenciais(self, empresa_id):
         """(caminho do .pfx, senha em claro) — usado também pela manifestação."""
-        return self._credenciais()
+        return self._credenciais(empresa_id)
 
     def verify(self):
         """Bundle de CA a usar nas conexões (mesmo critério da sincronização)."""
         return self._verify()
 
-    def iniciar(self, qual: str) -> bool:
-        if qual not in ('nfse', 'nfe'):
+    def iniciar(self, qual: str, empresa_id) -> bool:
+        if qual not in ('nfse', 'nfe') or empresa_id is None:
             return False
         with self._lock:
-            if self._status.get(qual, {}).get('estado') == 'executando':
+            if self._status.get((empresa_id, qual), {}).get('estado') == 'executando':
                 return False
-            self._status[qual] = {
+            self._status[(empresa_id, qual)] = {
                 'estado': 'executando',
                 'mensagem': 'Conectando...',
                 'novos': 0,
                 'iniciado_em': _agora(),
             }
         alvo = self._executar_nfse if qual == 'nfse' else self._executar_nfe
-        threading.Thread(target=alvo, daemon=True).start()
+        threading.Thread(target=alvo, args=(empresa_id,), daemon=True).start()
         return True
 
     # -------------------------- NFS-e ------------------------------- #
 
-    def _executar_nfse(self) -> None:
+    def _executar_nfse(self, empresa_id) -> None:
         with self.app.app_context():
             try:
-                caminho, senha = self._credenciais()
-                doc_empresa = _digitos(config_get('cert_documento'))
-                ambiente = config_get('nfse_ambiente', 'producao')
-                ultimo_nsu = int(config_get('nfse_ultimo_nsu', '0') or 0)
+                caminho, senha = self._credenciais(empresa_id)
+                doc_empresa = _digitos(config_get('cert_documento', empresa_id=empresa_id))
+                ambiente = config_get('nfse_ambiente', 'producao', empresa_id=empresa_id)
+                ultimo_nsu = int(config_get('nfse_ultimo_nsu', '0', empresa_id=empresa_id) or 0)
 
                 notas_novas = 0
                 eventos_novos = 0
@@ -329,12 +379,12 @@ class SyncFiscal:
                     )
                     with cliente:
                         while True:
-                            self._atualizar('nfse', mensagem=f'Consultando documentos a partir do NSU {ultimo_nsu}...')
+                            self._atualizar('nfse', empresa_id, mensagem=f'Consultando documentos a partir do NSU {ultimo_nsu}...')
                             resposta = cliente.distribuir_dfe(ultimo_nsu)
                             if not resposta.documentos:
                                 break
 
-                            n_notas, n_eventos = self._gravar_lote_nfse(doc_empresa, resposta.documentos)
+                            n_notas, n_eventos = self._gravar_lote_nfse(empresa_id, doc_empresa, resposta.documentos)
                             notas_novas += n_notas
                             eventos_novos += n_eventos
 
@@ -344,17 +394,17 @@ class SyncFiscal:
                             if maior_nsu <= ultimo_nsu:
                                 break  # proteção contra loop sem avanço
                             ultimo_nsu = maior_nsu
-                            config_set('nfse_ultimo_nsu', str(ultimo_nsu))
-                            self._atualizar('nfse', novos=notas_novas)
+                            config_set('nfse_ultimo_nsu', str(ultimo_nsu), empresa_id=empresa_id)
+                            self._atualizar('nfse', empresa_id, novos=notas_novas)
 
                             if not resposta.tem_mais:
                                 break
                             time.sleep(PAUSA_ENTRE_LOTES)
 
-                self._aplicar_eventos_nfse()
-                lancamentos_gerados = gerar_lancamentos_pendentes()
-                config_set('nfse_ultimo_nsu', str(ultimo_nsu))
-                config_set('nfse_ultima_sync', _agora())
+                self._aplicar_eventos_nfse(empresa_id)
+                lancamentos_gerados = gerar_lancamentos_pendentes(empresa_id)
+                config_set('nfse_ultimo_nsu', str(ultimo_nsu), empresa_id=empresa_id)
+                config_set('nfse_ultima_sync', _agora(), empresa_id=empresa_id)
 
                 mensagem = (
                     f'Sincronização concluída: {notas_novas} nota(s) e '
@@ -362,16 +412,16 @@ class SyncFiscal:
                     + (f' ({lancamentos_gerados} lançamento(s) gerado(s) automaticamente)' if lancamentos_gerados else '')
                     + f'. Último NSU: {ultimo_nsu}.'
                 )
-                config_set('nfse_ultimo_status', mensagem)
-                self._atualizar('nfse', estado='concluido', mensagem=mensagem, novos=notas_novas)
+                config_set('nfse_ultimo_status', mensagem, empresa_id=empresa_id)
+                self._atualizar('nfse', empresa_id, estado='concluido', mensagem=mensagem, novos=notas_novas)
             except (fiscal_nfse.AdnErro, fiscal_certificado.CertificadoInvalido) as exc:
-                config_set('nfse_ultimo_status', f'Erro: {exc}')
-                self._atualizar('nfse', estado='erro', mensagem=str(exc))
+                config_set('nfse_ultimo_status', f'Erro: {exc}', empresa_id=empresa_id)
+                self._atualizar('nfse', empresa_id, estado='erro', mensagem=str(exc))
             except Exception as exc:  # superfície única de erro para a UI
-                config_set('nfse_ultimo_status', f'Erro inesperado: {exc}')
-                self._atualizar('nfse', estado='erro', mensagem=f'Erro inesperado na sincronização: {exc}')
+                config_set('nfse_ultimo_status', f'Erro inesperado: {exc}', empresa_id=empresa_id)
+                self._atualizar('nfse', empresa_id, estado='erro', mensagem=f'Erro inesperado na sincronização: {exc}')
 
-    def _gravar_lote_nfse(self, doc_empresa: str, documentos) -> tuple[int, int]:
+    def _gravar_lote_nfse(self, empresa_id, doc_empresa: str, documentos) -> tuple[int, int]:
         notas, eventos = 0, 0
         for doc in documentos:
             tipo = doc.tipo_documento or ''
@@ -381,15 +431,15 @@ class SyncFiscal:
                 except Exception:
                     continue
             if tipo == 'NFSE':
-                if self._gravar_nota_nfse(doc_empresa, doc):
+                if self._gravar_nota_nfse(empresa_id, doc_empresa, doc):
                     notas += 1
             elif tipo == 'EVENTO':
-                if self._gravar_evento_nfse(doc):
+                if self._gravar_evento_nfse(empresa_id, doc):
                     eventos += 1
         db.session.commit()
         return notas, eventos
 
-    def _gravar_nota_nfse(self, doc_empresa: str, doc) -> bool:
+    def _gravar_nota_nfse(self, empresa_id, doc_empresa: str, doc) -> bool:
         try:
             extraida = fiscal_nfse.parse_nfse(doc.xml_bytes)
         except Exception:
@@ -398,10 +448,10 @@ class SyncFiscal:
         if not chave:
             return False
 
-        registro = NotaServico.query.filter_by(chave_acesso=chave).first()
+        registro = NotaServico.query.filter_by(empresa_id=empresa_id, chave_acesso=chave).first()
         nova = registro is None
         if nova:
-            registro = NotaServico(chave_acesso=chave, situacao='ATIVA')
+            registro = NotaServico(empresa_id=empresa_id, chave_acesso=chave, situacao='ATIVA')
             db.session.add(registro)
 
         registro.nsu = doc.nsu
@@ -423,7 +473,7 @@ class SyncFiscal:
         return nova
 
     @staticmethod
-    def _gravar_evento_nfse(doc) -> bool:
+    def _gravar_evento_nfse(empresa_id, doc) -> bool:
         try:
             evento = fiscal_nfse.parse_evento(doc.xml_bytes)
         except Exception:
@@ -432,11 +482,12 @@ class SyncFiscal:
         if not chave:
             return False
         existe = NotaServicoEvento.query.filter_by(
-            chave_acesso=chave, tipo_evento=evento.tipo_evento, nsu=doc.nsu
+            empresa_id=empresa_id, chave_acesso=chave, tipo_evento=evento.tipo_evento, nsu=doc.nsu
         ).first()
         if existe:
             return False
         db.session.add(NotaServicoEvento(
+            empresa_id=empresa_id,
             chave_acesso=chave,
             nsu=doc.nsu,
             tipo_evento=evento.tipo_evento,
@@ -446,27 +497,27 @@ class SyncFiscal:
         return True
 
     @staticmethod
-    def _aplicar_eventos_nfse() -> None:
+    def _aplicar_eventos_nfse(empresa_id) -> None:
         """Recalcula a situação das notas com base nos eventos recebidos."""
         situacoes: dict[str, str] = {}
-        for evento in NotaServicoEvento.query.all():
+        for evento in NotaServicoEvento.query.filter_by(empresa_id=empresa_id).all():
             situacao = fiscal_nfse.evento_cancela(evento.tipo_evento, evento.descricao)
             if situacao:
                 situacoes[evento.chave_acesso] = situacao
         for chave, situacao in situacoes.items():
-            NotaServico.query.filter_by(chave_acesso=chave).update({'situacao': situacao})
+            NotaServico.query.filter_by(empresa_id=empresa_id, chave_acesso=chave).update({'situacao': situacao})
         db.session.commit()
 
     # -------------------------- NF-e -------------------------------- #
 
     @staticmethod
-    def nfe_em_dia() -> bool:
+    def nfe_em_dia(empresa_id) -> bool:
         """True quando o cursor já alcançou o maior NSU que a SEFAZ tem."""
-        ultimo = fiscal_nfe.nsu_para_int(config_get('nfe_ultimo_nsu'))
-        maximo = fiscal_nfe.nsu_para_int(config_get('nfe_max_nsu'))
+        ultimo = fiscal_nfe.nsu_para_int(config_get('nfe_ultimo_nsu', empresa_id=empresa_id))
+        maximo = fiscal_nfe.nsu_para_int(config_get('nfe_max_nsu', empresa_id=empresa_id))
         return ultimo >= maximo
 
-    def nfe_minutos_de_espera(self) -> int:
+    def nfe_minutos_de_espera(self, empresa_id) -> int:
         """Minutos até poder consultar a SEFAZ de novo (0 = liberado).
 
         Vale sempre para o 656 (consumo indevido). Para o 137 só vale quando o
@@ -474,11 +525,11 @@ class SyncFiscal:
         ultNSU < maxNSU ainda faltam documentos, e consultar de novo é
         exatamente o que a SEFAZ espera — travar aí deixaria notas para trás.
         """
-        cstat = config_get('nfe_ultimo_cstat')
-        quando = config_get('nfe_ultima_consulta_em')
+        cstat = config_get('nfe_ultimo_cstat', empresa_id=empresa_id)
+        quando = config_get('nfe_ultima_consulta_em', empresa_id=empresa_id)
         if cstat not in ('137', '656') or not quando:
             return 0
-        if cstat == '137' and not self.nfe_em_dia():
+        if cstat == '137' and not self.nfe_em_dia(empresa_id):
             return 0
         try:
             anterior = dt.datetime.fromisoformat(quando)
@@ -488,20 +539,20 @@ class SyncFiscal:
         segundos = falta.total_seconds()
         return int(segundos // 60) + 1 if segundos > 0 else 0
 
-    def _executar_nfe(self) -> None:
+    def _executar_nfe(self, empresa_id) -> None:
         with self.app.app_context():
             try:
-                caminho, senha = self._credenciais()
-                doc_empresa = _digitos(config_get('cert_documento'))
-                ambiente = config_get('nfe_ambiente', 'producao')
-                uf_autor = config_get('nfe_uf_autor', '35')
-                ult_nsu = config_get('nfe_ultimo_nsu', '000000000000000')
+                caminho, senha = self._credenciais(empresa_id)
+                doc_empresa = _digitos(config_get('cert_documento', empresa_id=empresa_id))
+                ambiente = config_get('nfe_ambiente', 'producao', empresa_id=empresa_id)
+                uf_autor = config_get('nfe_uf_autor', '35', empresa_id=empresa_id)
+                ult_nsu = config_get('nfe_ultimo_nsu', '000000000000000', empresa_id=empresa_id)
 
                 novos = 0
                 eventos = 0
                 cstat = ''
                 xmotivo = ''
-                max_nsu = config_get('nfe_max_nsu', '0')
+                max_nsu = config_get('nfe_max_nsu', '0', empresa_id=empresa_id)
 
                 with fiscal_certificado.CertificadoContext(caminho, senha) as ctx:
                     if ctx.documento and doc_empresa and ctx.documento != doc_empresa:
@@ -511,7 +562,7 @@ class SyncFiscal:
                         )
                     for _ in range(NFE_MAX_LOTES):
                         nsu_anterior = fiscal_nfe.nsu_para_int(ult_nsu)
-                        self._atualizar('nfe', mensagem=f'Consultando a SEFAZ a partir do NSU {nsu_anterior}...')
+                        self._atualizar('nfe', empresa_id, mensagem=f'Consultando a SEFAZ a partir do NSU {nsu_anterior}...')
                         resultado = fiscal_nfe.consultar_distnsu(
                             cnpj=doc_empresa,
                             uf_autor=uf_autor,
@@ -524,15 +575,15 @@ class SyncFiscal:
                         cstat = resultado['cstat']
                         xmotivo = resultado['xmotivo']
 
-                        n_novos, n_eventos = self._gravar_lote_nfe(doc_empresa, resultado['documentos'])
+                        n_novos, n_eventos = self._gravar_lote_nfe(empresa_id, doc_empresa, resultado['documentos'])
                         novos += n_novos
                         eventos += n_eventos
 
                         ult_nsu = resultado['ult_nsu']
                         max_nsu = resultado['max_nsu']
-                        config_set('nfe_ultimo_nsu', ult_nsu)
-                        config_set('nfe_max_nsu', max_nsu)
-                        self._atualizar('nfe', novos=novos)
+                        config_set('nfe_ultimo_nsu', ult_nsu, empresa_id=empresa_id)
+                        config_set('nfe_max_nsu', max_nsu, empresa_id=empresa_id)
+                        self._atualizar('nfe', empresa_id, novos=novos)
 
                         # cStat 137 NÃO significa "está tudo em dia": a SEFAZ
                         # varre uma janela de NSUs por consulta e responde 137
@@ -546,10 +597,10 @@ class SyncFiscal:
                             break  # proteção contra loop sem avanço do cursor
                         time.sleep(PAUSA_ENTRE_LOTES)
 
-                lancamentos_gerados = gerar_lancamentos_pendentes()
-                config_set('nfe_ultimo_cstat', cstat)
-                config_set('nfe_ultima_consulta_em', dt.datetime.now().isoformat())
-                config_set('nfe_ultima_sync', _agora())
+                lancamentos_gerados = gerar_lancamentos_pendentes(empresa_id)
+                config_set('nfe_ultimo_cstat', cstat, empresa_id=empresa_id)
+                config_set('nfe_ultima_consulta_em', dt.datetime.now().isoformat(), empresa_id=empresa_id)
+                config_set('nfe_ultima_sync', _agora(), empresa_id=empresa_id)
 
                 nsu_atual = fiscal_nfe.nsu_para_int(ult_nsu)
                 nsu_maximo = fiscal_nfe.nsu_para_int(max_nsu)
@@ -570,11 +621,11 @@ class SyncFiscal:
                         ' guarda os últimos ~90 dias)'
                     )
                 mensagem += f'. SEFAZ: [{cstat}] {xmotivo}. Ambiente: {ambiente}.'
-                config_set('nfe_ultimo_status', mensagem)
-                self._atualizar('nfe', estado='concluido', mensagem=mensagem, novos=novos)
+                config_set('nfe_ultimo_status', mensagem, empresa_id=empresa_id)
+                self._atualizar('nfe', empresa_id, estado='concluido', mensagem=mensagem, novos=novos)
             except fiscal_nfe.ErroSefaz as exc:
-                config_set('nfe_ultimo_cstat', exc.cstat)
-                config_set('nfe_ultima_consulta_em', dt.datetime.now().isoformat())
+                config_set('nfe_ultimo_cstat', exc.cstat, empresa_id=empresa_id)
+                config_set('nfe_ultima_consulta_em', dt.datetime.now().isoformat(), empresa_id=empresa_id)
                 if exc.cstat == '656':
                     mensagem = (
                         'A SEFAZ bloqueou temporariamente novas consultas deste CNPJ '
@@ -583,16 +634,16 @@ class SyncFiscal:
                     )
                 else:
                     mensagem = f'SEFAZ rejeitou: [{exc.cstat}] {exc.xmotivo}'
-                config_set('nfe_ultimo_status', mensagem)
-                self._atualizar('nfe', estado='erro', mensagem=mensagem)
+                config_set('nfe_ultimo_status', mensagem, empresa_id=empresa_id)
+                self._atualizar('nfe', empresa_id, estado='erro', mensagem=mensagem)
             except fiscal_certificado.CertificadoInvalido as exc:
-                config_set('nfe_ultimo_status', f'Erro: {exc}')
-                self._atualizar('nfe', estado='erro', mensagem=str(exc))
+                config_set('nfe_ultimo_status', f'Erro: {exc}', empresa_id=empresa_id)
+                self._atualizar('nfe', empresa_id, estado='erro', mensagem=str(exc))
             except Exception as exc:
-                config_set('nfe_ultimo_status', f'Erro inesperado: {exc}')
-                self._atualizar('nfe', estado='erro', mensagem=f'Erro inesperado na sincronização: {exc}')
+                config_set('nfe_ultimo_status', f'Erro inesperado: {exc}', empresa_id=empresa_id)
+                self._atualizar('nfe', empresa_id, estado='erro', mensagem=f'Erro inesperado na sincronização: {exc}')
 
-    def _gravar_lote_nfe(self, doc_empresa: str, documentos) -> tuple[int, int]:
+    def _gravar_lote_nfe(self, empresa_id, doc_empresa: str, documentos) -> tuple[int, int]:
         novos, eventos = 0, 0
         for doc in documentos:
             if doc['tipo'] == 'resNFe':
@@ -604,21 +655,21 @@ class SyncFiscal:
                 continue
             else:
                 continue
-            if self._gravar_nota_nfe(doc_empresa, doc, dados):
+            if self._gravar_nota_nfe(empresa_id, doc_empresa, doc, dados):
                 novos += 1
         db.session.commit()
         return novos, eventos
 
     @staticmethod
-    def _gravar_nota_nfe(doc_empresa: str, doc, dados) -> bool:
+    def _gravar_nota_nfe(empresa_id, doc_empresa: str, doc, dados) -> bool:
         chave = dados.get('chave_nfe')
         if not chave:
             return False
 
-        registro = NotaEletronica.query.filter_by(chave=chave).first()
+        registro = NotaEletronica.query.filter_by(empresa_id=empresa_id, chave=chave).first()
         nova = registro is None
         if nova:
-            registro = NotaEletronica(chave=chave)
+            registro = NotaEletronica(empresa_id=empresa_id, chave=chave)
             db.session.add(registro)
         elif registro.tipo_doc == 'nfeProc' and doc['tipo'] == 'resNFe':
             # A completa já está salva: o resumo não acrescenta nada.

@@ -10,3 +10,4 @@ backups/
 certificados/
 .chave_secreta
 ca_extra.pem
+.chave_sessao

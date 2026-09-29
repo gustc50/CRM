@@ -1,0 +1,82 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2>Painel do administrador</h2>
+
+<div class="dashboard">
+    <div class="card receber">
+        <h3>Clientes pagos</h3>
+        <h2>{{ pagas }}</h2>
+        <small>de {{ total }} cadastrado(s)</small>
+    </div>
+    <div class="card pagar">
+        <h3>Clientes vencidos</h3>
+        <h2>{{ vencidas }}</h2>
+        <small>sem acesso até o próximo pagamento</small>
+    </div>
+    <div class="card">
+        <h3>Usuários ativos</h3>
+        <h2>{{ usuarios_ativos }}</h2>
+        {% if usuarios_bloqueados %}<small>{{ usuarios_bloqueados }} bloqueado(s)</small>{% endif %}
+    </div>
+</div>
+
+{% if vencendo %}
+<p class="aviso-cadastro">
+    ⚠ {{ vencendo|length }} cliente(s) com assinatura vencendo nos próximos 7 dias:
+    {% for e in vencendo %}<strong>{{ e.nome }}</strong> ({{ e.dias_restantes }}d){% if not loop.last %}, {% endif %}{% endfor %}
+</p>
+{% endif %}
+
+<h3 class="titulo-secao">Situação dos clientes</h3>
+<div class="table-scroll">
+<table>
+    <thead>
+        <tr><th>Cliente</th><th>CNPJ</th><th>Assinatura</th><th>Situação</th><th>Usuários</th></tr>
+    </thead>
+    <tbody>
+        {% for e in empresas %}
+        <tr class="{{ '' if e.assinatura_em_dia else 'atrasado' }}">
+            <td>{{ e.nome }}</td>
+            <td>{{ formatar_cnpj_cpf(e.cnpj) if e.cnpj else '—' }}</td>
+            <td>{{ e.assinatura_ate.strftime('%d/%m/%Y') if e.assinatura_ate else '—' }}</td>
+            <td>
+                {% if e.assinatura_em_dia %}
+                <span class="badge-baixado">Em dia ({{ e.dias_restantes }}d)</span>
+                {% else %}
+                <span class="badge-cancelada">Bloqueado</span>
+                {% endif %}
+            </td>
+            <td>{{ e.usuarios|length }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5">Nenhum cliente cadastrado ainda.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
+<h3 class="titulo-secao">Últimos pagamentos confirmados</h3>
+<p class="nota-grafico">
+    Última verificação no Asaas: {{ ultima_verificacao or 'ainda não executada' }}.
+</p>
+<div class="table-scroll">
+<table>
+    <thead>
+        <tr><th>Cliente</th><th>Pago em</th><th>Valor</th><th>Liberado até</th></tr>
+    </thead>
+    <tbody>
+        {% for p in ultimos_pagamentos %}
+        <tr>
+            <td>{{ p.empresa.nome if p.empresa else '—' }}</td>
+            <td>{{ p.pago_em.strftime('%d/%m/%Y') if p.pago_em else '—' }}</td>
+            <td>R$ {{ "%.2f"|format(p.valor or 0) }}</td>
+            <td>{{ p.liberado_ate.strftime('%d/%m/%Y') if p.liberado_ate else '—' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4">Nenhum pagamento registrado ainda.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endblock %}
