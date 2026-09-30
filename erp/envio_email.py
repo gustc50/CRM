@@ -36,8 +36,14 @@ PROVEDORES_SMTP = {
         'servidor': 'smtp-relay.brevo.com',
         'porta': 587,
         'seguranca': 'tls',
-        'aviso': 'Plano gratuito com 300 e-mails por dia. O usuário e a senha do SMTP '
-                 'ficam no painel do Brevo, em SMTP & API (não é a senha do site).',
+        'aviso': 'Plano gratuito com 300 e-mails por dia. No painel do Brevo, abra '
+                 '"SMTP & API" → aba "SMTP": copie o valor do campo Login (costuma '
+                 'ser algo como 8a1b2c001@smtp-brevo.com, NÃO o e-mail com que você '
+                 'entra no site) e gere uma chave SMTP para usar como senha. '
+                 'O e-mail remetente precisa estar cadastrado e confirmado em '
+                 '"Remetentes e IPs" — senão o Brevo recusa o envio.',
+        'dica_usuario': 'Login da aba SMTP (ex.: 8a1b2c001@smtp-brevo.com)',
+        'dica_senha': 'Chave SMTP gerada no painel',
     },
     'zoho': {
         'nome': 'Zoho Mail',
@@ -102,6 +108,13 @@ def enviar(servidor, porta, seguranca, usuario, senha, remetente, remetente_nome
                 conexao.login(usuario, senha or '')
             conexao.send_message(mensagem)
     except smtplib.SMTPAuthenticationError as exc:
+        if 'brevo' in (servidor or '').lower() or 'sendinblue' in (servidor or '').lower():
+            raise ErroEnvio(
+                'O Brevo recusou o usuário/senha. Confira em "SMTP & API" → aba "SMTP": '
+                'o usuário é o valor do campo Login (algo como 8a1b2c001@smtp-brevo.com), '
+                'não o e-mail com que você entra no site, e a senha é a chave SMTP '
+                f'gerada ali. (resposta do servidor: {exc.smtp_code})'
+            ) from exc
         raise ErroEnvio(
             'O servidor recusou o usuário/senha. Em Gmail, Outlook e Zoho normalmente é '
             'preciso usar uma "senha de aplicativo", e não a senha da conta. '
@@ -110,6 +123,12 @@ def enviar(servidor, porta, seguranca, usuario, senha, remetente, remetente_nome
     except smtplib.SMTPRecipientsRefused as exc:
         raise ErroEnvio(f'O servidor recusou o destinatário {destinatario}.') from exc
     except smtplib.SMTPSenderRefused as exc:
+        if 'brevo' in (servidor or '').lower() or 'sendinblue' in (servidor or '').lower():
+            raise ErroEnvio(
+                f'O Brevo recusou o remetente {remetente}. Cadastre esse endereço em '
+                '"Remetentes, domínios e IPs dedicados" no painel do Brevo e confirme '
+                'pelo e-mail que eles enviam — só depois disso ele aceita enviar.'
+            ) from exc
         raise ErroEnvio(
             f'O servidor recusou o remetente {remetente}. Ele costuma exigir que o remetente '
             'seja a mesma conta usada para autenticar.'

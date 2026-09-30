@@ -868,8 +868,8 @@ deixou de aparecer para o contador, já que é ação do cliente.
 ### E-mails automáticos
 
 O sistema ganhou uma **conta SMTP própria**, configurada pelo admin em
-*Assinaturas* e separada do SMTP de cada empresa (aquele serve para o cliente
-mandar documentos ao contador dele). Com ela o serviço manda:
+*⚙ Configurações* e separada do SMTP de cada empresa (aquele serve para o
+cliente mandar documentos ao contador dele). Com ela o serviço manda:
 
 - **boas-vindas** a quem acabou de criar conta;
 - **pagamento confirmado**, quando o acesso é liberado;
@@ -934,6 +934,53 @@ empresa devolvendo 404, rotina diária, download do pacote pelos dois papéis,
 primeiros passos sumindo quando completos, aviso de certificado nos três
 estados e as páginas de erro. As telas foram conferidas em captura no
 computador e no celular.
+
+## Décima quinta rodada: aba de Configurações do administrador
+
+Os ajustes do sistema estavam no fim da tela de Assinaturas, misturados com o
+token do Asaas e os valores da mensalidade — difíceis de achar. Agora o
+administrador tem uma aba **⚙ Configurações** só dele, com o e-mail do sistema
+em primeiro plano. Assinaturas ficou só com o que é dinheiro.
+
+### Configurando o Brevo (passo a passo)
+
+1. Entre como administrador e abra **⚙ Configurações**.
+2. Em *Provedor*, escolha **Brevo (ex-Sendinblue)** — servidor, porta e
+   segurança se preenchem sozinhos (`smtp-relay.brevo.com`, 587, STARTTLS).
+3. No painel do Brevo, vá em **SMTP & API → aba SMTP**:
+   - copie o valor do campo **Login** — costuma ser algo como
+     `8a1b2c001@smtp-brevo.com`, e **não** é o e-mail com que você entra no
+     site. Esse é o erro mais comum;
+   - gere uma **chave SMTP** e use como senha.
+4. Preencha o **e-mail remetente**. Ele precisa estar cadastrado e confirmado
+   em *Remetentes, domínios e IPs* no Brevo, senão o envio é recusado.
+5. Preencha o **endereço do sistema** (`https://seudominio.com.br`): é o link
+   que aparece dentro dos e-mails.
+6. Salve e use **Enviar e-mail de teste**. É ele que diz se as credenciais
+   valem — e, quando o Brevo recusa, o recado já explica qual dos dois casos
+   aconteceu (credencial errada ou remetente não confirmado).
+
+O plano gratuito do Brevo dá 300 e-mails por dia, o que cobre bem boas-vindas,
+confirmações e avisos de vencimento.
+
+### O que mais mudou
+
+- O **WhatsApp do suporte** saiu de Assinaturas e ganhou seção própria, com o
+  número exibido já formatado.
+- A tela mostra em três cartões se o e-mail está configurado, qual o contato
+  do suporte e quando a rotina diária rodou pela última vez.
+- O **e-mail de teste** passou a aceitar o destinatário, em vez de ir sempre
+  para o próprio admin.
+- Escolher o provedor troca as instruções e as dicas dos campos: cada um exige
+  uma coisa diferente (senha de aplicativo, chave SMTP).
+
+Testado com um servidor SMTP de mentira que exige autenticação como o Brevo:
+33 conferências cobrindo o preenchimento automático, a chave guardada
+criptografada e nunca devolvida à tela, o envio de teste chegando ao
+destinatário certo, os recados específicos do Brevo para credencial errada e
+remetente recusado, as boas-vindas e o aviso de vencimento saindo por essa
+conta sem repetir no mesmo vencimento, e o sistema continuando a funcionar com
+o SMTP vazio.
 
 ## Limitações conhecidas (fora do escopo desta revisão)
 

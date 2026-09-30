@@ -1,0 +1,171 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<h2>Configurações do sistema</h2>
+
+<div class="dashboard">
+    <div class="card {{ '' if smtp.servidor else 'pagar' }}">
+        <h3>E-mail do sistema</h3>
+        <h2 class="valor-texto">{{ 'Configurado' if smtp.servidor else 'Não configurado' }}</h2>
+        <small>{{ smtp.remetente or 'nenhum aviso é enviado sem isto' }}</small>
+    </div>
+    <div class="card">
+        <h3>Suporte</h3>
+        <h2 class="valor-texto">{{ formatar_telefone(suporte_whatsapp) if suporte_whatsapp else '—' }}</h2>
+        <small>WhatsApp mostrado a quem está bloqueado</small>
+    </div>
+    <div class="card">
+        <h3>Rotina diária</h3>
+        <h2 class="valor-texto">{{ rotina_execucao or 'ainda não rodou' }}</h2>
+        <small>{{ rotina_resultado or 'recorrentes, backup e notas fiscais' }}</small>
+    </div>
+</div>
+
+<h3 class="titulo-secao">E-mail do sistema (SMTP)</h3>
+<p class="aviso-cadastro">
+    É por esta conta que o sistema fala com os clientes: boas-vindas,
+    confirmação de pagamento, aviso de vencimento em {{ dias_aviso }} dias e
+    aviso de bloqueio. É <strong>separada</strong> do e-mail que cada cliente
+    configura para mandar documentos ao contador dele. Enquanto estiver vazia,
+    nenhum aviso sai — o resto do sistema funciona igual.
+</p>
+
+<p class="aviso-cadastro" id="aviso-provedor">{{ aviso_provedor }}</p>
+
+<form action="{{ url_for('admin_smtp') }}" method="POST" class="form-coluna form-config"
+      id="form-smtp">
+    <label>
+        Provedor
+        <select name="provedor" id="provedor">
+            {% for chave, dados in provedores.items() %}
+            <option value="{{ chave }}"
+                    data-servidor="{{ dados.servidor or '' }}"
+                    data-porta="{{ dados.porta or '' }}"
+                    data-seguranca="{{ dados.seguranca or 'tls' }}"
+                    data-aviso="{{ dados.aviso or '' }}"
+                    data-dica-usuario="{{ dados.dica_usuario or '' }}"
+                    data-dica-senha="{{ dados.dica_senha or '' }}"
+                    {{ 'selected' if smtp.provedor == chave else '' }}>{{ dados.nome }}</option>
+            {% endfor %}
+        </select>
+    </label>
+
+    <div class="linha-campos">
+        <label style="flex: 2;">
+            Servidor
+            <input type="text" name="servidor" id="servidor" maxlength="120"
+                   value="{{ smtp.servidor }}">
+        </label>
+        <label>
+            Porta
+            <input type="text" name="porta" id="porta" maxlength="6" value="{{ smtp.porta }}">
+        </label>
+        <label>
+            Segurança
+            <select name="seguranca" id="seguranca">
+                {% for valor, rotulo in segurancas %}
+                <option value="{{ valor }}" {{ 'selected' if smtp.seguranca == valor else '' }}>{{ rotulo }}</option>
+                {% endfor %}
+            </select>
+        </label>
+    </div>
+
+    <label>
+        Usuário do SMTP
+        <input type="text" name="usuario" id="usuario" maxlength="150"
+               value="{{ smtp.usuario }}" placeholder="{{ dica_usuario }}">
+    </label>
+    <label>
+        Senha {% if smtp.senha_salva %}<small>(já salva — preencha só para trocar)</small>{% endif %}
+        <input type="password" name="senha" id="senha" autocomplete="new-password"
+               placeholder="{{ '••••••••' if smtp.senha_salva else dica_senha }}">
+    </label>
+
+    <label>
+        E-mail remetente <small>(de quem o cliente vê que veio a mensagem)</small>
+        <input type="email" name="remetente" maxlength="150" value="{{ smtp.remetente }}"
+               placeholder="contato@seudominio.com.br">
+    </label>
+    <label>
+        Nome que aparece no envio
+        <input type="text" name="remetente_nome" maxlength="80" value="{{ smtp.remetente_nome }}">
+    </label>
+    <label>
+        Endereço do sistema <small>(vira o link de acesso dentro dos e-mails)</small>
+        <input type="url" name="endereco" maxlength="200" value="{{ endereco }}"
+               placeholder="https://seudominio.com.br">
+    </label>
+
+    <div class="form-acoes">
+        <button type="submit">Salvar e-mail do sistema</button>
+    </div>
+</form>
+
+<form action="{{ url_for('admin_smtp_testar') }}" method="POST" class="form-coluna form-config">
+    <label>
+        Enviar um teste para
+        <input type="email" name="destino" value="{{ email_admin }}" maxlength="150">
+    </label>
+    <div class="form-acoes">
+        <button type="submit" {{ '' if smtp.servidor else 'disabled' }}>
+            Enviar e-mail de teste
+        </button>
+    </div>
+</form>
+
+<h3 class="titulo-secao">Suporte ao cliente</h3>
+<p class="aviso-cadastro">
+    Aparece como <strong>Falar com o suporte</strong> para quem está com o
+    acesso bloqueado, já abrindo a conversa com o nome e a empresa de quem
+    pediu ajuda. Sem número, o botão não aparece.
+</p>
+<form action="{{ url_for('admin_suporte') }}" method="POST" class="form-coluna form-config">
+    <label>
+        WhatsApp do suporte <small>(com DDD)</small>
+        <input type="text" name="suporte_whatsapp" maxlength="20"
+               value="{{ suporte_whatsapp }}" placeholder="11999998888">
+    </label>
+    <div class="form-acoes">
+        <button type="submit">Salvar suporte</button>
+    </div>
+</form>
+
+<h3 class="titulo-secao">Rotina diária</h3>
+<p class="nota-grafico">
+    Uma vez por dia o servidor põe em dia os lançamentos recorrentes, faz o
+    backup do banco, busca as notas fiscais de quem tem certificado e avisa
+    quem está prestes a vencer.<br>
+    Última execução: {{ rotina_execucao or 'ainda não executada' }}.
+    {% if rotina_resultado %}<br>Resultado: {{ rotina_resultado }}{% endif %}
+</p>
+
+<script>
+    // Escolher o provedor já preenche servidor, porta e segurança, e troca as
+    // instruções: cada um exige uma coisa diferente (senha de app, chave SMTP).
+    (function () {
+        var provedor = document.getElementById('provedor');
+        var aviso = document.getElementById('aviso-provedor');
+        var usuario = document.getElementById('usuario');
+        var senha = document.getElementById('senha');
+        var senhaJaSalva = {{ 'true' if smtp.senha_salva else 'false' }};
+
+        function aplicar(preencherCampos) {
+            var op = provedor.options[provedor.selectedIndex];
+            if (preencherCampos && op.dataset.servidor) {
+                document.getElementById('servidor').value = op.dataset.servidor;
+                document.getElementById('porta').value = op.dataset.porta;
+                document.getElementById('seguranca').value = op.dataset.seguranca;
+            }
+            aviso.textContent = op.dataset.aviso || '';
+            aviso.style.display = op.dataset.aviso ? '' : 'none';
+            usuario.placeholder = op.dataset.dicaUsuario || 'normalmente o próprio e-mail';
+            if (!senhaJaSalva) {
+                senha.placeholder = op.dataset.dicaSenha || 'senha ou senha de aplicativo';
+            }
+        }
+
+        provedor.addEventListener('change', function () { aplicar(true); });
+        aplicar(false);  // ao abrir, respeita o que já está salvo
+    })();
+</script>
+{% endblock %}

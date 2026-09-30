@@ -676,6 +676,21 @@ def formatar_cnpj_cpf(valor):
 app.jinja_env.globals['formatar_cnpj_cpf'] = formatar_cnpj_cpf
 
 
+def formatar_telefone(valor):
+    """Telefone (gravado só com dígitos) no formato de leitura."""
+    digitos = re.sub(r'\D', '', valor or '')
+    if digitos.startswith('55') and len(digitos) in (12, 13):
+        digitos = digitos[2:]  # tira o código do país para mostrar
+    if len(digitos) == 11:
+        return f'({digitos[:2]}) {digitos[2:7]}-{digitos[7:]}'
+    if len(digitos) == 10:
+        return f'({digitos[:2]}) {digitos[2:6]}-{digitos[6:]}'
+    return valor or ''
+
+
+app.jinja_env.globals['formatar_telefone'] = formatar_telefone
+
+
 # Menu lateral. `ativo_em` lista os endpoints que acendem cada item (incluindo
 # as telas de edição), e `filhos` são as sub-abas que aparecem quando a seção
 # está aberta. Clicar no item pai leva para a primeira sub-aba.
@@ -727,6 +742,8 @@ MENU_ADMIN = [
      'ativo_em': ('admin_usuarios', 'admin_usuario_novo')},
     {'icone': '💳', 'rotulo': 'Assinaturas', 'endpoint': 'admin_assinaturas',
      'ativo_em': ('admin_assinaturas',)},
+    {'icone': '⚙️', 'rotulo': 'Configurações', 'endpoint': 'admin_configuracoes',
+     'ativo_em': ('admin_configuracoes',)},
 ]
 
 MENU_CONTADOR = [
@@ -3655,6 +3672,44 @@ def admin_usuario_bloqueio(id):
     return redirect(url_for('admin_usuarios'))
 
 
+@app.route('/admin/configuracoes')
+@auth.exigir_papel(PAPEL_ADMIN)
+def admin_configuracoes():
+    """Ajustes do sistema: como ele manda e-mail e como o cliente pede ajuda."""
+    smtp = avisos.configuracao()
+    preset = envio_email.PROVEDORES_SMTP.get(smtp['provedor'], {})
+    return render_template(
+        'admin_configuracoes.html',
+        smtp=smtp,
+        provedores=envio_email.PROVEDORES_SMTP,
+        segurancas=envio_email.SEGURANCAS,
+        aviso_provedor=preset.get('aviso', ''),
+        dica_usuario=preset.get('dica_usuario', 'normalmente o próprio e-mail'),
+        dica_senha=preset.get('dica_senha', 'senha ou senha de aplicativo'),
+        endereco=_endereco_do_sistema(),
+        email_admin=auth.usuario_logado().email,
+        suporte_whatsapp=fiscal_sync.sistema_get('suporte_whatsapp'),
+        rotina_execucao=fiscal_sync.sistema_get('rotina_ultima_execucao'),
+        rotina_resultado=fiscal_sync.sistema_get('rotina_ultimo_resultado'),
+        dias_aviso=avisos.DIAS_DE_AVISO,
+    )
+
+
+@app.route('/admin/suporte', methods=['POST'])
+@auth.exigir_papel(PAPEL_ADMIN)
+def admin_suporte():
+    """Número do suporte, guardado só com dígitos."""
+    whatsapp = re.sub(r'\D', '', request.form.get('suporte_whatsapp', ''))
+    if whatsapp and len(whatsapp) < 10:
+        flash('Número de WhatsApp muito curto — informe com DDD.', 'erro')
+        return redirect(url_for('admin_configuracoes'))
+
+    fiscal_sync.sistema_set('suporte_whatsapp', whatsapp)
+    flash('Contato do suporte salvo.' if whatsapp
+          else 'Suporte removido: o botão deixa de aparecer para os clientes.', 'sucesso')
+    return redirect(url_for('admin_configuracoes'))
+
+
 @app.route('/admin/smtp', methods=['POST'])
 @auth.exigir_papel(PAPEL_ADMIN)
 def admin_smtp():
@@ -3678,7 +3733,7 @@ def admin_smtp():
     remetente = request.form.get('remetente', '').strip()
     if remetente and not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', remetente):
         flash('E-mail remetente inválido.', 'erro')
-        return redirect(url_for('admin_assinaturas'))
+        return redirect(url_for('admin_configuracoes'))
 
     fiscal_sync.sistema_set('sistema_smtp_provedor', provedor)
     fiscal_sync.sistema_set('sistema_smtp_servidor', servidor)
@@ -3697,23 +3752,30 @@ def admin_smtp():
             'sistema_smtp_senha_cripto',
             fiscal_certificado.criptografar_senha(senha, data_path('.chave_secreta')))
 
-    flash('E-mail do sistema salvo.', 'sucesso')
-    return redirect(url_for('admin_assinaturas'))
+    flash('E-mail do sistema salvo. Use o botão de teste para confirmar que '
+          'o provedor aceita essas credenciais.', 'sucesso')
+    return redirect(url_for('admin_configuracoes'))
 
 
 @app.route('/admin/smtp/testar', methods=['POST'])
 @auth.exigir_papel(PAPEL_ADMIN)
 def admin_smtp_testar():
-    """Manda um e-mail de teste para o próprio administrador."""
-    destino = auth.usuario_logado().email
+    """Manda um e-mail de teste — é o que diz se as credenciais funcionam."""
+    destino = request.form.get('destino', '').strip() or auth.usuario_logado().email
+    if not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', destino):
+        flash('Informe um e-mail válido para receber o teste.', 'erro')
+        return redirect(url_for('admin_configuracoes'))
+
     ok, erro = avisos.enviar(
         destino,
         'Teste — Gestão Financeira',
-        'Se você está lendo isto, o e-mail do sistema está funcionando.',
+        'Se você está lendo isto, o e-mail do sistema está funcionando: os avisos '
+        'de boas-vindas, pagamento e vencimento vão sair por esta conta.',
         data_path('.chave_secreta'))
-    flash(f'E-mail de teste enviado para {destino}.' if ok
-          else f'Não foi possível enviar: {erro}', 'sucesso' if ok else 'erro')
-    return redirect(url_for('admin_assinaturas'))
+    flash(f'E-mail de teste enviado para {destino}. Confira a caixa de entrada '
+          f'(e o spam).' if ok else f'Não foi possível enviar: {erro}',
+          'sucesso' if ok else 'erro')
+    return redirect(url_for('admin_configuracoes'))
 
 
 @app.route('/admin/usuarios/<int:id>/senha', methods=['POST'])
@@ -3761,14 +3823,7 @@ def admin_assinaturas():
         asaas=asaas.configuracao(),
         ultima_verificacao=fiscal_sync.sistema_get('asaas_ultima_verificacao') or '',
         ultimo_resultado=fiscal_sync.sistema_get('asaas_ultimo_resultado') or '',
-        suporte_whatsapp=fiscal_sync.sistema_get('suporte_whatsapp'),
         inclusos=USUARIOS_INCLUSOS,
-        smtp_sistema=avisos.configuracao(),
-        endereco_sistema=_endereco_do_sistema(),
-        provedores_smtp=envio_email.PROVEDORES_SMTP,
-        segurancas_smtp=envio_email.SEGURANCAS,
-        rotina_execucao=fiscal_sync.sistema_get('rotina_ultima_execucao'),
-        rotina_resultado=fiscal_sync.sistema_get('rotina_ultimo_resultado'),
     )
 
 
@@ -3786,14 +3841,6 @@ def admin_asaas_configurar():
             'asaas_token_cripto',
             fiscal_certificado.criptografar_senha(token, data_path('.chave_secreta')),
         )
-
-    # Número do suporte: guardado só com dígitos, para montar o link do
-    # WhatsApp sem depender de como o admin digitou.
-    whatsapp = re.sub(r'\D', '', request.form.get('suporte_whatsapp', ''))
-    if whatsapp and len(whatsapp) < 10:
-        flash('Número de WhatsApp muito curto — informe com DDD.', 'erro')
-        return redirect(url_for('admin_assinaturas'))
-    fiscal_sync.sistema_set('suporte_whatsapp', whatsapp)
 
     for campo, chave, rotulo in (('valor', 'asaas_valor', 'da mensalidade'),
                                  ('valor_usuario', 'asaas_valor_usuario', 'do acesso adicional')):

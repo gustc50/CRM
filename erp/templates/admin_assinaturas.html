@@ -50,12 +50,6 @@
         <input type="number" name="valor_usuario" step="0.01" min="0"
                value="{{ '%.2f'|format(asaas.valor_usuario) }}">
     </label>
-    <label>
-        WhatsApp do suporte
-        <small>(com DDD; aparece como "Falar com o suporte" para quem está bloqueado)</small>
-        <input type="text" name="suporte_whatsapp" maxlength="20"
-               placeholder="11999998888" value="{{ suporte_whatsapp }}">
-    </label>
     <div class="form-acoes">
         <button type="submit">Salvar</button>
     </div>
@@ -70,84 +64,9 @@
     {% if ultimo_resultado %}<br>Resultado: {{ ultimo_resultado }}{% endif %}
 </p>
 
-<h3 class="titulo-secao">E-mail do sistema</h3>
 <p class="aviso-cadastro">
-    Conta usada para o sistema falar com os clientes: boas-vindas, confirmação
-    de pagamento e aviso de vencimento. É <strong>separada</strong> do e-mail
-    que cada cliente configura para mandar documentos ao contador dele.
-    Sem isto preenchido, nenhum aviso é enviado — o resto do sistema funciona
-    normalmente.
-</p>
-
-<form action="{{ url_for('admin_smtp') }}" method="POST" class="form-coluna form-config">
-    <label>
-        Provedor
-        <select name="provedor" id="provedor-sistema">
-            {% for chave, dados in provedores_smtp.items() %}
-            <option value="{{ chave }}" {{ 'selected' if smtp_sistema.provedor == chave else '' }}>
-                {{ dados.nome }}
-            </option>
-            {% endfor %}
-        </select>
-    </label>
-    <label>
-        Servidor
-        <input type="text" name="servidor" value="{{ smtp_sistema.servidor }}" maxlength="120">
-    </label>
-    <div class="linha-campos">
-        <label>
-            Porta
-            <input type="text" name="porta" value="{{ smtp_sistema.porta }}" maxlength="6">
-        </label>
-        <label>
-            Segurança
-            <select name="seguranca">
-                {% for valor, rotulo in segurancas_smtp %}
-                <option value="{{ valor }}" {{ 'selected' if smtp_sistema.seguranca == valor else '' }}>{{ rotulo }}</option>
-                {% endfor %}
-            </select>
-        </label>
-    </div>
-    <label>
-        E-mail remetente
-        <input type="email" name="remetente" value="{{ smtp_sistema.remetente }}" maxlength="150">
-    </label>
-    <label>
-        Usuário do SMTP <small>(em branco = o mesmo do remetente)</small>
-        <input type="text" name="usuario" value="{{ smtp_sistema.usuario }}" maxlength="150">
-    </label>
-    <label>
-        Senha {% if smtp_sistema.senha_salva %}<small>(já salva — preencha só para trocar)</small>{% endif %}
-        <input type="password" name="senha" autocomplete="new-password"
-               placeholder="{{ '••••••••' if smtp_sistema.senha_salva else 'senha ou senha de app' }}">
-    </label>
-    <label>
-        Nome que aparece no envio
-        <input type="text" name="remetente_nome" value="{{ smtp_sistema.remetente_nome }}" maxlength="80">
-    </label>
-    <label>
-        Endereço do sistema <small>(entra nos e-mails como link de acesso)</small>
-        <input type="url" name="endereco" value="{{ endereco_sistema }}"
-               placeholder="https://seudominio.com.br" maxlength="200">
-    </label>
-    <div class="form-acoes">
-        <button type="submit">Salvar e-mail do sistema</button>
-    </div>
-</form>
-
-<form action="{{ url_for('admin_smtp_testar') }}" method="POST" class="form-inline-bloco">
-    <button type="submit" {{ '' if smtp_sistema.servidor else 'disabled' }}>
-        Enviar e-mail de teste para mim
-    </button>
-</form>
-
-<h3 class="titulo-secao">Rotina diária</h3>
-<p class="nota-grafico">
-    Uma vez por dia o servidor põe em dia os lançamentos recorrentes, faz o
-    backup do banco, busca as notas fiscais de quem tem certificado e avisa
-    quem está prestes a vencer.<br>
-    Última execução: {{ rotina_execucao or 'ainda não executada' }}.
-    {% if rotina_resultado %}<br>Resultado: {{ rotina_resultado }}{% endif %}
+    Os avisos por e-mail, o contato do suporte e a rotina diária ficam em
+    <a href="{{ url_for('admin_configuracoes') }}">⚙ Configurações</a>.
 </p>
 
 <h3 class="titulo-secao">Pagamentos registrados</h3>
