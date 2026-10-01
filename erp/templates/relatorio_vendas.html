@@ -1,0 +1,142 @@
+{% extends 'base.html' %}
+
+{% macro dinheiro(valor) %}
+{%- set absoluto = "{:,.2f}".format(valor|abs).replace(',', 'X').replace('.', ',').replace('X', '.') -%}
+{{ '-' if valor < 0 else '' }}R$ {{ absoluto }}
+{%- endmacro %}
+
+{% macro porcento(valor, casas=1) %}{{ ("%." ~ casas ~ "f")|format(valor)|replace('.', ',') }}%{% endmacro %}
+
+{# Mesma convenção da tela Início: para despesa, subir é ruim — por isso
+   `mais_e_melhor` existe, em vez de pintar de verde tudo que sobe. #}
+{% macro variacao(percentual, mais_e_melhor=True) %}
+{%- if percentual is not none -%}
+{%- set subiu = percentual >= 0 -%}
+<span class="delta {{ 'delta-bom' if (subiu if mais_e_melhor else not subiu) else 'delta-ruim' }}">
+    {{ '▲' if subiu else '▼' }} {{ porcento(percentual|abs) }}
+</span>
+{%- else -%}
+<span class="delta delta-neutro">sem base</span>
+{%- endif -%}
+{% endmacro %}
+
+{% block content %}
+<h2>Vendas <small class="subtitulo">de {{ inicio.strftime('%d/%m/%Y') }} a {{ fim.strftime('%d/%m/%Y') }}</small></h2>
+
+<form action="{{ url_for('relatorio_vendas') }}" method="GET" class="form-filtro">
+    <label>
+        De
+        <input type="date" name="inicio" value="{{ inicio.isoformat() }}">
+    </label>
+    <label>
+        Até
+        <input type="date" name="fim" value="{{ fim.isoformat() }}">
+    </label>
+    <label>
+        Regime
+        <select name="regime">
+            {% for valor, rotulo in regimes %}
+            <option value="{{ valor }}" {{ 'selected' if regime == valor else '' }}>{{ rotulo }}</option>
+            {% endfor %}
+        </select>
+    </label>
+    <button type="submit">Atualizar</button>
+    <a href="{{ url_for('relatorio_vendas_exportar', inicio=inicio.isoformat(), fim=fim.isoformat(), regime=regime) }}"
+       class="btn-acao btn-exportar">⬇ Excel</a>
+</form>
+
+<div class="dashboard">
+    <div class="card receber">
+        <h3>Vendido no período</h3>
+        <h2>{{ dinheiro(v.total) }}</h2>
+        <small>{{ variacao(variacao_total) }} contra o período anterior</small>
+    </div>
+    <div class="card">
+        <h3>Já recebido</h3>
+        <h2>{{ dinheiro(v.recebido) }}</h2>
+        <small>
+            {% if v.total %}{{ porcento(v.recebido / v.total * 100) }} do total{% else %}—{% endif %}
+        </small>
+    </div>
+    <div class="card {{ 'pagar' if v.em_aberto else '' }}">
+        <h3>Em aberto</h3>
+        <h2>{{ dinheiro(v.em_aberto) }}</h2>
+        <small>ainda não recebido</small>
+    </div>
+    <div class="card">
+        <h3>Ticket médio</h3>
+        <h2>{{ dinheiro(v.ticket_medio) }}</h2>
+        <small>{{ v.qtde }} venda(s) · {{ variacao(variacao_ticket) }}</small>
+    </div>
+</div>
+
+{% if v.meses|length > 1 %}
+<section class="painel">
+    <p class="rotulo-painel">Evolução mês a mês</p>
+    <div class="barras-mes">
+        {% for m in v.meses %}
+        <div class="coluna-mes">
+            <div class="barra-trilho">
+                <div class="barra-venda"
+                     style="height: {{ (m.total / v.teto_mes * 100)|round(1) if v.teto_mes else 0 }}%"
+                     title="{{ m.rotulo }}: {{ dinheiro(m.total) }}"></div>
+            </div>
+            <span class="rotulo-mes">{{ m.rotulo }}</span>
+            <span class="valor-mes">{{ dinheiro(m.total) }}</span>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+<h3 class="titulo-secao">Quem mais comprou</h3>
+<div class="table-scroll">
+<table>
+    <thead>
+        <tr><th>Cliente</th><th class="num">Vendas</th><th class="num">Valor</th><th class="num">% do total</th></tr>
+    </thead>
+    <tbody>
+        {% for c in v.clientes %}
+        <tr>
+            <td>{{ c.nome }}</td>
+            <td class="num">{{ c.qtde }}</td>
+            <td class="num">{{ dinheiro(c.total) }}</td>
+            <td class="num">{{ porcento(c.peso) if c.peso is not none else '—' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4">Nenhuma venda no período.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
+<h3 class="titulo-secao">Por categoria</h3>
+<div class="table-scroll">
+<table>
+    <thead>
+        <tr><th>Categoria</th><th class="num">Vendas</th><th class="num">Valor</th></tr>
+    </thead>
+    <tbody>
+        {% for g in v.categorias %}
+        <tr>
+            <td>{{ g.nome }}</td>
+            <td class="num">{{ g.qtde }}</td>
+            <td class="num">{{ dinheiro(g.total) }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="3">Nenhuma venda no período.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
+<p class="nota-grafico">
+    Venda aqui é todo lançamento de <strong>Conta a Receber</strong> do período.
+    {% if regime == 'caixa' %}
+    No regime de caixa entram só as que já foram recebidas.
+    {% else %}
+    No regime de competência entram pelo vencimento, recebidas ou não — por
+    isso o "em aberto" tem valor.
+    {% endif %}
+</p>
+{% endblock %}

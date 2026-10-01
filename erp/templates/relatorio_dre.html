@@ -1,0 +1,164 @@
+{% extends 'base.html' %}
+
+{% macro dinheiro(valor) %}
+{%- set absoluto = "{:,.2f}".format(valor|abs).replace(',', 'X').replace('.', ',').replace('X', '.') -%}
+{{ '-' if valor < 0 else '' }}R$ {{ absoluto }}
+{%- endmacro %}
+
+{% macro porcento(valor, casas=1) %}{{ ("%." ~ casas ~ "f")|format(valor)|replace('.', ',') }}%{% endmacro %}
+
+{# Mesma convenção da tela Início: para despesa, subir é ruim — por isso
+   `mais_e_melhor` existe, em vez de pintar de verde tudo que sobe. #}
+{% macro variacao(percentual, mais_e_melhor=True) %}
+{%- if percentual is not none -%}
+{%- set subiu = percentual >= 0 -%}
+<span class="delta {{ 'delta-bom' if (subiu if mais_e_melhor else not subiu) else 'delta-ruim' }}">
+    {{ '▲' if subiu else '▼' }} {{ porcento(percentual|abs) }}
+</span>
+{%- else -%}
+<span class="delta delta-neutro">sem base</span>
+{%- endif -%}
+{% endmacro %}
+
+{% block content %}
+<h2>DRE <small class="subtitulo">resultado de {{ inicio.strftime('%d/%m/%Y') }} a {{ fim.strftime('%d/%m/%Y') }}</small></h2>
+
+<form action="{{ url_for('relatorio_dre') }}" method="GET" class="form-filtro">
+    <label>
+        De
+        <input type="date" name="inicio" value="{{ inicio.isoformat() }}">
+    </label>
+    <label>
+        Até
+        <input type="date" name="fim" value="{{ fim.isoformat() }}">
+    </label>
+    <label>
+        Regime
+        <select name="regime">
+            {% for valor, rotulo in regimes %}
+            <option value="{{ valor }}" {{ 'selected' if regime == valor else '' }}>{{ rotulo }}</option>
+            {% endfor %}
+        </select>
+    </label>
+    <button type="submit">Atualizar</button>
+    <a href="{{ url_for('relatorio_dre_exportar', inicio=inicio.isoformat(), fim=fim.isoformat(), regime=regime) }}"
+       class="btn-acao btn-exportar">⬇ Excel</a>
+</form>
+
+<p class="nota-grafico">
+    {% if regime == 'caixa' %}
+    <strong>Regime de caixa:</strong> entra só o que foi efetivamente pago ou
+    recebido dentro do período — é o dinheiro que passou pela conta.
+    {% else %}
+    <strong>Regime de competência:</strong> cada lançamento pertence ao período
+    do seu vencimento, tenha o dinheiro entrado ou não.
+    {% endif %}
+    Comparação com {{ inicio_anterior.strftime('%d/%m/%Y') }} a
+    {{ fim_anterior.strftime('%d/%m/%Y') }}. {{ total_lancamentos }} lançamento(s).
+</p>
+
+<!-- O número que a tela lidera -->
+<section class="painel destaque-resultado">
+    <div>
+        <p class="rotulo-painel">Resultado do período</p>
+        <p class="hero {{ 'hero-lucro' if dre.resultado >= 0 else 'hero-prejuizo' }}">
+            {% if dre.margem is not none %}
+            {{ porcento(dre.margem|abs) }} de {{ 'lucro' if dre.resultado >= 0 else 'prejuízo' }}
+            {% else %}
+            sem faturamento no período
+            {% endif %}
+        </p>
+        <p class="hero-apoio">
+            {{ dinheiro(dre.resultado) }} · {{ variacao(variacao_resultado) }} contra o período anterior
+        </p>
+    </div>
+    <div class="resumo-mes">
+        <p><span class="chave entradas"></span> Receitas <strong>{{ dinheiro(dre.total_receitas) }}</strong></p>
+        <p><span class="chave saidas"></span> Despesas <strong>{{ dinheiro(dre.total_despesas) }}</strong></p>
+        <p class="hero-apoio">
+            Receitas {{ variacao(variacao_receitas) }} ·
+            Despesas {{ variacao(variacao_despesas, false) }}
+        </p>
+    </div>
+</section>
+
+<h3 class="titulo-secao receber">Receitas</h3>
+<div class="table-scroll">
+<table class="tabela-dre">
+    <thead>
+        <tr><th>Centro de custo / categoria</th><th class="num">Lançamentos</th><th class="num">Valor</th><th class="num">% da receita</th></tr>
+    </thead>
+    <tbody>
+        {% for grupo in dre.receitas %}
+        <tr class="linha-grupo">
+            <td>{{ grupo.nome }}</td>
+            <td class="num">{{ grupo.qtde }}</td>
+            <td class="num">{{ dinheiro(grupo.total) }}</td>
+            <td class="num">{{ porcento(grupo.peso) if grupo.peso is not none else '—' }}</td>
+        </tr>
+        {% for c in grupo.categorias %}
+        <tr class="linha-filha">
+            <td>{{ c.nome }}</td>
+            <td class="num">{{ c.qtde }}</td>
+            <td class="num">{{ dinheiro(c.total) }}</td>
+            <td class="num"></td>
+        </tr>
+        {% endfor %}
+        {% else %}
+        <tr><td colspan="4">Nenhuma receita no período.</td></tr>
+        {% endfor %}
+    </tbody>
+    <tfoot>
+        <tr><td><strong>Total de receitas</strong></td><td></td>
+            <td class="num"><strong>{{ dinheiro(dre.total_receitas) }}</strong></td><td></td></tr>
+    </tfoot>
+</table>
+</div>
+
+<h3 class="titulo-secao pagar">Despesas</h3>
+<div class="table-scroll">
+<table class="tabela-dre">
+    <thead>
+        <tr><th>Centro de custo / categoria</th><th class="num">Lançamentos</th><th class="num">Valor</th><th class="num">% da receita</th></tr>
+    </thead>
+    <tbody>
+        {% for grupo in dre.despesas %}
+        <tr class="linha-grupo">
+            <td>{{ grupo.nome }}</td>
+            <td class="num">{{ grupo.qtde }}</td>
+            <td class="num">{{ dinheiro(grupo.total) }}</td>
+            <td class="num">{{ porcento(grupo.peso) if grupo.peso is not none else '—' }}</td>
+        </tr>
+        {% for c in grupo.categorias %}
+        <tr class="linha-filha">
+            <td>{{ c.nome }}</td>
+            <td class="num">{{ c.qtde }}</td>
+            <td class="num">{{ dinheiro(c.total) }}</td>
+            <td class="num"></td>
+        </tr>
+        {% endfor %}
+        {% else %}
+        <tr><td colspan="4">Nenhuma despesa no período.</td></tr>
+        {% endfor %}
+    </tbody>
+    <tfoot>
+        <tr><td><strong>Total de despesas</strong></td><td></td>
+            <td class="num"><strong>{{ dinheiro(dre.total_despesas) }}</strong></td><td></td></tr>
+        <tr class="linha-resultado">
+            <td><strong>Resultado do período</strong></td><td></td>
+            <td class="num {{ 'valor-lucro' if dre.resultado >= 0 else 'valor-prejuizo' }}">
+                <strong>{{ dinheiro(dre.resultado) }}</strong>
+            </td>
+            <td class="num">{{ porcento(dre.margem) if dre.margem is not none else '—' }}</td>
+        </tr>
+    </tfoot>
+</table>
+</div>
+
+<p class="nota-grafico">
+    Este demonstrativo é montado com as <strong>categorias e os centros de custo
+    que você mesmo cadastrou</strong>. Não substitui a DRE contábil, que exige
+    plano de contas, deduções e provisões — para fins fiscais, vale a que o seu
+    contador emite.
+</p>
+{% endblock %}

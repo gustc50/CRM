@@ -55,3 +55,40 @@ document.addEventListener('DOMContentLoaded', function () {
     provedor.addEventListener('change', atualizar);
     atualizar();
 });
+
+// ---- Abas horizontais (A Receber / A Pagar nas telas de notas) ----
+//
+// Os dois painéis vêm visíveis no HTML: se esta função não rodar, a tela
+// continua mostrando tudo empilhado, como era antes. Esconder é trabalho do
+// JS, nunca do servidor.
+(function () {
+    document.querySelectorAll('.abas-horizontais').forEach(function (barra) {
+        var chave = 'aba:' + (barra.dataset.abas || 'padrao');
+        var escopo = barra.parentElement;
+        var abas = barra.querySelectorAll('.aba');
+        var paineis = escopo.querySelectorAll('.painel-aba');
+        if (!abas.length || !paineis.length) { return; }
+
+        function mostrar(alvo, lembrar) {
+            abas.forEach(function (aba) {
+                aba.setAttribute('aria-selected', aba.dataset.painel === alvo);
+            });
+            paineis.forEach(function (painel) {
+                painel.hidden = painel.dataset.painel !== alvo;
+            });
+            if (lembrar) {
+                // Conveniência de quem está olhando; se o navegador recusar
+                // (janela anônima), a tela funciona igual.
+                try { localStorage.setItem(chave, alvo); } catch (e) { /* ignora */ }
+            }
+        }
+
+        abas.forEach(function (aba) {
+            aba.addEventListener('click', function () { mostrar(aba.dataset.painel, true); });
+        });
+
+        var salva = null;
+        try { salva = localStorage.getItem(chave); } catch (e) { /* ignora */ }
+        mostrar(salva === 'pagar' ? 'pagar' : 'receber', false);
+    });
+})();

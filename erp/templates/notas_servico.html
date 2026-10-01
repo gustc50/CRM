@@ -29,7 +29,17 @@
 
 {{ fiscal.aviso_fora_do_periodo(fora_do_periodo) }}
 
-<h3 class="titulo-secao receber">📤 A Receber — serviços prestados (notas emitidas)</h3>
+<div class="abas-horizontais" data-abas="nfse">
+    <button type="button" class="aba" data-painel="receber" aria-selected="true">
+        📤 A Receber <span class="aba-contagem">{{ totais_emitidas.qtde }}</span>
+    </button>
+    <button type="button" class="aba" data-painel="pagar" aria-selected="false">
+        📥 A Pagar <span class="aba-contagem">{{ totais_recebidas.qtde }}</span>
+    </button>
+</div>
+
+<section class="painel-aba" data-painel="receber">
+<h3 class="titulo-secao receber">Serviços prestados (notas emitidas)</h3>
 <p class="totais-fiscais">
     {{ totais_emitidas.qtde }} nota(s) ativa(s) ·
     Serviços: R$ {{ "%.2f"|format(totais_emitidas.valor) }} ·
@@ -76,7 +86,10 @@
 </table>
 </div>
 
-<h3 class="titulo-secao pagar">📥 A Pagar — serviços tomados (notas recebidas)</h3>
+</section>
+
+<section class="painel-aba" data-painel="pagar">
+<h3 class="titulo-secao pagar">Serviços tomados (notas recebidas)</h3>
 <p class="totais-fiscais">
     {{ totais_recebidas.qtde }} nota(s) ativa(s) ·
     Serviços: R$ {{ "%.2f"|format(totais_recebidas.valor) }} ·
@@ -122,4 +135,5 @@
     </tbody>
 </table>
 </div>
+</section>
 {% endblock %}

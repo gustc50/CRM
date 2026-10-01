@@ -699,8 +699,13 @@ MENU_LATERAL = [
      'ativo_em': ('inicio',)},
     {'icone': '💰', 'rotulo': 'Lançamentos', 'endpoint': 'lancamentos',
      'ativo_em': ('lancamentos', 'editar')},
-    {'icone': '📊', 'rotulo': 'Relatório', 'endpoint': 'relatorio',
-     'ativo_em': ('relatorio',)},
+    {'icone': '📊', 'rotulo': 'Relatórios', 'endpoint': 'relatorio',
+     'ativo_em': ('relatorio', 'relatorio_dre', 'relatorio_vendas'),
+     'filhos': [
+         {'rotulo': 'Por período', 'endpoint': 'relatorio', 'ativo_em': ('relatorio',)},
+         {'rotulo': 'DRE', 'endpoint': 'relatorio_dre', 'ativo_em': ('relatorio_dre',)},
+         {'rotulo': 'Vendas', 'endpoint': 'relatorio_vendas', 'ativo_em': ('relatorio_vendas',)},
+     ]},
     {'icone': '🔁', 'rotulo': 'Recorrentes', 'endpoint': 'recorrentes_listar',
      'ativo_em': ('recorrentes_listar', 'recorrentes_editar')},
     {'icone': '🧾', 'rotulo': 'Notas Fiscais', 'endpoint': 'notas_servico',
@@ -710,15 +715,16 @@ MENU_LATERAL = [
          {'rotulo': 'NF-e', 'endpoint': 'notas_eletronicas', 'ativo_em': ('notas_eletronicas',)},
      ]},
     {'icone': '👥', 'rotulo': 'Cadastros', 'endpoint': 'fornecedores_listar',
-     'ativo_em': ('fornecedores_listar', 'fornecedores_editar', 'clientes_listar', 'clientes_editar'),
+     'ativo_em': ('fornecedores_listar', 'fornecedores_editar', 'clientes_listar',
+                  'clientes_editar', 'categorias_listar', 'categorias_editar'),
      'filhos': [
          {'rotulo': 'Fornecedores', 'endpoint': 'fornecedores_listar',
           'ativo_em': ('fornecedores_listar', 'fornecedores_editar')},
          {'rotulo': 'Clientes', 'endpoint': 'clientes_listar',
           'ativo_em': ('clientes_listar', 'clientes_editar')},
+         {'rotulo': 'Categorias', 'endpoint': 'categorias_listar',
+          'ativo_em': ('categorias_listar', 'categorias_editar')},
      ]},
-    {'icone': '🏷️', 'rotulo': 'Categorias', 'endpoint': 'categorias_listar',
-     'ativo_em': ('categorias_listar', 'categorias_editar')},
     {'icone': '🏦', 'rotulo': 'Contas', 'endpoint': 'contas_listar',
      'ativo_em': ('contas_listar', 'contas_editar', 'contas_movimentacoes')},
     {'icone': '📨', 'rotulo': 'Contabilidade', 'endpoint': 'contabilidade',
@@ -2490,6 +2496,271 @@ def relatorio():
         atalhos=atalhos,
         hoje=hoje,
     )
+
+
+# ------------------------------------------------------------------ #
+# DRE e Vendas
+# ------------------------------------------------------------------ #
+
+REGIMES = (
+    ('competencia', 'Competência (pela data de vencimento)'),
+    ('caixa', 'Caixa (pela data de pagamento)'),
+)
+
+
+def _periodo_simples(args):
+    """Início e fim da querystring, com padrão no mês corrente."""
+    hoje = datetime.now().date()
+    inicio = parse_data(args.get('inicio', '')) or hoje.replace(day=1)
+    fim = parse_data(args.get('fim', '')) or hoje
+    if inicio > fim:
+        inicio, fim = fim, inicio
+    return inicio, fim
+
+
+def transacoes_por_regime(inicio, fim, regime):
+    """Lançamentos do período segundo o regime escolhido.
+
+    Na competência vale a data de vencimento — é quando a receita ou a despesa
+    pertence ao período, tenha o dinheiro entrado ou não. No caixa vale a data
+    de pagamento, e só entra o que foi efetivamente pago: é o que realmente
+    passou pela conta.
+    """
+    query = da_empresa(Transacao)
+    if regime == 'caixa':
+        return query.filter(
+            Transacao.status == 'Concluído',
+            Transacao.data_pagamento.isnot(None),
+            Transacao.data_pagamento >= inicio,
+            Transacao.data_pagamento <= fim,
+        ).order_by(Transacao.data_pagamento).all()
+
+    return query.filter(
+        Transacao.data_vencimento >= inicio,
+        Transacao.data_vencimento <= fim,
+    ).order_by(Transacao.data_vencimento).all()
+
+
+def _montar_dre(transacoes):
+    """Receitas e despesas organizadas por centro de custo e categoria.
+
+    Não é a DRE contábil formal (que exige plano de contas, deduções e
+    provisões): é o resultado do período montado com o que o sistema sabe —
+    as categorias e os centros de custo que o próprio usuário definiu.
+    """
+    def agrupar(itens):
+        por_centro = {}
+        for t in itens:
+            centro = _rotulo_centro_custo(t)
+            categoria = _rotulo_categoria(t)
+            grupo = por_centro.setdefault(centro, {'nome': centro, 'total': 0.0,
+                                                   'qtde': 0, 'categorias': {}})
+            grupo['total'] += t.valor
+            grupo['qtde'] += 1
+            linha = grupo['categorias'].setdefault(categoria, {'nome': categoria,
+                                                               'total': 0.0, 'qtde': 0})
+            linha['total'] += t.valor
+            linha['qtde'] += 1
+
+        grupos = []
+        for grupo in por_centro.values():
+            grupo['categorias'] = sorted(grupo['categorias'].values(),
+                                         key=lambda c: -c['total'])
+            grupos.append(grupo)
+        # Maior volume primeiro; os "(sem ...)" ficam no fim, onde atrapalham menos
+        grupos.sort(key=lambda g: (g['nome'].startswith('('), -g['total']))
+        return grupos
+
+    receitas = agrupar([t for t in transacoes if t.tipo == 'Receber'])
+    despesas = agrupar([t for t in transacoes if t.tipo == 'Pagar'])
+
+    total_receitas = sum(g['total'] for g in receitas)
+    total_despesas = sum(g['total'] for g in despesas)
+    resultado = total_receitas - total_despesas
+
+    # Participação de cada grupo na receita: é o que mostra para onde o
+    # dinheiro está indo, mais do que o valor absoluto.
+    for grupo in despesas:
+        grupo['peso'] = (grupo['total'] / total_receitas * 100) if total_receitas else None
+    for grupo in receitas:
+        grupo['peso'] = (grupo['total'] / total_receitas * 100) if total_receitas else None
+
+    return {
+        'receitas': receitas,
+        'despesas': despesas,
+        'total_receitas': total_receitas,
+        'total_despesas': total_despesas,
+        'resultado': resultado,
+        'margem': (resultado / total_receitas * 100) if total_receitas else None,
+    }
+
+
+@app.route('/relatorios/dre')
+def relatorio_dre():
+    inicio, fim = _periodo_simples(request.args)
+    regime = request.args.get('regime', 'competencia')
+    if regime not in dict(REGIMES):
+        regime = 'competencia'
+
+    transacoes = transacoes_por_regime(inicio, fim, regime)
+    dre = _montar_dre(transacoes)
+
+    # Mesmo período do mês anterior, para dizer se melhorou ou piorou
+    dias = (fim - inicio).days
+    fim_anterior = inicio - timedelta(days=1)
+    inicio_anterior = fim_anterior - timedelta(days=dias)
+    anterior = _montar_dre(transacoes_por_regime(inicio_anterior, fim_anterior, regime))
+
+    return render_template(
+        'relatorio_dre.html',
+        inicio=inicio, fim=fim, regime=regime, regimes=REGIMES,
+        dre=dre, anterior=anterior,
+        inicio_anterior=inicio_anterior, fim_anterior=fim_anterior,
+        variacao_receitas=_variacao(dre['total_receitas'], anterior['total_receitas']),
+        variacao_despesas=_variacao(dre['total_despesas'], anterior['total_despesas']),
+        variacao_resultado=_variacao(dre['resultado'], anterior['resultado']),
+        total_lancamentos=len(transacoes),
+    )
+
+
+def _montar_vendas(transacoes):
+    """Números de venda do período: quem comprou, quanto e o que já entrou."""
+    vendas = [t for t in transacoes if t.tipo == 'Receber']
+    total = sum(t.valor for t in vendas)
+    recebido = sum(t.valor for t in vendas if t.status == 'Concluído')
+
+    por_cliente, por_categoria, por_mes = {}, {}, {}
+    for t in vendas:
+        nome = t.cliente.nome if t.cliente else '(sem cliente)'
+        c = por_cliente.setdefault(nome, {'nome': nome, 'total': 0.0, 'qtde': 0})
+        c['total'] += t.valor
+        c['qtde'] += 1
+
+        categoria = _rotulo_categoria(t)
+        g = por_categoria.setdefault(categoria, {'nome': categoria, 'total': 0.0, 'qtde': 0})
+        g['total'] += t.valor
+        g['qtde'] += 1
+
+        referencia = t.data_pagamento or t.data_vencimento
+        chave = (referencia.year, referencia.month)
+        m = por_mes.setdefault(chave, {'ano': referencia.year, 'mes': referencia.month,
+                                       'total': 0.0, 'qtde': 0})
+        m['total'] += t.valor
+        m['qtde'] += 1
+
+    clientes = sorted(por_cliente.values(), key=lambda c: -c['total'])
+    for c in clientes:
+        c['peso'] = (c['total'] / total * 100) if total else None
+
+    meses = sorted(por_mes.values(), key=lambda m: (m['ano'], m['mes']))
+    for m in meses:
+        m['rotulo'] = f"{m['mes']:02d}/{m['ano']}"
+
+    return {
+        'total': total,
+        'recebido': recebido,
+        'em_aberto': total - recebido,
+        'qtde': len(vendas),
+        'ticket_medio': (total / len(vendas)) if vendas else 0.0,
+        'clientes': clientes,
+        'categorias': sorted(por_categoria.values(), key=lambda g: -g['total']),
+        'meses': meses,
+        'teto_mes': max((m['total'] for m in meses), default=0.0),
+        'vendas': vendas,
+    }
+
+
+@app.route('/relatorios/vendas')
+def relatorio_vendas():
+    inicio, fim = _periodo_simples(request.args)
+    regime = request.args.get('regime', 'competencia')
+    if regime not in dict(REGIMES):
+        regime = 'competencia'
+
+    dados = _montar_vendas(transacoes_por_regime(inicio, fim, regime))
+
+    dias = (fim - inicio).days
+    fim_anterior = inicio - timedelta(days=1)
+    inicio_anterior = fim_anterior - timedelta(days=dias)
+    anterior = _montar_vendas(transacoes_por_regime(inicio_anterior, fim_anterior, regime))
+
+    return render_template(
+        'relatorio_vendas.html',
+        inicio=inicio, fim=fim, regime=regime, regimes=REGIMES,
+        v=dados, anterior=anterior,
+        inicio_anterior=inicio_anterior, fim_anterior=fim_anterior,
+        variacao_total=_variacao(dados['total'], anterior['total']),
+        variacao_qtde=_variacao(dados['qtde'], anterior['qtde']),
+        variacao_ticket=_variacao(dados['ticket_medio'], anterior['ticket_medio']),
+    )
+
+
+@app.route('/relatorios/dre/exportar')
+def relatorio_dre_exportar():
+    inicio, fim = _periodo_simples(request.args)
+    regime = request.args.get('regime', 'competencia')
+    if regime not in dict(REGIMES):
+        regime = 'competencia'
+
+    dre = _montar_dre(transacoes_por_regime(inicio, fim, regime))
+
+    linhas = [['RECEITAS', '', '', '']]
+    for grupo in dre['receitas']:
+        linhas.append([grupo['nome'], grupo['qtde'], round(grupo['total'], 2), ''])
+        for c in grupo['categorias']:
+            linhas.append([f"    {c['nome']}", c['qtde'], round(c['total'], 2), ''])
+    linhas.append(['Total de receitas', '', round(dre['total_receitas'], 2), ''])
+    linhas.append(['', '', '', ''])
+
+    linhas.append(['DESPESAS', '', '', ''])
+    for grupo in dre['despesas']:
+        peso = round(grupo['peso'], 1) if grupo['peso'] is not None else ''
+        linhas.append([grupo['nome'], grupo['qtde'], round(grupo['total'], 2), peso])
+        for c in grupo['categorias']:
+            linhas.append([f"    {c['nome']}", c['qtde'], round(c['total'], 2), ''])
+    linhas.append(['Total de despesas', '', round(dre['total_despesas'], 2), ''])
+    linhas.append(['', '', '', ''])
+    linhas.append(['RESULTADO DO PERÍODO', '', round(dre['resultado'], 2),
+                   round(dre['margem'], 1) if dre['margem'] is not None else ''])
+
+    cabecalho = ['Centro de custo / categoria', 'Lançamentos', 'Valor (R$)', '% da receita']
+    return _exportar_xlsx_generico(
+        cabecalho, linhas, f'dre_{inicio.isoformat()}_a_{fim.isoformat()}', 'DRE')
+
+
+@app.route('/relatorios/vendas/exportar')
+def relatorio_vendas_exportar():
+    inicio, fim = _periodo_simples(request.args)
+    regime = request.args.get('regime', 'competencia')
+    if regime not in dict(REGIMES):
+        regime = 'competencia'
+
+    dados = _montar_vendas(transacoes_por_regime(inicio, fim, regime))
+
+    linhas = [['RESUMO', '', '', ''],
+              ['Vendido no período', dados['qtde'], round(dados['total'], 2), ''],
+              ['Já recebido', '', round(dados['recebido'], 2), ''],
+              ['Em aberto', '', round(dados['em_aberto'], 2), ''],
+              ['Ticket médio', '', round(dados['ticket_medio'], 2), ''],
+              ['', '', '', ''],
+              ['POR CLIENTE', '', '', '']]
+    for c in dados['clientes']:
+        peso = round(c['peso'], 1) if c['peso'] is not None else ''
+        linhas.append([c['nome'], c['qtde'], round(c['total'], 2), peso])
+
+    linhas.append(['', '', '', ''])
+    linhas.append(['POR MÊS', '', '', ''])
+    for m in dados['meses']:
+        linhas.append([m['rotulo'], m['qtde'], round(m['total'], 2), ''])
+
+    linhas.append(['', '', '', ''])
+    linhas.append(['POR CATEGORIA', '', '', ''])
+    for g in dados['categorias']:
+        linhas.append([g['nome'], g['qtde'], round(g['total'], 2), ''])
+
+    cabecalho = ['Item', 'Vendas', 'Valor (R$)', '% do total']
+    return _exportar_xlsx_generico(
+        cabecalho, linhas, f'vendas_{inicio.isoformat()}_a_{fim.isoformat()}', 'Vendas')
 
 
 def _nome_arquivo(inicio, fim):

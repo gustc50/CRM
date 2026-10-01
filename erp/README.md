@@ -982,6 +982,69 @@ remetente recusado, as boas-vindas e o aviso de vencimento saindo por essa
 conta sem repetir no mesmo vencimento, e o sistema continuando a funcionar com
 o SMTP vazio.
 
+## Décima sexta rodada: navegação enxuta e relatórios novos
+
+### Menu reorganizado
+
+- **Categorias** deixou de ser item próprio e virou a terceira sub-aba de
+  **Cadastros**, ao lado de Fornecedores e Clientes — são todos cadastros de
+  apoio, e o menu principal ficou mais curto.
+- **Relatório** virou **Relatórios**, com três sub-abas: *Por período* (o que
+  já existia), *DRE* e *Vendas*.
+
+### A Receber e A Pagar viraram abas
+
+Nas telas de **NFS-e** e **NF-e**, as duas seções deixaram de ser blocos
+empilhados e viraram abas horizontais, no mesmo lugar onde estavam. Cada aba
+mostra quantas notas tem, e a escolha é lembrada no navegador de quem usa.
+
+Os dois painéis vêm visíveis no HTML e é o JavaScript que esconde o inativo:
+se o script não rodar, a tela continua mostrando tudo empilhado, como antes.
+
+### DRE
+
+Resultado do período com receitas e despesas agrupadas por **centro de custo**
+e, dentro dele, por **categoria**, com a participação de cada grupo na receita.
+O número que lidera a tela é a margem ("44,4% de lucro"), com a comparação
+contra o período anterior de mesmo tamanho.
+
+Dá para ver em dois regimes:
+
+- **Competência** (padrão): cada lançamento pertence ao período do seu
+  vencimento, tenha o dinheiro entrado ou não.
+- **Caixa**: só o que foi efetivamente pago ou recebido — o dinheiro que
+  passou pela conta.
+
+> Este demonstrativo é montado com as categorias e os centros de custo que o
+> próprio usuário cadastrou. **Não substitui a DRE contábil**, que exige plano
+> de contas, deduções e provisões; para fins fiscais vale a que o contador
+> emite. A tela diz isso.
+
+### Vendas no período
+
+Total vendido, quanto já foi recebido, quanto está em aberto e o ticket médio,
+cada um comparado com o período anterior. Abaixo, a evolução mês a mês, o
+ranking de quem mais comprou (com a participação de cada cliente no total) e a
+quebra por categoria. Os dois relatórios exportam para Excel.
+
+### Testes agora moram no repositório
+
+As suítes viviam fora do projeto e **se perderam quando o ambiente de
+desenvolvimento foi recriado**. A partir desta rodada ficam em `erp/testes/`,
+versionadas junto com o código. Cada uma sobe o sistema em memória, semeia
+dados conhecidos e confere os números — sem precisar de servidor nem de
+internet.
+
+```bash
+cd erp
+rm -f erp.db .chave_sessao && rm -rf backups
+python3 testes/test_relatorios.py
+```
+
+O `test_relatorios.py` confere os números na mão (receitas de 18.000, despesas
+de 10.000, resultado de 8.000, margem de 44,4%), os dois regimes, o ranking de
+clientes, as exportações, o isolamento entre empresas e o acesso do contador.
+
 ## Limitações conhecidas (fora do escopo desta revisão)
 
 - Banco de dados SQLite, com um worker só. Aguenta bem dezenas de empresas;
@@ -989,6 +1052,9 @@ o SMTP vazio.
   workers.
 - Não há recuperação de senha por e-mail com link: quem redefine é o admin,
   pela lista de usuários.
+- As demais suítes de teste (papéis, isolamento, pagamento, autocadastro,
+  equipe e SMTP) ainda não foram recriadas depois da perda do ambiente; só
+  `test_relatorios.py` está versionado até agora.
 - O histórico da equipe guarda tudo, sem limpeza automática; num uso muito
   intenso convém apagar os registros antigos de tempos em tempos.
 - A rotina diária roda no mesmo processo do servidor. Com o worker único que

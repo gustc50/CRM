@@ -965,3 +965,95 @@ input[type="file"] {
 
 .campo-estreito { max-width: 130px; }
 .valor-texto { font-size: 16px; word-break: break-word; }
+
+/* ---- Abas horizontais dentro de uma tela ---- */
+
+.abas-horizontais {
+    display: flex;
+    gap: 4px;
+    margin: 22px 0 0;
+    border-bottom: 2px solid #e6e6e6;
+}
+.abas-horizontais .aba {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    padding: 10px 16px;
+    font-size: 14px;
+    color: #52514e;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+.abas-horizontais .aba:hover { background: #f1f4f8; color: #333; }
+.abas-horizontais .aba[aria-selected="true"] {
+    color: #0056b3;
+    border-bottom-color: #0056b3;
+    font-weight: bold;
+    background: none;
+}
+.aba-contagem {
+    background: #eef1f4;
+    border-radius: 10px;
+    padding: 1px 8px;
+    font-size: 12px;
+    font-weight: normal;
+    color: #52514e;
+}
+.aba[aria-selected="true"] .aba-contagem { background: #e7f1ff; color: #0056b3; }
+
+/* A aba já identifica a seção; o título dentro dela vira apoio. */
+.painel-aba > .titulo-secao {
+    margin-top: 16px;
+    border-bottom: none;
+    font-size: 14px;
+}
+
+@media (max-width: 560px) {
+    .abas-horizontais .aba { padding: 10px 10px; font-size: 13px; }
+}
+
+/* ---- Relatórios DRE e Vendas ---- */
+
+.tabela-dre .linha-grupo td { font-weight: bold; background: #fafbfc; }
+.tabela-dre .linha-filha td { padding-left: 28px; color: #52514e; font-size: 13px; }
+.tabela-dre .linha-filha td:first-child { padding-left: 34px; }
+.tabela-dre tfoot td { border-top: 2px solid #ddd; background: #fff; }
+.tabela-dre .linha-resultado td { font-size: 15px; }
+.valor-lucro { color: #1e7e34; }
+.valor-prejuizo { color: #b02a37; }
+th.num, td.num { text-align: right; white-space: nowrap; }
+
+.barras-mes {
+    display: flex;
+    align-items: flex-end;
+    gap: 10px;
+    margin-top: 14px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+}
+.coluna-mes {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    min-width: 62px;
+    flex: 1;
+}
+.barra-trilho {
+    width: 100%;
+    height: 120px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+}
+.barra-venda {
+    width: 22px;
+    min-height: 2px;
+    border-radius: 4px 4px 0 0;
+    background: var(--serie-entradas, #2a78d6);
+}
+.rotulo-mes { font-size: 12px; color: #52514e; }
+.valor-mes { font-size: 11px; color: #8a8a86; white-space: nowrap; }
