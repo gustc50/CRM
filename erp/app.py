@@ -17,7 +17,7 @@ from datetime import date, datetime, timedelta
 from urllib.parse import quote
 
 from flask import (
-    Flask, Response, abort, flash, jsonify, redirect, render_template, request,
+    Flask, Response, abort, flash, g, jsonify, redirect, render_template, request,
     send_from_directory, session, url_for,
 )
 from openpyxl import Workbook
@@ -33,6 +33,7 @@ import fiscal_manifestacao
 import fiscal_nfe
 import fiscal_nfse
 import fiscal_sync
+import formatos
 import marketplaces
 import ofx_parser
 from models import (
@@ -149,15 +150,15 @@ def primeiros_passos(empresa_id):
     tem_contador = bool(fiscal_sync.config_get('email_contador', empresa_id=empresa_id))
 
     passos = [
-        {'feito': tem_conta, 'titulo': 'Cadastre sua conta bancária',
-         'texto': 'Dá para importar o extrato em OFX e conciliar os lançamentos.',
+        {'feito': tem_conta, 'titulo': 'Cadastre seu banco',
+         'texto': 'Com o extrato do banco (arquivo OFX) o sistema mostra o saldo real e confere os lançamentos.',
          'url': url_for('contas_listar')},
-        {'feito': tem_contraparte, 'titulo': 'Cadastre um fornecedor ou cliente',
-         'texto': 'Cada lançamento fica ligado a quem paga ou recebe.',
-         'url': url_for('fornecedores_listar')},
-        {'feito': tem_lancamento, 'titulo': 'Lance a primeira conta',
-         'texto': 'A partir daí os painéis desta tela começam a mostrar números.',
+        {'feito': tem_lancamento, 'titulo': 'Faça o primeiro lançamento',
+         'texto': 'Uma conta a pagar ou a receber. A partir daí os painéis desta tela mostram números.',
          'url': url_for('lancamentos')},
+        {'feito': tem_contraparte, 'titulo': 'Cadastre fornecedores e clientes (opcional)',
+         'texto': 'Ajuda a ver quem mais compra e com quem você mais gasta. Dá para criar na hora, ao lançar.',
+         'url': url_for('fornecedores_listar')},
         {'feito': tem_certificado, 'titulo': 'Envie seu certificado digital (opcional)',
          'texto': 'Com ele o sistema busca sozinho as NFS-e e NF-e da sua empresa.',
          'url': url_for('configuracoes')},
@@ -596,6 +597,58 @@ def _validar_categoria_opcional(valor, tipo_esperado):
     return categoria_id, True
 
 
+# Valor da opção "+ Cadastrar novo" nas listas de fornecedor/cliente
+NOVO_CADASTRO = '__novo__'
+
+
+def _validar_entidade(form, tipo):
+    """Fornecedor (contas a pagar) ou cliente (a receber) do lançamento.
+
+    É opcional. Exigir um cadastro completo antes fazia lançar uma tarifa
+    bancária de R$ 15 virar "cadastrar o banco com CNPJ e endereço, em outra
+    tela". Além de escolher um existente ou nenhum, dá para digitar o nome de
+    um novo (opção "+ Cadastrar novo"), que é criado só com o nome.
+
+    Retorna (fornecedor_id, cliente_id, nome_novo, erro).
+    """
+    campo, model = ('fornecedor', Fornecedor) if tipo == 'Pagar' else ('cliente', Cliente)
+    escolhido = (form.get(f'{campo}_id') or '').strip()
+    if escolhido == NOVO_CADASTRO:
+        nome = (form.get(f'{campo}_novo') or '').strip()
+        if not nome:
+            return None, None, None, f'Digite o nome do novo {campo}.'
+        if len(nome) > 150:
+            return None, None, None, f'Nome do {campo} muito longo (até 150 caracteres).'
+        return None, None, nome, None
+    registro_id, ok = _validar_id_opcional(escolhido, model)
+    if not ok:
+        return None, None, None, f'{campo.capitalize()} inválido.'
+    if tipo == 'Pagar':
+        return registro_id, None, None, None
+    return None, registro_id, None, None
+
+
+def aplicar_entidade_nova(dados):
+    """Cadastra o fornecedor/cliente digitado no lançamento, só com o nome.
+
+    Se já existe um com o mesmo nome, usa esse em vez de criar outro igual.
+    Chamar depois de validar e antes de gravar: tira `entidade_nova` de
+    `dados` e põe o id no campo certo.
+    """
+    nome = dados.pop('entidade_nova', None)
+    if not nome:
+        return None
+    model, campo = (Fornecedor, 'fornecedor_id') if dados['tipo'] == 'Pagar' else (Cliente, 'cliente_id')
+    registro = da_empresa(model).filter(db.func.lower(model.nome) == nome.lower()).first()
+    if registro is None:
+        # CNPJ/CPF e endereço ficam em branco; dá para completar depois em Cadastros
+        registro = novo_registro(model, nome=nome, cnpj_cpf='', endereco='')
+        db.session.add(registro)
+        db.session.flush()
+    dados[campo] = registro.id
+    return registro
+
+
 def validar_transacao(form):
     """Valida os campos comuns a criação/edição de um lançamento."""
     tipo = form.get('tipo', '')
@@ -609,10 +662,9 @@ def validar_transacao(form):
     if not descricao or len(descricao) > 100:
         return None, 'Descrição obrigatória (até 100 caracteres).'
 
-    try:
-        valor = float(valor_str)
-    except (TypeError, ValueError):
-        return None, 'Valor inválido.'
+    valor = formatos.ler_valor(valor_str)
+    if valor is None:
+        return None, 'Valor inválido. Use vírgula para os centavos, como 1.234,56.'
 
     if valor <= 0:
         return None, 'O valor deve ser maior que zero.'
@@ -622,17 +674,9 @@ def validar_transacao(form):
     except (TypeError, ValueError):
         return None, 'Data de vencimento inválida.'
 
-    fornecedor_id = None
-    cliente_id = None
-
-    if tipo == 'Pagar':
-        fornecedor_id = _validar_id_existente(form.get('fornecedor_id', ''), Fornecedor)
-        if fornecedor_id is None:
-            return None, 'Selecione um fornecedor.'
-    else:
-        cliente_id = _validar_id_existente(form.get('cliente_id', ''), Cliente)
-        if cliente_id is None:
-            return None, 'Selecione um cliente.'
+    fornecedor_id, cliente_id, entidade_nova, erro = _validar_entidade(form, tipo)
+    if erro:
+        return None, erro
 
     categoria_id, categoria_ok = _validar_categoria_opcional(form.get('categoria_id', ''), tipo)
     if not categoria_ok:
@@ -649,6 +693,7 @@ def validar_transacao(form):
         'data_vencimento': data_vencimento,
         'fornecedor_id': fornecedor_id,
         'cliente_id': cliente_id,
+        'entidade_nova': entidade_nova,
         'categoria_id': categoria_id,
         'conta_bancaria_id': conta_bancaria_id,
     }
@@ -663,6 +708,72 @@ def nome_entidade(transacao):
 
 
 app.jinja_env.globals['nome_entidade'] = nome_entidade
+
+
+# ------------------------------------------------------------------ #
+# Formulário que volta preenchido depois de um erro
+# ------------------------------------------------------------------ #
+
+def guardar_formulario(chave):
+    """Guarda o que a pessoa digitou para a próxima tela devolver preenchido.
+
+    Antes, um erro no servidor fazia o formulário voltar vazio e era preciso
+    digitar tudo de novo. Vale só para a página seguinte, como o flash.
+    Senhas nunca são guardadas.
+    """
+    session['formulario'] = {
+        'chave': chave,
+        'dados': {k: v for k, v in request.form.items() if 'senha' not in k},
+    }
+
+
+@app.before_request
+def _formulario_da_requisicao_anterior():
+    g.formulario = session.pop('formulario') if 'formulario' in session else None
+
+
+def form_anterior(chave):
+    """O que foi digitado no formulário `chave` antes do erro (ou {})."""
+    salvo = g.get('formulario')
+    if salvo and salvo.get('chave') == chave:
+        return salvo['dados']
+    return {}
+
+
+app.jinja_env.globals['form_anterior'] = form_anterior
+
+
+def valores_do_formulario(digitado, objeto=None, campos=()):
+    """Valores para preencher um formulário, sempre como texto: o que foi
+    digitado antes do erro; senão o que está gravado; senão vazio. Valor em
+    reais sai no formato de digitação ("1.234,50"), não "1234.5"."""
+    valores = {}
+    for campo in campos:
+        if campo in digitado:
+            valores[campo] = digitado[campo]
+            continue
+        atual = getattr(objeto, campo, None) if objeto is not None else None
+        if atual is None:
+            valores[campo] = ''
+        elif isinstance(atual, float):
+            valores[campo] = formatos.valor_campo(atual)
+        elif hasattr(atual, 'isoformat'):
+            valores[campo] = atual.isoformat()
+        else:
+            valores[campo] = str(atual)
+    return valores
+
+
+app.jinja_env.globals['valores_do_formulario'] = valores_do_formulario
+app.jinja_env.globals['NOVO_CADASTRO'] = NOVO_CADASTRO
+
+
+def endereco_local(valor, padrao):
+    """Só aceita endereço deste sistema ("/lancamentos?..."), nunca outro site."""
+    valor = (valor or '').strip()
+    if valor.startswith('/') and not valor.startswith('//') and '\\' not in valor:
+        return valor
+    return padrao
 
 
 def nome_banco(codigo):
@@ -684,6 +795,10 @@ def formatar_cnpj_cpf(valor):
 
 
 app.jinja_env.globals['formatar_cnpj_cpf'] = formatar_cnpj_cpf
+# Dinheiro sempre no formato brasileiro: R$ 1.234,56
+app.jinja_env.filters['brl'] = formatos.moeda
+app.jinja_env.filters['num_br'] = formatos.numero_br
+app.jinja_env.filters['valor_campo'] = formatos.valor_campo
 
 
 def formatar_telefone(valor):
@@ -703,21 +818,42 @@ app.jinja_env.globals['formatar_telefone'] = formatar_telefone
 
 # Menu lateral. `ativo_em` lista os endpoints que acendem cada item (incluindo
 # as telas de edição), e `filhos` são as sub-abas que aparecem quando a seção
-# está aberta. Clicar no item pai leva para a primeira sub-aba.
+# está aberta. Clicar no item pai leva para a primeira sub-aba. `grupo` põe um
+# título acima do primeiro item de cada bloco: com 13 itens soltos, achar a
+# aba certa dependia de decorar a ordem.
 MENU_LATERAL = [
     {'icone': '🏠', 'rotulo': 'Início', 'endpoint': 'inicio',
      'ativo_em': ('inicio',)},
-    {'icone': '💰', 'rotulo': 'Lançamentos', 'endpoint': 'lancamentos',
-     'ativo_em': ('lancamentos', 'editar')},
-    {'icone': '🛒', 'rotulo': 'Vendas', 'endpoint': 'vendas_servicos',
+
+    {'grupo': 'Financeiro', 'icone': '💰', 'rotulo': 'Lançamentos', 'endpoint': 'lancamentos',
+     'ativo_em': ('lancamentos', 'editar', 'recorrentes_listar', 'recorrentes_editar'),
+     'filhos': [
+         {'rotulo': 'A pagar e a receber', 'endpoint': 'lancamentos',
+          'ativo_em': ('lancamentos', 'editar')},
+         {'rotulo': 'Recorrentes', 'endpoint': 'recorrentes_listar',
+          'ativo_em': ('recorrentes_listar', 'recorrentes_editar')},
+     ]},
+    # Era "Contas": o mesmo nome dos boletos ("contas a pagar"). São as contas
+    # bancárias, então o menu diz isso.
+    {'grupo': 'Financeiro', 'icone': '🏦', 'rotulo': 'Bancos', 'endpoint': 'contas_listar',
+     'ativo_em': ('contas_listar', 'contas_editar', 'contas_movimentacoes')},
+
+    {'grupo': 'Vendas', 'icone': '🛒', 'rotulo': 'Vendas', 'endpoint': 'vendas_servicos',
      'ativo_em': ('vendas_servicos', 'vendas_produtos'),
      'filhos': [
          {'rotulo': 'Serviços', 'endpoint': 'vendas_servicos', 'ativo_em': ('vendas_servicos',)},
          {'rotulo': 'Produtos', 'endpoint': 'vendas_produtos', 'ativo_em': ('vendas_produtos',)},
      ]},
-    {'icone': '🏪', 'rotulo': 'Marketplace', 'endpoint': 'marketplace',
+    {'grupo': 'Vendas', 'icone': '🏪', 'rotulo': 'Marketplace', 'endpoint': 'marketplace',
      'ativo_em': ('marketplace',)},
-    {'icone': '📊', 'rotulo': 'Relatórios', 'endpoint': 'relatorio',
+    {'grupo': 'Vendas', 'icone': '🧾', 'rotulo': 'Notas Fiscais', 'endpoint': 'notas_servico',
+     'ativo_em': ('notas_servico', 'notas_eletronicas'),
+     'filhos': [
+         {'rotulo': 'NFS-e', 'endpoint': 'notas_servico', 'ativo_em': ('notas_servico',)},
+         {'rotulo': 'NF-e', 'endpoint': 'notas_eletronicas', 'ativo_em': ('notas_eletronicas',)},
+     ]},
+
+    {'grupo': 'Análise', 'icone': '📊', 'rotulo': 'Relatórios', 'endpoint': 'relatorio',
      'ativo_em': ('relatorio', 'relatorio_dre', 'relatorio_vendas'),
      'filhos': [
          {'rotulo': 'Por período', 'endpoint': 'relatorio', 'ativo_em': ('relatorio',)},
@@ -727,15 +863,10 @@ MENU_LATERAL = [
          {'rotulo': 'Faturamento', 'endpoint': 'relatorio_vendas',
           'ativo_em': ('relatorio_vendas',)},
      ]},
-    {'icone': '🔁', 'rotulo': 'Recorrentes', 'endpoint': 'recorrentes_listar',
-     'ativo_em': ('recorrentes_listar', 'recorrentes_editar')},
-    {'icone': '🧾', 'rotulo': 'Notas Fiscais', 'endpoint': 'notas_servico',
-     'ativo_em': ('notas_servico', 'notas_eletronicas'),
-     'filhos': [
-         {'rotulo': 'NFS-e', 'endpoint': 'notas_servico', 'ativo_em': ('notas_servico',)},
-         {'rotulo': 'NF-e', 'endpoint': 'notas_eletronicas', 'ativo_em': ('notas_eletronicas',)},
-     ]},
-    {'icone': '👥', 'rotulo': 'Cadastros', 'endpoint': 'fornecedores_listar',
+    {'grupo': 'Análise', 'icone': '📨', 'rotulo': 'Contabilidade', 'endpoint': 'contabilidade',
+     'ativo_em': ('contabilidade',)},
+
+    {'grupo': 'Ajustes', 'icone': '👥', 'rotulo': 'Cadastros', 'endpoint': 'fornecedores_listar',
      'ativo_em': ('fornecedores_listar', 'fornecedores_editar', 'clientes_listar',
                   'clientes_editar', 'categorias_listar', 'categorias_editar'),
      'filhos': [
@@ -746,13 +877,9 @@ MENU_LATERAL = [
          {'rotulo': 'Categorias', 'endpoint': 'categorias_listar',
           'ativo_em': ('categorias_listar', 'categorias_editar')},
      ]},
-    {'icone': '🏦', 'rotulo': 'Contas', 'endpoint': 'contas_listar',
-     'ativo_em': ('contas_listar', 'contas_editar', 'contas_movimentacoes')},
-    {'icone': '📨', 'rotulo': 'Contabilidade', 'endpoint': 'contabilidade',
-     'ativo_em': ('contabilidade',)},
-    {'icone': '👤', 'rotulo': 'Equipe', 'endpoint': 'equipe',
+    {'grupo': 'Ajustes', 'icone': '👤', 'rotulo': 'Equipe', 'endpoint': 'equipe',
      'ativo_em': ('equipe',)},
-    {'icone': '⚙️', 'rotulo': 'Configurações', 'endpoint': 'configuracoes',
+    {'grupo': 'Ajustes', 'icone': '⚙️', 'rotulo': 'Configurações', 'endpoint': 'configuracoes',
      'ativo_em': ('configuracoes',)},
 ]
 
@@ -772,6 +899,8 @@ MENU_ADMIN = [
     {'icone': '⚙️', 'rotulo': 'Configurações', 'endpoint': 'admin_configuracoes',
      'ativo_em': ('admin_configuracoes',)},
 ]
+
+SUBABAS_SEM_CONTADOR = ('recorrentes_listar', 'recorrentes_editar')
 
 MENU_CONTADOR = [
     {'icone': '🏢', 'rotulo': 'Meus clientes', 'endpoint': 'contador_clientes',
@@ -796,9 +925,17 @@ def menu_do_usuario():
         # Dentro de um cliente: as telas de leitura, sem os cadastros
         somente_leitura = ('inicio', 'lancamentos', 'vendas_servicos', 'relatorio',
                            'notas_servico', 'notas_eletronicas', 'contabilidade')
-        return (MENU_CONTADOR
-                + [i for i in MENU_LATERAL if i['endpoint'] in somente_leitura]
-                + [ITEM_MINHA_CONTA])
+        itens = []
+        for item in MENU_LATERAL:
+            if item['endpoint'] not in somente_leitura:
+                continue
+            item = dict(item)
+            # Recorrentes é cadastro de quem lança; o contador não vê
+            filhos = [f for f in item.get('filhos', []) if f['endpoint'] not in SUBABAS_SEM_CONTADOR]
+            item['filhos'] = filhos if len(filhos) > 1 else []
+            item['ativo_em'] = tuple(e for e in item['ativo_em'] if e not in SUBABAS_SEM_CONTADOR)
+            itens.append(item)
+        return MENU_CONTADOR + itens + [ITEM_MINHA_CONTA]
     return MENU_LATERAL + [ITEM_MINHA_CONTA]
 
 
@@ -823,11 +960,14 @@ def validar_cadastro(form, tipo_categoria, model=None, id_atual=None):
     telefone = form.get('telefone', '').strip()
     email = form.get('email', '').strip()
 
+    # CNPJ/CPF e endereço são opcionais: um fornecedor pode ser só "Padaria
+    # da esquina". Quando o documento vem, precisa estar certo e não pode
+    # repetir o de outro cadastro.
     digitos = re.sub(r'\D', '', cnpj_cpf)
-    if len(digitos) not in (11, 14):
-        return None, 'CNPJ/CPF inválido (informe 11 dígitos para CPF ou 14 para CNPJ).'
+    if cnpj_cpf and len(digitos) not in (11, 14):
+        return None, 'CNPJ/CPF inválido (informe 11 dígitos para CPF ou 14 para CNPJ), ou deixe em branco.'
 
-    if model is not None:
+    if model is not None and digitos:
         ja_existe = da_empresa(model).filter_by(cnpj_cpf=digitos).first()
         if ja_existe is not None and ja_existe.id != id_atual:
             return None, (
@@ -838,8 +978,8 @@ def validar_cadastro(form, tipo_categoria, model=None, id_atual=None):
     if not nome or len(nome) > 150:
         return None, 'Nome obrigatório (até 150 caracteres).'
 
-    if not endereco or len(endereco) > 200:
-        return None, 'Endereço obrigatório (até 200 caracteres).'
+    if len(endereco) > 200:
+        return None, 'Endereço muito longo (até 200 caracteres).'
 
     if telefone and len(telefone) > 20:
         return None, 'Telefone muito longo (máx. 20 caracteres).'
@@ -944,7 +1084,8 @@ def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo, coluna_
         # usuário só descobriria ao ser barrado tentando salvar uma edição.
         vistos = {}
         for registro in registros:
-            vistos[registro.cnpj_cpf] = vistos.get(registro.cnpj_cpf, 0) + 1
+            if registro.cnpj_cpf:
+                vistos[registro.cnpj_cpf] = vistos.get(registro.cnpj_cpf, 0) + 1
         duplicados = {doc for doc, quantas in vistos.items() if quantas > 1}
 
         return render_template(
@@ -956,12 +1097,14 @@ def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo, coluna_
             prefixo=prefixo,
             categorias=_categorias(),
             contas_bancarias=_contas_bancarias(),
+            f=form_anterior(prefixo),
         )
 
     def adicionar():
         dados, erro = validar_cadastro(request.form, tipo_categoria, model=model)
         if erro:
             flash(erro, 'erro')
+            guardar_formulario(prefixo)
         else:
             db.session.add(novo_registro(model, **dados))
             db.session.commit()
@@ -975,6 +1118,7 @@ def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo, coluna_
             dados, erro = validar_cadastro(request.form, tipo_categoria, model=model, id_atual=id)
             if erro:
                 flash(erro, 'erro')
+                guardar_formulario(f'{prefixo}-{id}')
                 return redirect(url_for(f'{prefixo}_editar', id=id))
 
             registro.cnpj_cpf = dados['cnpj_cpf']
@@ -991,6 +1135,7 @@ def registrar_rotas_cadastro(model, nome_singular, nome_plural, prefixo, coluna_
         return render_template(
             'cadastro_editar.html',
             registro=registro,
+            f=form_anterior(f'{prefixo}-{id}'),
             titulo_singular=nome_singular,
             prefixo=prefixo,
             categorias=_categorias(),
@@ -1058,7 +1203,7 @@ def validar_categoria(form):
 @app.route('/categorias')
 def categorias_listar():
     registros = da_empresa(Categoria).order_by(Categoria.tipo, Categoria.nome).all()
-    return render_template('categorias.html', registros=registros)
+    return render_template('categorias.html', registros=registros, f=form_anterior('categoria'))
 
 
 @app.route('/categorias/adicionar', methods=['POST'])
@@ -1066,6 +1211,7 @@ def categorias_adicionar():
     dados, erro = validar_categoria(request.form)
     if erro:
         flash(erro, 'erro')
+        guardar_formulario('categoria')
     else:
         db.session.add(novo_registro(Categoria, **dados))
         db.session.commit()
@@ -1080,6 +1226,7 @@ def categorias_editar(id):
         dados, erro = validar_categoria(request.form)
         if erro:
             flash(erro, 'erro')
+            guardar_formulario(f'categoria-{id}')
             return redirect(url_for('categorias_editar', id=id))
         registro.nome = dados['nome']
         registro.tipo = dados['tipo']
@@ -1087,7 +1234,7 @@ def categorias_editar(id):
         db.session.commit()
         flash('Categoria atualizada com sucesso.', 'sucesso')
         return redirect(url_for('categorias_listar'))
-    return render_template('categoria_editar.html', registro=registro)
+    return render_template('categoria_editar.html', registro=registro, f=form_anterior(f'categoria-{id}'))
 
 
 @app.route('/categorias/excluir/<int:id>', methods=['POST'])
@@ -1138,7 +1285,7 @@ def validar_conta_bancaria(form):
 @app.route('/contas')
 def contas_listar():
     registros = da_empresa(ContaBancaria).order_by(ContaBancaria.nome).all()
-    return render_template('contas.html', registros=registros)
+    return render_template('contas.html', registros=registros, f=form_anterior('conta'))
 
 
 @app.route('/contas/adicionar', methods=['POST'])
@@ -1146,10 +1293,11 @@ def contas_adicionar():
     dados, erro = validar_conta_bancaria(request.form)
     if erro:
         flash(erro, 'erro')
+        guardar_formulario('conta')
     else:
         db.session.add(novo_registro(ContaBancaria, **dados))
         db.session.commit()
-        flash('Conta cadastrada com sucesso.', 'sucesso')
+        flash('Banco cadastrado com sucesso.', 'sucesso')
     return redirect(url_for('contas_listar'))
 
 
@@ -1160,15 +1308,16 @@ def contas_editar(id):
         dados, erro = validar_conta_bancaria(request.form)
         if erro:
             flash(erro, 'erro')
+            guardar_formulario(f'conta-{id}')
             return redirect(url_for('contas_editar', id=id))
         registro.nome = dados['nome']
         registro.banco = dados['banco']
         registro.agencia = dados['agencia']
         registro.conta_numero = dados['conta_numero']
         db.session.commit()
-        flash('Conta atualizada com sucesso.', 'sucesso')
+        flash('Banco atualizado com sucesso.', 'sucesso')
         return redirect(url_for('contas_listar'))
-    return render_template('conta_editar.html', registro=registro)
+    return render_template('conta_editar.html', registro=registro, f=form_anterior(f'conta-{id}'))
 
 
 @app.route('/contas/excluir/<int:id>', methods=['POST'])
@@ -1179,7 +1328,7 @@ def contas_excluir(id):
         or da_empresa(LancamentoRecorrente).filter_by(conta_bancaria_id=id).first() is not None
     )
     if em_uso:
-        flash('Não é possível excluir: existem lançamentos vinculados a esta conta.', 'erro')
+        flash('Não é possível excluir: existem lançamentos ligados a esta conta bancária.', 'erro')
         return redirect(url_for('contas_listar'))
     da_empresa(ContaMovimentacao).filter_by(conta_bancaria_id=id).delete()
     db.session.delete(registro)
@@ -1503,10 +1652,9 @@ def validar_recorrente(form):
     if not descricao or len(descricao) > 100:
         return None, 'Descrição obrigatória (até 100 caracteres).'
 
-    try:
-        valor = float(valor_str)
-    except (TypeError, ValueError):
-        return None, 'Valor inválido.'
+    valor = formatos.ler_valor(valor_str)
+    if valor is None:
+        return None, 'Valor inválido. Use vírgula para os centavos, como 1.234,56.'
 
     if valor <= 0:
         return None, 'O valor deve ser maior que zero.'
@@ -1519,17 +1667,9 @@ def validar_recorrente(form):
     if not 1 <= dia_vencimento <= 31:
         return None, 'Dia de vencimento deve estar entre 1 e 31.'
 
-    fornecedor_id = None
-    cliente_id = None
-
-    if tipo == 'Pagar':
-        fornecedor_id = _validar_id_existente(form.get('fornecedor_id', ''), Fornecedor)
-        if fornecedor_id is None:
-            return None, 'Selecione um fornecedor.'
-    else:
-        cliente_id = _validar_id_existente(form.get('cliente_id', ''), Cliente)
-        if cliente_id is None:
-            return None, 'Selecione um cliente.'
+    fornecedor_id, cliente_id, entidade_nova, erro = _validar_entidade(form, tipo)
+    if erro:
+        return None, erro
 
     categoria_id, categoria_ok = _validar_categoria_opcional(form.get('categoria_id', ''), tipo)
     if not categoria_ok:
@@ -1546,6 +1686,7 @@ def validar_recorrente(form):
         'dia_vencimento': dia_vencimento,
         'fornecedor_id': fornecedor_id,
         'cliente_id': cliente_id,
+        'entidade_nova': entidade_nova,
         'categoria_id': categoria_id,
         'conta_bancaria_id': conta_bancaria_id,
         'ativo': form.get('ativo') == 'on',
@@ -1559,6 +1700,8 @@ def validar_recorrente(form):
 
 MESES_NO_GRAFICO = 6
 MESES_ABREVIADOS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez']
+MESES_NOMES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto',
+               'setembro', 'outubro', 'novembro', 'dezembro']
 
 
 def _limites_do_mes(referencia):
@@ -1624,7 +1767,10 @@ def login():
         usuario, erro = auth.autenticar(request.form.get('email'), request.form.get('senha'))
         if erro:
             flash(erro, 'erro')
-            return redirect(url_for('login'))
+            # Volta com o e-mail preenchido: errar a senha não deveria
+            # obrigar a digitar o e-mail de novo.
+            guardar_formulario('login')
+            return redirect(url_for('login', proximo=request.form.get('proximo') or None))
 
         motivo = auth.motivo_de_bloqueio(usuario)
         auth.entrar(usuario)
@@ -1639,7 +1785,7 @@ def login():
             return redirect(destino)
         return redirect(url_for('inicio'))
 
-    return render_template('login.html', proximo=request.args.get('proximo', ''))
+    return render_template('login.html', proximo=request.args.get('proximo', ''), f=form_anterior('login'))
 
 
 @app.route('/logout')
@@ -1691,6 +1837,7 @@ def equipe():
     return render_template(
         'equipe.html',
         empresa=empresa,
+        f=form_anterior('equipe'),
         pessoas=[u for u in empresa.usuarios if u.papel == PAPEL_USUARIO],
         cargos=CARGOS,
         rotulo_cargo=dict(CARGOS),
@@ -1755,10 +1902,9 @@ def equipe_adicionar():
     # Contador não entra por aqui: ele tem cadastro próprio e ganha acesso
     # pelo e-mail informado na aba Contabilidade, sempre somente leitura.
     if cargo not in (CARGO_SOCIO, CARGO_FUNCIONARIO):
-        flash('Escolha se a pessoa é sócio ou funcionário. Contador não entra '
-              'na equipe: ele se cadastra sozinho e você o libera na aba '
-              'Contabilidade.', 'erro')
-        return redirect(url_for('equipe'))
+        return _erro_equipe('Escolha se a pessoa é sócio ou funcionário. Contador não entra '
+                            'na equipe: ele se cadastra sozinho e você o libera na aba '
+                            'Contabilidade.')
 
     if not nome or len(nome) > 150:
         return _erro_equipe('Informe o nome da pessoa.')
@@ -1779,8 +1925,8 @@ def equipe_adicionar():
 
     if era_extra:
         flash(f'{nome} entrou na equipe. Como passou de {USUARIOS_INCLUSOS} pessoas, '
-              f'a próxima mensalidade inclui R$ {asaas.valor_usuario_extra():.2f} '
-              f'por este acesso.'.replace('.', ','), 'sucesso')
+              f'a próxima mensalidade inclui {formatos.moeda(asaas.valor_usuario_extra())} '
+              f'por este acesso.', 'sucesso')
     else:
         flash(f'{nome} entrou na equipe. Combine a senha provisória com a pessoa — '
               f'ela pode trocá-la em Minha conta.', 'sucesso')
@@ -1789,6 +1935,7 @@ def equipe_adicionar():
 
 def _erro_equipe(mensagem):
     flash(mensagem, 'erro')
+    guardar_formulario('equipe')
     return redirect(url_for('equipe'))
 
 
@@ -2190,8 +2337,18 @@ def inicio():
     )
 
 
+LANCAMENTOS_POR_PAGINA = 100
+FILTROS_LANCAMENTOS = ('busca', 'filtro_tipo', 'filtro_status', 'filtro_categoria',
+                       'filtro_conta', 'filtro_inicio', 'filtro_fim', 'periodo')
+
+
+def _fim_do_mes(dia):
+    return dia.replace(day=calendar.monthrange(dia.year, dia.month)[1])
+
+
 @app.route('/lancamentos')
 def lancamentos():
+    hoje = date.today()
     todas_transacoes = da_empresa(Transacao).all()
     total_receber = sum(t.valor for t in todas_transacoes if t.tipo == 'Receber' and t.status == 'Pendente')
     total_pagar = sum(t.valor for t in todas_transacoes if t.tipo == 'Pagar' and t.status == 'Pendente')
@@ -2213,6 +2370,13 @@ def lancamentos():
     filtro_fim = parse_data(request.args.get('filtro_fim', ''))
     if filtro_inicio and filtro_fim and filtro_inicio > filtro_fim:
         filtro_inicio, filtro_fim = filtro_fim, filtro_inicio
+
+    # Sem filtro nenhum, abre no mês atual. Antes a tela trazia todos os
+    # lançamentos desde sempre, do mais antigo para o mais novo: com um ano de
+    # uso, o mês corrente ficava lá no fim de uma lista de centenas de linhas.
+    # "Tudo" continua a um clique.
+    if not any(k in request.args for k in FILTROS_LANCAMENTOS):
+        filtro_inicio, filtro_fim = hoje.replace(day=1), _fim_do_mes(hoje)
 
     query = da_empresa(Transacao)
     if busca:
@@ -2237,7 +2401,66 @@ def lancamentos():
     if filtro_fim:
         query = query.filter(Transacao.data_vencimento <= filtro_fim)
 
-    transacoes = query.order_by(Transacao.data_vencimento).all()
+    # Totais do que está filtrado (todas as páginas), para o rodapé
+    filtradas = query.with_entities(Transacao.tipo, db.func.count(), db.func.sum(Transacao.valor)) \
+        .group_by(Transacao.tipo).all()
+    soma_filtrada = {tipo: (qtde, soma or 0) for tipo, qtde, soma in filtradas}
+    qtde_total = sum(q for q, _ in soma_filtrada.values())
+
+    paginas = max(1, -(-qtde_total // LANCAMENTOS_POR_PAGINA))
+    pagina = request.args.get('pagina', '1')
+    pagina = min(max(int(pagina) if pagina.isdigit() else 1, 1), paginas)
+    transacoes = (query.order_by(Transacao.data_vencimento, Transacao.id)
+                  .offset((pagina - 1) * LANCAMENTOS_POR_PAGINA)
+                  .limit(LANCAMENTOS_POR_PAGINA).all())
+
+    # Contas vencidas que ficaram fora do período escolhido: o mês atual
+    # esconderia as atrasadas do mês passado, então a tela avisa.
+    vencidas_fora = None
+    if filtro_inicio and filtro_inicio <= hoje:
+        q = da_empresa(Transacao).filter(Transacao.status == 'Pendente',
+                                         Transacao.data_vencimento < min(filtro_inicio, hoje))
+        qtde = q.count()
+        if qtde:
+            vencidas_fora = {'qtde': qtde,
+                             'total': sum(t.valor for t in q.all()),
+                             'url': url_for('lancamentos', filtro_status='Pendente',
+                                            filtro_fim=(hoje - timedelta(days=1)).isoformat())}
+
+    # Atalhos de período, mantendo os outros filtros
+    def com(**mudancas):
+        args = {k: v for k, v in request.args.items() if k in FILTROS_LANCAMENTOS}
+        args.update(mudancas)
+        return url_for('lancamentos', **{k: v for k, v in args.items() if v not in (None, '')})
+
+    base = filtro_inicio or hoje
+    mes_anterior = (base.replace(day=1) - timedelta(days=1)).replace(day=1)
+    mes_seguinte = _fim_do_mes(base) + timedelta(days=1)
+    eh_mes_inteiro = bool(filtro_inicio and filtro_fim and filtro_inicio.day == 1
+                          and filtro_fim == _fim_do_mes(filtro_inicio))
+    atalhos = [
+        ('‹ ' + MESES_NOMES[mes_anterior.month - 1].capitalize(),
+         com(filtro_inicio=mes_anterior.isoformat(), filtro_fim=_fim_do_mes(mes_anterior).isoformat(),
+             periodo=None), False),
+        ('Este mês', com(filtro_inicio=hoje.replace(day=1).isoformat(), filtro_fim=_fim_do_mes(hoje).isoformat(),
+                         periodo=None),
+         eh_mes_inteiro and filtro_inicio == hoje.replace(day=1)),
+        (MESES_NOMES[mes_seguinte.month - 1].capitalize() + ' ›',
+         com(filtro_inicio=mes_seguinte.isoformat(), filtro_fim=_fim_do_mes(mes_seguinte).isoformat(),
+             periodo=None), False),
+        ('Tudo', com(filtro_inicio=None, filtro_fim=None, periodo='tudo'), not filtro_inicio and not filtro_fim),
+    ]
+
+    if eh_mes_inteiro:
+        titulo_periodo = f'{MESES_NOMES[filtro_inicio.month - 1]} de {filtro_inicio.year}'
+    elif filtro_inicio and filtro_fim:
+        titulo_periodo = f'{filtro_inicio:%d/%m/%Y} a {filtro_fim:%d/%m/%Y}'
+    elif filtro_inicio:
+        titulo_periodo = f'a partir de {filtro_inicio:%d/%m/%Y}'
+    elif filtro_fim:
+        titulo_periodo = f'até {filtro_fim:%d/%m/%Y}'
+    else:
+        titulo_periodo = 'todos os vencimentos'
 
     return render_template(
         'lancamentos.html',
@@ -2253,7 +2476,7 @@ def lancamentos():
         categorias_pagar=da_empresa(Categoria).filter_by(tipo='Pagar').order_by(Categoria.nome).all(),
         categorias_receber=da_empresa(Categoria).filter_by(tipo='Receber').order_by(Categoria.nome).all(),
         contas_bancarias=da_empresa(ContaBancaria).order_by(ContaBancaria.nome).all(),
-        hoje=datetime.now().date(),
+        hoje=hoje,
         busca=busca,
         filtro_tipo=filtro_tipo,
         filtro_status=filtro_status,
@@ -2261,6 +2484,17 @@ def lancamentos():
         filtro_conta=filtro_conta,
         filtro_inicio=filtro_inicio,
         filtro_fim=filtro_fim,
+        atalhos=atalhos,
+        titulo_periodo=titulo_periodo,
+        vencidas_fora=vencidas_fora,
+        soma_filtrada=soma_filtrada,
+        qtde_total=qtde_total,
+        pagina=pagina,
+        paginas=paginas,
+        pagina_anterior=com(pagina=pagina - 1) if pagina > 1 else None,
+        pagina_seguinte=com(pagina=pagina + 1) if pagina < paginas else None,
+        f=form_anterior('lancamento'),
+        voltar=request.full_path.rstrip('?'),
     )
 
 
@@ -2269,36 +2503,45 @@ def adicionar():
     dados, erro = validar_transacao(request.form)
     if erro:
         flash(erro, 'erro')
-        return redirect(url_for('lancamentos'))
+        guardar_formulario('lancamento')
+        return redirect(_destino_voltar())
 
+    novo = aplicar_entidade_nova(dados)
     db.session.add(novo_registro(Transacao, **dados))
     db.session.commit()
-    flash('Lançamento adicionado com sucesso.', 'sucesso')
-    return redirect(url_for('lancamentos'))
+    if novo is not None:
+        flash(f'Lançamento adicionado. "{novo.nome}" foi cadastrado só com o nome; '
+              f'dá para completar o CNPJ/CPF depois em Cadastros.', 'sucesso')
+    else:
+        flash('Lançamento adicionado com sucesso.', 'sucesso')
+    return redirect(_destino_voltar())
 
 
 @app.route('/editar/<int:id>', methods=['GET', 'POST'])
 def editar(id):
     transacao = buscar_ou_404(Transacao, id)
 
+    voltar = endereco_local(request.values.get('voltar'), url_for('lancamentos'))
     if request.method == 'POST':
+        def de_novo(mensagem):
+            flash(mensagem, 'erro')
+            guardar_formulario(f'lancamento-{id}')
+            return redirect(url_for('editar', id=id, voltar=voltar))
+
         dados, erro = validar_transacao(request.form)
         if erro:
-            flash(erro, 'erro')
-            return redirect(url_for('editar', id=id))
+            return de_novo(erro)
 
         status = request.form.get('status', '')
         if status not in STATUS_VALIDOS:
-            flash('Status inválido.', 'erro')
-            return redirect(url_for('editar', id=id))
+            return de_novo('Status inválido.')
 
         data_pagamento_str = request.form.get('data_pagamento', '').strip()
         data_pagamento = None
         if data_pagamento_str:
             data_pagamento = parse_data(data_pagamento_str)
             if not data_pagamento:
-                flash('Data de pagamento inválida.', 'erro')
-                return redirect(url_for('editar', id=id))
+                return de_novo('Data de pagamento inválida.')
 
         if request.form.get('remover_anexo') == 'on' and transacao.anexo_arquivo:
             _apagar_anexo(transacao.anexo_arquivo)
@@ -2309,8 +2552,7 @@ def editar(id):
         if arquivo and arquivo.filename:
             extensao = arquivo.filename.rsplit('.', 1)[-1].lower() if '.' in arquivo.filename else ''
             if extensao not in EXTENSOES_ANEXO_PERMITIDAS:
-                flash('Formato de anexo não suportado. Use PDF, PNG, JPG, GIF ou WEBP.', 'erro')
-                return redirect(url_for('editar', id=id))
+                return de_novo('Formato de anexo não suportado. Use PDF, PNG, JPG, GIF ou WEBP.')
 
             if transacao.anexo_arquivo:
                 _apagar_anexo(transacao.anexo_arquivo)
@@ -2321,6 +2563,7 @@ def editar(id):
             transacao.anexo_arquivo = nome_armazenado
             transacao.anexo_nome_original = nome_original
 
+        aplicar_entidade_nova(dados)
         transacao.tipo = dados['tipo']
         transacao.descricao = dados['descricao']
         transacao.valor = dados['valor']
@@ -2333,11 +2576,13 @@ def editar(id):
         transacao.conta_bancaria_id = dados['conta_bancaria_id']
         db.session.commit()
         flash('Lançamento atualizado com sucesso.', 'sucesso')
-        return redirect(url_for('lancamentos'))
+        return redirect(voltar)
 
     return render_template(
         'editar.html',
         t=transacao,
+        f=form_anterior(f'lancamento-{id}'),
+        voltar=voltar,
         fornecedores=da_empresa(Fornecedor).order_by(Fornecedor.nome).all(),
         clientes=da_empresa(Cliente).order_by(Cliente.nome).all(),
         categorias_pagar=da_empresa(Categoria).filter_by(tipo='Pagar').order_by(Categoria.nome).all(),
@@ -2357,17 +2602,16 @@ def excluir(id):
     descricao, valor = transacao.descricao, transacao.valor
     db.session.delete(transacao)
     db.session.commit()
-    registrar_acao('lancamento_excluido', f'{descricao} — R$ {valor:.2f}')
+    registrar_acao('lancamento_excluido', f'{descricao} — {formatos.moeda(valor)}')
     flash('Lançamento excluído.', 'sucesso')
-    return redirect(url_for('lancamentos'))
+    return redirect(_destino_voltar())
 
 
 def _destino_voltar():
-    """Rota de retorno pós-ação (permite dar baixa a partir dos painéis de notas)."""
-    voltar = request.form.get('voltar', '')
-    if voltar.startswith('/') and not voltar.startswith('//'):
-        return voltar
-    return url_for('lancamentos')
+    """Para onde voltar depois da ação: a mesma lista, com os filtros que
+    estavam aplicados (e os painéis de notas, que também dão baixa)."""
+    return endereco_local(request.form.get('voltar') or request.args.get('voltar'),
+                          url_for('lancamentos'))
 
 
 @app.route('/concluir/<int:id>', methods=['POST'])
@@ -2383,7 +2627,7 @@ def concluir(id):
     transacao.data_pagamento = data_pagamento
     db.session.commit()
     registrar_acao('baixa_dada',
-                   f'{transacao.descricao} — R$ {transacao.valor:.2f} '
+                   f'{transacao.descricao} — {formatos.moeda(transacao.valor)} '
                    f'em {data_pagamento:%d/%m/%Y}')
     return redirect(_destino_voltar())
 
@@ -2394,8 +2638,8 @@ def reabrir(id):
     transacao.status = 'Pendente'
     transacao.data_pagamento = None
     db.session.commit()
-    registrar_acao('baixa_desfeita', f'{transacao.descricao} — R$ {transacao.valor:.2f}')
-    return redirect(url_for('lancamentos'))
+    registrar_acao('baixa_desfeita', f'{transacao.descricao} — {formatos.moeda(transacao.valor)}')
+    return redirect(_destino_voltar())
 
 
 @app.route('/anexos/<int:id>')
@@ -3489,6 +3733,7 @@ def recorrentes_listar():
     return render_template(
         'recorrentes.html',
         registros=registros,
+        f=form_anterior('recorrente'),
         fornecedores=da_empresa(Fornecedor).order_by(Fornecedor.nome).all(),
         clientes=da_empresa(Cliente).order_by(Cliente.nome).all(),
         categorias_pagar=da_empresa(Categoria).filter_by(tipo='Pagar').order_by(Categoria.nome).all(),
@@ -3502,8 +3747,10 @@ def recorrentes_adicionar():
     dados, erro = validar_recorrente(request.form)
     if erro:
         flash(erro, 'erro')
+        guardar_formulario('recorrente')
         return redirect(url_for('recorrentes_listar'))
 
+    aplicar_entidade_nova(dados)
     novo = novo_registro(LancamentoRecorrente, **dados)
     novo.ultima_geracao_mes = competencia_anterior(competencia(datetime.now().date()))
     db.session.add(novo)
@@ -3520,8 +3767,10 @@ def recorrentes_editar(id):
         dados, erro = validar_recorrente(request.form)
         if erro:
             flash(erro, 'erro')
+            guardar_formulario(f'recorrente-{id}')
             return redirect(url_for('recorrentes_editar', id=id))
 
+        aplicar_entidade_nova(dados)
         for campo, valor in dados.items():
             setattr(tpl, campo, valor)
         db.session.commit()
@@ -3531,6 +3780,7 @@ def recorrentes_editar(id):
     return render_template(
         'recorrentes_editar.html',
         t=tpl,
+        f=form_anterior(f'recorrente-{id}'),
         fornecedores=da_empresa(Fornecedor).order_by(Fornecedor.nome).all(),
         clientes=da_empresa(Cliente).order_by(Cliente.nome).all(),
         categorias_pagar=da_empresa(Categoria).filter_by(tipo='Pagar').order_by(Categoria.nome).all(),
@@ -3910,11 +4160,13 @@ def configuracoes():
     caminho_chave = data_path('.chave_secreta')
 
     if request.method == 'POST':
-        caminho = request.form.get('cert_caminho', '').strip()
         senha = request.form.get('cert_senha', '')
-
-        # Enviar o .pfx pelo navegador evita ter que digitar o caminho completo:
-        # o arquivo é copiado para a pasta "certificados", ao lado do programa.
+        # O caminho não vem mais do formulário. Era herança de quando o sistema
+        # rodava no computador do cliente; num servidor compartilhado, deixava
+        # qualquer cliente apontar para um arquivo do servidor (inclusive o
+        # certificado de outra empresa). Agora só o arquivo enviado vale, e o
+        # já salvo continua sendo usado quando só a senha muda.
+        caminho = None
         arquivo = request.files.get('cert_arquivo')
         if arquivo and arquivo.filename:
             nome = secure_filename(arquivo.filename)
@@ -3946,6 +4198,12 @@ def configuracoes():
         if uf in fiscal_certificado.UF_PARA_CODIGO:
             fiscal_sync.config_set('cert_uf', uf)
             fiscal_sync.config_set('nfe_uf_autor', fiscal_certificado.UF_PARA_CODIGO[uf])
+
+        if caminho is None and senha:
+            caminho = fiscal_sync.config_get('cert_caminho') or None
+        if caminho is None and senha:
+            flash('Escolha o arquivo do certificado (.pfx) junto com a senha.', 'erro')
+            return redirect(url_for('configuracoes'))
 
         if caminho:
             fiscal_sync.config_set('cert_caminho', caminho)
@@ -3984,14 +4242,14 @@ def configuracoes():
                     'sucesso',
                 )
             else:
-                flash('Caminho salvo. Informe a senha do certificado para validá-lo.', 'erro')
+                flash('Arquivo recebido. Informe a senha do certificado para validá-lo.', 'erro')
         else:
             flash('Configurações salvas.', 'sucesso')
         return redirect(url_for('configuracoes'))
 
     return render_template(
         'configuracoes.html',
-        cert_caminho=fiscal_sync.config_get('cert_caminho'),
+        tem_certificado=bool(fiscal_sync.config_get('cert_caminho')),
         cert_documento=fiscal_sync.config_get('cert_documento'),
         cert_titular=fiscal_sync.config_get('cert_titular'),
         cert_validade=fiscal_sync.config_get('cert_validade'),
@@ -4003,8 +4261,6 @@ def configuracoes():
         nfe_ultimo_nsu=fiscal_sync.config_get('nfe_ultimo_nsu', '000000000000000'),
         ufs=sorted(fiscal_certificado.UF_PARA_CODIGO.keys()),
         ambientes_nfse=fiscal_nfse.AMBIENTES_NFSE,
-        backups=backups_existentes(),
-        backups_pasta=backups_dir(),
         smtp=_config_smtp(),
         provedores_smtp=envio_email.PROVEDORES_SMTP,
         segurancas_smtp=envio_email.SEGURANCAS,
@@ -4116,26 +4372,29 @@ def configuracoes_email_testar():
     return redirect(url_for('configuracoes'))
 
 
-@app.route('/configuracoes/backup', methods=['POST'])
-def configuracoes_backup():
+@app.route('/admin/backup', methods=['POST'])
+@auth.exigir_papel(PAPEL_ADMIN)
+def admin_backup():
+    # O banco guarda todas as empresas: a cópia é assunto do dono do sistema,
+    # não de cada cliente (antes ficava na tela Configurações do cliente).
     caminho = fazer_backup(forcar=True)
     if caminho:
         flash(f'Backup gravado em {caminho}', 'sucesso')
     else:
         flash('Não há banco de dados para copiar ainda.', 'erro')
-    return redirect(url_for('configuracoes'))
+    return redirect(url_for('admin_configuracoes') + '#backup')
 
 
 @app.route('/configuracoes/resetar-nsu/<qual>', methods=['POST'])
 def configuracoes_resetar_nsu(qual):
     if qual == 'nfse':
         fiscal_sync.config_set('nfse_ultimo_nsu', '0')
-        flash('Cursor de NFS-e zerado: a próxima sincronização baixa tudo de novo (sem duplicar).', 'sucesso')
+        flash('Pronto: na próxima busca de NFS-e o sistema traz todas de novo, sem duplicar as que já estão aqui.', 'sucesso')
     elif qual == 'nfe':
         fiscal_sync.config_set('nfe_ultimo_nsu', '000000000000000')
         fiscal_sync.config_set('nfe_max_nsu', '0')
         fiscal_sync.config_set('nfe_ultimo_cstat', '')
-        flash('Cursor de NF-e zerado: a próxima sincronização re-baixa o que a SEFAZ ainda guarda (~90 dias).', 'sucesso')
+        flash('Pronto: na próxima busca de NF-e o sistema traz de novo o que a SEFAZ ainda guarda (cerca de 90 dias), sem duplicar.', 'sucesso')
     else:
         flash('Opção inválida.', 'erro')
     return redirect(url_for('configuracoes'))
@@ -4178,6 +4437,7 @@ def admin_empresas():
     hoje = date.today()
     return render_template(
         'admin_empresas.html',
+        f=form_anterior('admin_empresa'),
         empresas=Empresa.query.order_by(Empresa.nome).all(),
         hoje=hoje,
         dias_periodo=DIAS_POR_PAGAMENTO,
@@ -4206,15 +4466,19 @@ def admin_empresa_nova():
 
     if not nome:
         flash('Informe o nome da empresa.', 'erro')
+        guardar_formulario('admin_empresa')
         return redirect(url_for('admin_empresas'))
     if not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email):
         flash('Informe um e-mail válido para o usuário da empresa.', 'erro')
+        guardar_formulario('admin_empresa')
         return redirect(url_for('admin_empresas'))
     if len(senha) < 8:
         flash('A senha precisa ter pelo menos 8 caracteres.', 'erro')
+        guardar_formulario('admin_empresa')
         return redirect(url_for('admin_empresas'))
     if Usuario.query.filter_by(email=email).first():
         flash(f'Já existe um usuário com o e-mail {email}.', 'erro')
+        guardar_formulario('admin_empresa')
         return redirect(url_for('admin_empresas'))
 
     empresa = Empresa(nome=nome, cnpj=cnpj or None)
@@ -4277,6 +4541,7 @@ def admin_empresa_assinatura(id):
 def admin_usuarios():
     return render_template(
         'admin_usuarios.html',
+        f=form_anterior('admin_usuario'),
         usuarios=Usuario.query.order_by(Usuario.papel, Usuario.nome).all(),
         empresas=Empresa.query.order_by(Empresa.nome).all(),
         papeis=(PAPEL_ADMIN, PAPEL_USUARIO, PAPEL_CONTADOR),
@@ -4294,15 +4559,19 @@ def admin_usuario_novo():
 
     if papel not in (PAPEL_ADMIN, PAPEL_USUARIO, PAPEL_CONTADOR):
         flash('Papel inválido.', 'erro')
+        guardar_formulario('admin_usuario')
         return redirect(url_for('admin_usuarios'))
     if not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email):
         flash('E-mail inválido.', 'erro')
+        guardar_formulario('admin_usuario')
         return redirect(url_for('admin_usuarios'))
     if len(senha) < 8:
         flash('A senha precisa ter pelo menos 8 caracteres.', 'erro')
+        guardar_formulario('admin_usuario')
         return redirect(url_for('admin_usuarios'))
     if Usuario.query.filter_by(email=email).first():
         flash(f'Já existe um usuário com o e-mail {email}.', 'erro')
+        guardar_formulario('admin_usuario')
         return redirect(url_for('admin_usuarios'))
 
     empresa = None
@@ -4310,6 +4579,7 @@ def admin_usuario_novo():
         empresa = Empresa.query.get(int(empresa_id)) if empresa_id.isdigit() else None
         if empresa is None:
             flash('Escolha a empresa deste usuário.', 'erro')
+            guardar_formulario('admin_usuario')
             return redirect(url_for('admin_usuarios'))
 
     auth.criar_usuario(email, senha, nome or email, papel=papel, empresa=empresa,
@@ -4360,6 +4630,8 @@ def admin_configuracoes():
         dica_senha=preset.get('dica_senha', 'senha ou senha de aplicativo'),
         endereco=_endereco_do_sistema(),
         email_admin=auth.usuario_logado().email,
+        backups=backups_existentes(),
+        backups_pasta=backups_dir(),
         suporte_whatsapp=fiscal_sync.sistema_get('suporte_whatsapp'),
         rotina_execucao=fiscal_sync.sistema_get('rotina_ultima_execucao'),
         rotina_resultado=fiscal_sync.sistema_get('rotina_ultimo_resultado'),
@@ -4572,16 +4844,14 @@ def admin_asaas_configurar():
 
     for campo, chave, rotulo in (('valor', 'asaas_valor', 'da mensalidade'),
                                  ('valor_usuario', 'asaas_valor_usuario', 'do acesso adicional')):
-        bruto = request.form.get(campo, '').strip().replace(',', '.')
+        bruto = request.form.get(campo, '').strip()
         if not bruto:
             continue
-        try:
-            if float(bruto) < 0:
-                raise ValueError
-            fiscal_sync.sistema_set(chave, f'{float(bruto):.2f}')
-        except ValueError:
-            flash(f'Valor {rotulo} inválido — o resto foi salvo.', 'erro')
+        valor = formatos.ler_valor(bruto)
+        if valor is None:
+            flash(f'Valor {rotulo} inválido (use 1.234,56) — o resto foi salvo.', 'erro')
             return redirect(url_for('admin_assinaturas'))
+        fiscal_sync.sistema_set(chave, f'{valor:.2f}')
 
     flash('Configuração do Asaas salva.', 'sucesso')
     return redirect(url_for('admin_assinaturas'))

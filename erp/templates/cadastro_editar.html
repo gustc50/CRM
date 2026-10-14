@@ -1,57 +1,60 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<h2>Editar {{ titulo_singular }}</h2>
+<h2>Editar {{ titulo_singular|lower }}</h2>
 
+{% set v = valores_do_formulario(f, registro, ('nome', 'cnpj_cpf', 'endereco', 'telefone', 'email',
+        'categoria_id', 'conta_bancaria_id')) %}
 <form action="{{ url_for(prefixo + '_editar', id=registro.id) }}" method="POST" class="form-coluna">
     <label>
-        CNPJ/CPF
-        <input type="text" name="cnpj_cpf" value="{{ formatar_cnpj_cpf(registro.cnpj_cpf) }}" maxlength="20" required>
-    </label>
-
-    <label>
         Nome
-        <input type="text" name="nome" value="{{ registro.nome }}" maxlength="150" required>
+        <input type="text" name="nome" value="{{ v.nome }}" maxlength="150" required>
     </label>
 
     <label>
-        Endereço
-        <input type="text" name="endereco" value="{{ registro.endereco }}" maxlength="200" required>
+        <span>CNPJ ou CPF <small>(opcional)</small></span>
+        <input type="text" name="cnpj_cpf" value="{{ v.cnpj_cpf if f else formatar_cnpj_cpf(registro.cnpj_cpf) }}"
+               maxlength="20" inputmode="numeric">
     </label>
 
     <label>
-        Telefone (opcional)
-        <input type="text" name="telefone" value="{{ registro.telefone or '' }}" maxlength="20">
+        <span>Endereço <small>(opcional)</small></span>
+        <input type="text" name="endereco" value="{{ v.endereco }}" maxlength="200">
     </label>
 
     <label>
-        E-mail (opcional)
-        <input type="email" name="email" value="{{ registro.email or '' }}" maxlength="150">
+        <span>Telefone <small>(opcional)</small></span>
+        <input type="tel" name="telefone" value="{{ v.telefone }}" maxlength="20">
     </label>
 
     <label>
-        Categoria padrão (opcional)
+        <span>E-mail <small>(opcional)</small></span>
+        <input type="email" name="email" value="{{ v.email }}" maxlength="150">
+    </label>
+
+    <label>
+        <span>Categoria padrão <small>(opcional — já vem escolhida ao lançar)</small></span>
         <select name="categoria_id">
             <option value="">Nenhuma</option>
             {% for c in categorias %}
-            <option value="{{ c.id }}" {{ 'selected' if registro.categoria_id == c.id else '' }}>{{ c.nome }}</option>
+            <option value="{{ c.id }}" {{ 'selected' if v.categoria_id == c.id|string else '' }}>{{ c.nome }}</option>
             {% endfor %}
         </select>
     </label>
 
     <label>
-        Conta bancária padrão (opcional)
+        <span>Banco padrão <small>(opcional)</small></span>
         <select name="conta_bancaria_id">
-            <option value="">Nenhuma</option>
+            <option value="">Nenhum</option>
             {% for c in contas_bancarias %}
-            <option value="{{ c.id }}" {{ 'selected' if registro.conta_bancaria_id == c.id else '' }}>{{ c.nome }}</option>
+            <option value="{{ c.id }}" {{ 'selected' if v.conta_bancaria_id == c.id|string else '' }}>{{ c.nome }}</option>
             {% endfor %}
         </select>
     </label>
 
     <div class="form-acoes">
-        <button type="submit">Salvar Alterações</button>
-        <a href="{{ url_for(prefixo + '_listar') }}" class="btn-acao btn-cancelar">Cancelar</a>
+        <button type="submit">Salvar alterações</button>
+        <a href="{{ url_for(prefixo + '_listar') }}" class="btn-secundario btn-link">Cancelar</a>
     </div>
 </form>
 {% endblock %}

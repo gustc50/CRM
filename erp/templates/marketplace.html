@@ -74,7 +74,7 @@
             </div>
         </form>
         <form action="{{ url_for('marketplace_desconectar', chave=loja.chave) }}" method="POST" class="form-mkt"
-              onsubmit="return confirm({{ ('Desconectar ' ~ loja.nome ~ '? Os pedidos e lançamentos já trazidos continuam.')|tojson|forceescape }});">
+              data-confirmar="{{ ('Desconectar ' ~ loja.nome ~ '? Os pedidos e lançamentos já trazidos continuam.') }}">
             <button type="submit" class="btn-secundario">Desconectar</button>
         </form>
 

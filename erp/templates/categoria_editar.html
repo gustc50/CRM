@@ -1,30 +1,31 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<h2>Editar Categoria</h2>
+<h2>Editar categoria</h2>
 
+{% set v = valores_do_formulario(f, registro, ('nome', 'tipo', 'centro_custo')) %}
 <form action="{{ url_for('categorias_editar', id=registro.id) }}" method="POST" class="form-coluna">
     <label>
         Nome
-        <input type="text" name="nome" value="{{ registro.nome }}" maxlength="50" required>
+        <input type="text" name="nome" value="{{ v.nome }}" maxlength="50" required>
     </label>
 
     <label>
-        Tipo
+        Usada em
         <select name="tipo" required>
-            <option value="Pagar" {{ 'selected' if registro.tipo == 'Pagar' else '' }}>Contas a Pagar</option>
-            <option value="Receber" {{ 'selected' if registro.tipo == 'Receber' else '' }}>Contas a Receber</option>
+            <option value="Pagar" {{ 'selected' if v.tipo == 'Pagar' else '' }}>Contas a pagar</option>
+            <option value="Receber" {{ 'selected' if v.tipo == 'Receber' else '' }}>Contas a receber</option>
         </select>
     </label>
 
     <label>
-        Centro de custo (opcional)
-        <input type="text" name="centro_custo" value="{{ registro.centro_custo or '' }}" maxlength="80">
+        <span>Centro de custo <small>(opcional)</small></span>
+        <input type="text" name="centro_custo" value="{{ v.centro_custo }}" maxlength="80">
     </label>
 
     <div class="form-acoes">
-        <button type="submit">Salvar Alterações</button>
-        <a href="{{ url_for('categorias_listar') }}" class="btn-acao btn-cancelar">Cancelar</a>
+        <button type="submit">Salvar alterações</button>
+        <a href="{{ url_for('categorias_listar') }}" class="btn-secundario btn-link">Cancelar</a>
     </div>
 </form>
 {% endblock %}

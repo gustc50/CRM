@@ -51,7 +51,7 @@
 <h3 class="titulo-secao receber">Notas emitidas pela empresa</h3>
 <p class="totais-fiscais">
     {{ totais_emitidas.qtde }} nota(s) ·
-    Total: R$ {{ "%.2f"|format(totais_emitidas.valor) }}
+    Total: {{ (totais_emitidas.valor)|brl }}
 </p>
 <div class="table-scroll">
 <table>
@@ -73,7 +73,7 @@
             <td class="chave-nfe" title="{{ n.chave }}">...{{ n.chave[-12:] }}</td>
             <td>{{ n.dest_nome or n.dest_doc or '—' }}</td>
             <td>{{ n.data_emissao.strftime('%d/%m/%Y') if n.data_emissao else '—' }}</td>
-            <td>R$ {{ "%.2f"|format(n.valor_total or 0) }}</td>
+            <td>{{ (n.valor_total or 0)|brl }}</td>
             <td>
                 {% if nfe_sem_efeito(n.situacao) %}<span class="badge-cancelada">{{ situacao_nfe_texto(n.situacao) }}</span>
                 {% else %}{{ situacao_nfe_texto(n.situacao) }}{% endif %}
@@ -99,7 +99,7 @@
 <h3 class="titulo-secao pagar">Notas emitidas contra a empresa (compras)</h3>
 <p class="totais-fiscais">
     {{ totais_recebidas.qtde }} nota(s) ·
-    Total: R$ {{ "%.2f"|format(totais_recebidas.valor) }}
+    Total: {{ (totais_recebidas.valor)|brl }}
 </p>
 {% if cert_ok %}
 <p class="aviso-cadastro">
@@ -131,7 +131,7 @@
             <td class="chave-nfe" title="{{ n.chave }}">...{{ n.chave[-12:] }}</td>
             <td>{{ n.emitente_nome or n.emitente_doc or '—' }}</td>
             <td>{{ n.data_emissao.strftime('%d/%m/%Y') if n.data_emissao else '—' }}</td>
-            <td>R$ {{ "%.2f"|format(n.valor_total or 0) }}</td>
+            <td>{{ (n.valor_total or 0)|brl }}</td>
             <td>
                 {% if nfe_sem_efeito(n.situacao) %}<span class="badge-cancelada">{{ situacao_nfe_texto(n.situacao) }}</span>
                 {% else %}{{ situacao_nfe_texto(n.situacao) }}{% endif %}
@@ -144,7 +144,7 @@
                 —
                 {% elif cert_ok %}
                 <form action="{{ url_for('nfe_dar_ciencia', id=n.id) }}" method="POST" class="form-inline"
-                      onsubmit="return confirm('Registrar a Ciência da Operação desta nota na SEFAZ?\n\nIsso grava um evento fiscal no CNPJ da empresa e não pode ser desfeito. Serve para liberar o XML completo da nota.');">
+                      data-confirmar="Registrar a Ciência da Operação desta nota na SEFAZ?&#10;&#10;Isso grava um evento fiscal no CNPJ da empresa e não pode ser desfeito. Serve para liberar o XML completo da nota.">
                     <input type="hidden" name="voltar" value="{{ voltar }}">
                     <button type="submit" class="btn-acao btn-gerar">Dar Ciência</button>
                 </form>

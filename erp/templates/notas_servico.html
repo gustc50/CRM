@@ -42,8 +42,8 @@
 <h3 class="titulo-secao receber">Serviços prestados (notas emitidas)</h3>
 <p class="totais-fiscais">
     {{ totais_emitidas.qtde }} nota(s) ativa(s) ·
-    Serviços: R$ {{ "%.2f"|format(totais_emitidas.valor) }} ·
-    ISS: R$ {{ "%.2f"|format(totais_emitidas.iss) }}
+    Serviços: {{ (totais_emitidas.valor)|brl }} ·
+    ISS: {{ (totais_emitidas.iss)|brl }}
 </p>
 <div class="table-scroll">
 <table>
@@ -65,8 +65,8 @@
             <td>{{ n.numero or '—' }}</td>
             <td>{{ n.tomador_nome or n.tomador_doc or '—' }}</td>
             <td>{{ n.data_emissao.strftime('%d/%m/%Y') if n.data_emissao else '—' }}</td>
-            <td>R$ {{ "%.2f"|format(n.valor_servico or 0) }}</td>
-            <td>R$ {{ "%.2f"|format(n.valor_liquido or 0) }}</td>
+            <td>{{ (n.valor_servico or 0)|brl }}</td>
+            <td>{{ (n.valor_liquido or 0)|brl }}</td>
             <td>
                 {% if n.situacao == 'ATIVA' %}Ativa
                 {% else %}<span class="badge-cancelada">{{ n.situacao|capitalize }}</span>{% endif %}
@@ -92,8 +92,8 @@
 <h3 class="titulo-secao pagar">Serviços tomados (notas recebidas)</h3>
 <p class="totais-fiscais">
     {{ totais_recebidas.qtde }} nota(s) ativa(s) ·
-    Serviços: R$ {{ "%.2f"|format(totais_recebidas.valor) }} ·
-    ISS: R$ {{ "%.2f"|format(totais_recebidas.iss) }}
+    Serviços: {{ (totais_recebidas.valor)|brl }} ·
+    ISS: {{ (totais_recebidas.iss)|brl }}
 </p>
 <div class="table-scroll">
 <table>
@@ -115,8 +115,8 @@
             <td>{{ n.numero or '—' }}</td>
             <td>{{ n.prestador_nome or n.prestador_doc or '—' }}</td>
             <td>{{ n.data_emissao.strftime('%d/%m/%Y') if n.data_emissao else '—' }}</td>
-            <td>R$ {{ "%.2f"|format(n.valor_servico or 0) }}</td>
-            <td>R$ {{ "%.2f"|format(n.valor_liquido or 0) }}</td>
+            <td>{{ (n.valor_servico or 0)|brl }}</td>
+            <td>{{ (n.valor_liquido or 0)|brl }}</td>
             <td>
                 {% if n.situacao == 'ATIVA' %}Ativa
                 {% else %}<span class="badge-cancelada">{{ n.situacao|capitalize }}</span>{% endif %}

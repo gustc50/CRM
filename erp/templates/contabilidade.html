@@ -104,7 +104,7 @@
 {% else %}
 <h3 class="titulo-secao">Envio</h3>
 <form action="{{ url_for('contabilidade_enviar') }}" method="POST" class="form-coluna form-config"
-      onsubmit="return confirm('Enviar os documentos de {{ inicio.strftime('%d/%m/%Y') }} a {{ fim.strftime('%d/%m/%Y') }} por e-mail?');">
+      data-confirmar="Enviar os documentos de {{ inicio.strftime('%d/%m/%Y') }} a {{ fim.strftime('%d/%m/%Y') }} por e-mail?">
     <input type="hidden" name="inicio" value="{{ inicio.isoformat() }}">
     <input type="hidden" name="fim" value="{{ fim.isoformat() }}">
 

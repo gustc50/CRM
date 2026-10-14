@@ -1,8 +1,9 @@
 {% extends 'base.html' %}
 {% import '_macros_fiscal.html' as fiscal %}
+{% import '_macros_lancamento.html' as campos %}
 
 {% block content %}
-<h2>Editar Lançamento</h2>
+<h2>Editar lançamento</h2>
 
 {% if t.nota_servico or t.nota_eletronica or t.recorrente_id %}
 <p class="aviso-cadastro">
@@ -15,95 +16,41 @@
 </p>
 {% endif %}
 
+{% set v = valores_do_formulario(f, t, ('tipo', 'fornecedor_id', 'cliente_id', 'fornecedor_novo',
+        'cliente_novo', 'categoria_id', 'conta_bancaria_id', 'descricao', 'valor', 'data_vencimento',
+        'status', 'data_pagamento')) %}
+
 <form action="{{ url_for('editar', id=t.id) }}" method="POST" enctype="multipart/form-data" class="form-coluna">
-    <label>
-        Tipo
-        <select name="tipo" id="tipo-select" required>
-            <option value="Receber" {{ 'selected' if t.tipo == 'Receber' else '' }}>Conta a Receber</option>
-            <option value="Pagar" {{ 'selected' if t.tipo == 'Pagar' else '' }}>Conta a Pagar</option>
-        </select>
-    </label>
-
-    <label id="fornecedor-campo" class="{{ '' if t.tipo == 'Pagar' else 'campo-oculto' }}">
-        Fornecedor
-        <select name="fornecedor_id" id="fornecedor-select" {{ '' if t.tipo == 'Pagar' else 'disabled' }}>
-            <option value="">Selecione o fornecedor...</option>
-            {% for f in fornecedores %}
-            <option value="{{ f.id }}" data-categoria="{{ f.categoria_id or '' }}" data-conta="{{ f.conta_bancaria_id or '' }}" {{ 'selected' if t.fornecedor_id == f.id else '' }}>{{ f.nome }}</option>
-            {% endfor %}
-        </select>
-    </label>
-
-    <label id="cliente-campo" class="{{ '' if t.tipo == 'Receber' else 'campo-oculto' }}">
-        Cliente
-        <select name="cliente_id" id="cliente-select" {{ '' if t.tipo == 'Receber' else 'disabled' }}>
-            <option value="">Selecione o cliente...</option>
-            {% for c in clientes %}
-            <option value="{{ c.id }}" data-categoria="{{ c.categoria_id or '' }}" data-conta="{{ c.conta_bancaria_id or '' }}" {{ 'selected' if t.cliente_id == c.id else '' }}>{{ c.nome }}</option>
-            {% endfor %}
-        </select>
-    </label>
-
-    <label id="categoria-pagar-campo" class="{{ '' if t.tipo == 'Pagar' else 'campo-oculto' }}">
-        Categoria (Pagar)
-        <select name="categoria_id" id="categoria-pagar-select" {{ '' if t.tipo == 'Pagar' else 'disabled' }}>
-            <option value="">Sem categoria</option>
-            {% for c in categorias_pagar %}
-            <option value="{{ c.id }}" {{ 'selected' if t.tipo == 'Pagar' and t.categoria_id == c.id else '' }}>{{ c.nome }}</option>
-            {% endfor %}
-        </select>
-    </label>
-
-    <label id="categoria-receber-campo" class="{{ '' if t.tipo == 'Receber' else 'campo-oculto' }}">
-        Categoria (Receber)
-        <select name="categoria_id" id="categoria-receber-select" {{ '' if t.tipo == 'Receber' else 'disabled' }}>
-            <option value="">Sem categoria</option>
-            {% for c in categorias_receber %}
-            <option value="{{ c.id }}" {{ 'selected' if t.tipo == 'Receber' and t.categoria_id == c.id else '' }}>{{ c.nome }}</option>
-            {% endfor %}
-        </select>
-    </label>
-
-    <label>
-        Conta bancária
-        <select name="conta_bancaria_id" id="conta-bancaria-select">
-            <option value="">Sem conta</option>
-            {% for c in contas_bancarias %}
-            <option value="{{ c.id }}" {{ 'selected' if t.conta_bancaria_id == c.id else '' }}>{{ c.nome }}</option>
-            {% endfor %}
-        </select>
-    </label>
+    <input type="hidden" name="voltar" value="{{ voltar }}">
+    {{ campos.campos_classificacao(v, fornecedores, clientes, categorias_pagar, categorias_receber, contas_bancarias) }}
 
     <label>
         Descrição
-        <input type="text" name="descricao" value="{{ t.descricao }}" maxlength="100" required>
+        <input type="text" name="descricao" value="{{ v.descricao }}" maxlength="100" required>
     </label>
 
-    <label>
-        Valor (R$)
-        <input type="number" step="0.01" min="0.01" name="valor" value="{{ t.valor }}" required>
-    </label>
+    {{ campos.campo_valor(v.valor) }}
 
     <label>
         Vencimento
-        <input type="date" name="data_vencimento" value="{{ t.data_vencimento.isoformat() }}" required>
+        <input type="date" name="data_vencimento" value="{{ v.data_vencimento }}" required>
     </label>
 
     <label>
-        Status
+        Situação
         <select name="status" required>
-            <option value="Pendente" {{ 'selected' if t.status == 'Pendente' else '' }}>Pendente</option>
-            <option value="Concluído" {{ 'selected' if t.status == 'Concluído' else '' }}>Concluído</option>
+            <option value="Pendente" {{ 'selected' if v.status == 'Pendente' else '' }}>Pendente</option>
+            <option value="Concluído" {{ 'selected' if v.status == 'Concluído' else '' }}>Concluído (pago/recebido)</option>
         </select>
     </label>
 
     <label>
-        Data de Pagamento (opcional)
-        <input type="date" name="data_pagamento" value="{{ t.data_pagamento.isoformat() if t.data_pagamento else '' }}">
+        <span>Data do pagamento <small>(opcional)</small></span>
+        <input type="date" name="data_pagamento" value="{{ v.data_pagamento }}">
     </label>
 
     <label>
-        Anexo (comprovante/nota fiscal — PDF, PNG, JPG, GIF ou WEBP, até 10 MB)
+        <span>Anexo <small>(comprovante ou nota — PDF, PNG, JPG, GIF ou WEBP, até 10 MB)</small></span>
         <input type="file" name="anexo" accept=".pdf,.png,.jpg,.jpeg,.gif,.webp">
     </label>
     {% if t.anexo_arquivo %}
@@ -114,8 +61,8 @@
     {% endif %}
 
     <div class="form-acoes">
-        <button type="submit">Salvar Alterações</button>
-        <a href="{{ url_for('lancamentos') }}" class="btn-acao btn-cancelar">Cancelar</a>
+        <button type="submit">Salvar alterações</button>
+        <a href="{{ voltar }}" class="btn-secundario btn-link">Cancelar</a>
     </div>
 </form>
 {% endblock %}

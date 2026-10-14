@@ -6,7 +6,7 @@
     {{ nome_banco(conta.banco) if conta.banco else 'Banco não informado' }}
     {% if conta.agencia %} · Agência {{ conta.agencia }}{% endif %}
     {% if conta.conta_numero %} · Conta {{ conta.conta_numero }}{% endif %}
-    {% if conta.saldo is not none %} · Saldo: R$ {{ "%.2f"|format(conta.saldo) }}{% if conta.saldo_data %} em {{ conta.saldo_data.strftime('%d/%m/%Y') }}{% endif %}{% endif %}
+    {% if conta.saldo is not none %} · Saldo: {{ (conta.saldo)|brl }}{% if conta.saldo_data %} em {{ conta.saldo_data.strftime('%d/%m/%Y') }}{% endif %}{% endif %}
 </p>
 
 <form action="{{ url_for('contas_importar_ofx', id=conta.id) }}" method="POST" enctype="multipart/form-data" class="form-inline-bloco">
@@ -33,15 +33,15 @@
 <div class="dashboard">
     <div class="card receber">
         <h3>Créditos no Período</h3>
-        <h2>R$ {{ "%.2f"|format(total_creditos) }}</h2>
+        <h2>{{ (total_creditos)|brl }}</h2>
     </div>
     <div class="card pagar">
         <h3>Débitos no Período</h3>
-        <h2>R$ {{ "%.2f"|format(total_debitos) }}</h2>
+        <h2>{{ (total_debitos)|brl }}</h2>
     </div>
     <div class="card {{ 'receber' if saldo_periodo >= 0 else 'pagar' }}">
         <h3>Saldo do Período</h3>
-        <h2>R$ {{ "%.2f"|format(saldo_periodo) }}</h2>
+        <h2>{{ (saldo_periodo)|brl }}</h2>
     </div>
 </div>
 
@@ -52,7 +52,7 @@
     <a class="btn-acao btn-exportar"
        href="{{ url_for('contas_movimentacoes_exportar', id=conta.id, formato='xlsx', inicio=inicio.isoformat(), fim=fim.isoformat()) }}">Baixar Excel (XLSX)</a>
     <form action="{{ url_for('contas_limpar_movimentacoes', id=conta.id) }}" method="POST" class="form-inline"
-          onsubmit="return confirm('Remover todas as movimentações importadas desta conta? Essa ação não pode ser desfeita.');">
+          data-confirmar="Remover todas as movimentações importadas desta conta? Essa ação não pode ser desfeita.">
         <button type="submit" class="btn-acao btn-excluir">Limpar Movimentações</button>
     </form>
 </div>
@@ -80,12 +80,12 @@
             <td>{{ m.data.strftime('%d/%m/%Y') }}</td>
             <td>{{ m.descricao }}</td>
             <td style="color: {{ '#28a745' if m.tipo == 'CREDITO' else '#dc3545' }}">{{ 'Crédito' if m.tipo == 'CREDITO' else 'Débito' }}</td>
-            <td>R$ {{ "%.2f"|format(m.valor) }}</td>
+            <td>{{ (m.valor)|brl }}</td>
             <td class="acoes">
                 {% if m.transacao %}
                 <span class="badge-baixado">{{ m.transacao.descricao }}</span>
                 <form action="{{ url_for('contas_movimentacoes_desvincular', id=conta.id, mov_id=m.id, inicio=inicio.isoformat(), fim=fim.isoformat()) }}" method="POST" class="form-inline"
-                      onsubmit="return confirm('Desvincular esta movimentação do lançamento? O status do lançamento não é alterado.');">
+                      data-confirmar="Desvincular esta movimentação do lançamento? O status do lançamento não é alterado.">
                     <button type="submit" class="btn-acao btn-cancelar">Desvincular</button>
                 </form>
                 {% elif conciliacao[m.id].candidatas %}
@@ -93,7 +93,7 @@
                     <select name="transacao_id">
                         {% for t in conciliacao[m.id].candidatas %}
                         <option value="{{ t.id }}" {{ 'selected' if conciliacao[m.id].sugerida and conciliacao[m.id].sugerida.id == t.id else '' }}>
-                            {{ t.descricao }} (R$ {{ "%.2f"|format(t.valor) }}, venc. {{ t.data_vencimento.strftime('%d/%m/%Y') }})
+                            {{ t.descricao }} ({{ (t.valor)|brl }}, venc. {{ t.data_vencimento.strftime('%d/%m/%Y') }})
                         </option>
                         {% endfor %}
                     </select>

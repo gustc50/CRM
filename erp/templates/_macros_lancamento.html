@@ -1,0 +1,91 @@
+{# Campos comuns aos formulários de lançamento e de recorrente.
+
+   `v` traz os valores como texto (ver valores_do_formulario): tipo,
+   fornecedor_id, cliente_id, fornecedor_novo, cliente_novo, categoria_id e
+   conta_bancaria_id. Cada campo tem rótulo visível — antes eram só selects
+   soltos, e depois de escolher uma opção ("Sem conta") não dava para saber
+   de que campo era. #}
+
+{% macro campos_classificacao(v, fornecedores, clientes, categorias_pagar, categorias_receber, contas_bancarias) %}
+{% set pagar = v.tipo == 'Pagar' %}
+<label>
+    Tipo
+    <select name="tipo" id="tipo-select" required>
+        <option value="Receber" {{ '' if pagar else 'selected' }}>Conta a receber</option>
+        <option value="Pagar" {{ 'selected' if pagar else '' }}>Conta a pagar</option>
+    </select>
+</label>
+
+<label id="fornecedor-campo" class="{{ '' if pagar else 'campo-oculto' }}">
+    <span>Fornecedor <small>(opcional)</small></span>
+    <select name="fornecedor_id" id="fornecedor-select" {{ '' if pagar else 'disabled' }}>
+        <option value="">Nenhum</option>
+        {% for o in fornecedores %}
+        <option value="{{ o.id }}" data-categoria="{{ o.categoria_id or '' }}" data-conta="{{ o.conta_bancaria_id or '' }}"
+                {{ 'selected' if v.fornecedor_id == o.id|string else '' }}>{{ o.nome }}</option>
+        {% endfor %}
+        <option value="{{ NOVO_CADASTRO }}" {{ 'selected' if v.fornecedor_id == NOVO_CADASTRO else '' }}>+ Cadastrar novo…</option>
+    </select>
+</label>
+<label id="fornecedor-novo-campo" class="{{ '' if pagar and v.fornecedor_id == NOVO_CADASTRO else 'campo-oculto' }}">
+    Nome do novo fornecedor
+    <input type="text" name="fornecedor_novo" maxlength="150" value="{{ v.fornecedor_novo }}"
+           placeholder="ex.: Banco do Brasil" autocomplete="off">
+</label>
+
+<label id="cliente-campo" class="{{ 'campo-oculto' if pagar else '' }}">
+    <span>Cliente <small>(opcional)</small></span>
+    <select name="cliente_id" id="cliente-select" {{ 'disabled' if pagar else '' }}>
+        <option value="">Nenhum</option>
+        {% for o in clientes %}
+        <option value="{{ o.id }}" data-categoria="{{ o.categoria_id or '' }}" data-conta="{{ o.conta_bancaria_id or '' }}"
+                {{ 'selected' if v.cliente_id == o.id|string else '' }}>{{ o.nome }}</option>
+        {% endfor %}
+        <option value="{{ NOVO_CADASTRO }}" {{ 'selected' if v.cliente_id == NOVO_CADASTRO else '' }}>+ Cadastrar novo…</option>
+    </select>
+</label>
+<label id="cliente-novo-campo" class="{{ '' if not pagar and v.cliente_id == NOVO_CADASTRO else 'campo-oculto' }}">
+    Nome do novo cliente
+    <input type="text" name="cliente_novo" maxlength="150" value="{{ v.cliente_novo }}"
+           placeholder="ex.: Maria Souza" autocomplete="off">
+</label>
+
+<label id="categoria-pagar-campo" class="{{ '' if pagar else 'campo-oculto' }}">
+    <span>Categoria <small>(opcional)</small></span>
+    <select name="categoria_id" id="categoria-pagar-select" {{ '' if pagar else 'disabled' }}>
+        <option value="">Sem categoria</option>
+        {% for c in categorias_pagar %}
+        <option value="{{ c.id }}" {{ 'selected' if pagar and v.categoria_id == c.id|string else '' }}>{{ c.nome }}</option>
+        {% endfor %}
+    </select>
+</label>
+<label id="categoria-receber-campo" class="{{ 'campo-oculto' if pagar else '' }}">
+    <span>Categoria <small>(opcional)</small></span>
+    <select name="categoria_id" id="categoria-receber-select" {{ 'disabled' if pagar else '' }}>
+        <option value="">Sem categoria</option>
+        {% for c in categorias_receber %}
+        <option value="{{ c.id }}" {{ 'selected' if not pagar and v.categoria_id == c.id|string else '' }}>{{ c.nome }}</option>
+        {% endfor %}
+    </select>
+</label>
+
+<label>
+    <span>Banco <small>(opcional)</small></span>
+    <select name="conta_bancaria_id" id="conta-bancaria-select">
+        <option value="">Nenhum</option>
+        {% for c in contas_bancarias %}
+        <option value="{{ c.id }}" {{ 'selected' if v.conta_bancaria_id == c.id|string else '' }}>{{ c.nome }}</option>
+        {% endfor %}
+    </select>
+</label>
+{% endmacro %}
+
+{# Campo de valor em reais: texto (não "number"), para a vírgula funcionar
+   em qualquer navegador. Quem interpreta é o servidor (formatos.ler_valor). #}
+{% macro campo_valor(valor, nome='valor', rotulo='Valor (R$)', obrigatorio=True) %}
+<label>
+    {{ rotulo }}
+    <input type="text" name="{{ nome }}" value="{{ valor }}" inputmode="decimal" autocomplete="off"
+           placeholder="0,00" maxlength="20" data-valor-br {{ 'data-positivo required' if obrigatorio else '' }}>
+</label>
+{% endmacro %}

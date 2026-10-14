@@ -1,27 +1,21 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<h2>⚙ Configurações</h2>
+<h2>Configurações</h2>
 
 <h3 class="titulo-secao">Certificado Digital A1 (.pfx / .p12)</h3>
 <p class="aviso-cadastro">
-    O certificado digital da empresa é usado para baixar automaticamente as
-    NFS-e (Portal Nacional) e as NF-e (SEFAZ) por conexão segura (mTLS).
-    A senha fica criptografada no seu computador — nada é enviado para
-    servidores de terceiros, apenas para os serviços oficiais do governo.
+    Com o certificado digital da empresa, o sistema busca sozinho as notas
+    fiscais de serviço (NFS-e) e de produto (NF-e) emitidas e recebidas.
+    O arquivo e a senha ficam guardados com criptografia e só são usados
+    para falar com os sistemas oficiais do governo.
 </p>
 
 <form action="{{ url_for('configuracoes') }}" method="POST" enctype="multipart/form-data" class="form-coluna form-config">
     <label>
-        Selecionar o certificado (.pfx ou .p12) do seu computador
+        {{ 'Trocar o certificado' if tem_certificado else 'Arquivo do certificado' }} (.pfx ou .p12)
         <input type="file" name="cert_arquivo" accept=".pfx,.p12">
-        <small>O arquivo é copiado para a pasta <code>certificados</code>, ao lado do programa.</small>
-    </label>
-
-    <label>
-        Ou informe o caminho do arquivo, para deixá-lo onde já está
-        <input type="text" name="cert_caminho" value="{{ cert_caminho }}"
-               placeholder="Ex.: C:\certificados\empresa.pfx">
+        {% if tem_certificado %}<small>Já há um certificado salvo. Envie outro só para substituí-lo.</small>{% endif %}
     </label>
 
     <label>
@@ -75,49 +69,30 @@
 </div>
 {% endif %}
 
-<h3 class="titulo-secao">Sincronização (avançado)</h3>
+<h3 class="titulo-secao">Notas que não apareceram</h3>
 <p class="aviso-cadastro">
-    O sistema controla até onde já baixou usando um "cursor" (NSU). Se alguma
-    nota conhecida não apareceu, zere o cursor para re-baixar tudo o que os
-    servidores nacionais ainda guardam — as notas já salvas não são
-    duplicadas nem apagadas.
+    O sistema lembra até onde já buscou as notas, para trazer só as novas a
+    cada vez. Se uma nota que você sabe que existe não apareceu, peça para
+    buscar tudo de novo: vem o que os sistemas do governo ainda guardam
+    (as NF-e, cerca dos últimos 90 dias). Nada é duplicado nem apagado.
 </p>
-<div class="table-scroll">
-<table>
-    <thead>
-        <tr><th>Serviço</th><th>Último NSU</th><th>Ação</th></tr>
-    </thead>
-    <tbody>
-        <tr>
-            <td>NFS-e (Portal Nacional)</td>
-            <td>{{ nfse_ultimo_nsu }}</td>
-            <td class="acoes">
-                <form action="{{ url_for('configuracoes_resetar_nsu', qual='nfse') }}" method="POST" class="form-inline"
-                      onsubmit="return confirm('Zerar o cursor da NFS-e? A próxima sincronização baixará tudo de novo (sem duplicar).');">
-                    <button type="submit" class="btn-acao btn-cancelar">Zerar cursor</button>
-                </form>
-            </td>
-        </tr>
-        <tr>
-            <td>NF-e (SEFAZ)</td>
-            <td>{{ nfe_ultimo_nsu }}</td>
-            <td class="acoes">
-                <form action="{{ url_for('configuracoes_resetar_nsu', qual='nfe') }}" method="POST" class="form-inline"
-                      onsubmit="return confirm('Zerar o cursor da NF-e? A próxima sincronização re-baixará o que a SEFAZ ainda guarda (~90 dias).');">
-                    <button type="submit" class="btn-acao btn-cancelar">Zerar cursor</button>
-                </form>
-            </td>
-        </tr>
-    </tbody>
-</table>
+<div class="botoes-linha">
+    <form action="{{ url_for('configuracoes_resetar_nsu', qual='nfse') }}" method="POST" class="form-inline"
+          data-confirmar="Buscar de novo todas as notas de serviço (NFS-e)? As que já estão no sistema não são duplicadas.">
+        <button type="submit" class="btn-secundario">Buscar de novo as NFS-e</button>
+    </form>
+    <form action="{{ url_for('configuracoes_resetar_nsu', qual='nfe') }}" method="POST" class="form-inline"
+          data-confirmar="Buscar de novo as notas de produto (NF-e) que a SEFAZ ainda guarda (cerca de 90 dias)? As que já estão no sistema não são duplicadas.">
+        <button type="submit" class="btn-secundario">Buscar de novo as NF-e</button>
+    </form>
 </div>
 
 <h3 class="titulo-secao">E-mail (envio para o contador)</h3>
 <p class="aviso-cadastro">
-    Escolha um provedor com plano gratuito e informe a conta de e-mail que o
-    sistema vai usar para enviar. Não há credencial embutida no programa: a
-    conta é sua, então as mensagens saem do seu endereço e não caem em spam
-    por causa de um remetente compartilhado.
+    É por esta conta que o sistema manda os documentos para o seu contador.
+    Use o e-mail da própria empresa (Gmail, Outlook e outros servem): a
+    mensagem chega com o seu endereço como remetente, e o contador sabe de
+    quem veio.
     <br><br>
     <strong>Atenção:</strong> Gmail, Outlook e Zoho não aceitam a senha normal
     da conta — é preciso gerar uma <strong>senha de aplicativo</strong>.
@@ -184,36 +159,11 @@
     <button type="submit">Enviar e-mail de teste</button>
 </form>
 
-<h3 class="titulo-secao">Backup do banco de dados</h3>
+<h3 class="titulo-secao">Cópia de segurança</h3>
 <p class="aviso-cadastro">
-    Uma cópia do banco é gravada automaticamente uma vez por dia, ao abrir o
-    programa, em <code>{{ backups_pasta }}</code> (as {{ backups|length }} cópias
-    mais recentes ficam guardadas; o sistema mantém até 30 dias).
-    <strong>Continue levando essa pasta junto com o <code>erp.db</code> no seu
-    backup externo</strong> — pendrive, HD externo ou nuvem: uma cópia no mesmo
-    computador não protege contra perda ou roubo da máquina.
+    Seus dados ficam no servidor do sistema, com cópia de segurança automática
+    todos os dias — você não precisa fazer nada. Para ter uma cópia sua, use
+    <strong>Baixar Excel</strong> em Relatórios e <strong>Baixar documentos</strong>
+    em Contabilidade.
 </p>
-
-<form action="{{ url_for('configuracoes_backup') }}" method="POST" class="form-inline-bloco">
-    <button type="submit">Fazer backup agora</button>
-</form>
-
-<div class="table-scroll">
-<table>
-    <thead>
-        <tr><th>Arquivo</th><th>Gravado em</th><th>Tamanho</th></tr>
-    </thead>
-    <tbody>
-        {% for b in backups %}
-        <tr>
-            <td>{{ b.nome }}</td>
-            <td>{{ b.data.strftime('%d/%m/%Y %H:%M') }}</td>
-            <td>{{ b.tamanho_kb }} KB</td>
-        </tr>
-        {% else %}
-        <tr><td colspan="3">Nenhum backup gravado ainda.</td></tr>
-        {% endfor %}
-    </tbody>
-</table>
-</div>
 {% endblock %}

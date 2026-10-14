@@ -9,14 +9,34 @@
     servem para o cliente testar antes do primeiro pagamento — deixe em branco
     para já nascer bloqueado até pagar.
 </p>
-<form action="{{ url_for('admin_empresa_nova') }}" method="POST">
-    <input type="text" name="nome" placeholder="Nome da empresa" maxlength="150" required>
-    <input type="text" name="cnpj" placeholder="CNPJ (opcional)" maxlength="20">
-    <input type="text" name="nome_usuario" placeholder="Nome do responsável" maxlength="150">
-    <input type="email" name="email" placeholder="E-mail de acesso" maxlength="150" required>
-    <input type="password" name="senha" placeholder="Senha provisória (mín. 8)" minlength="8" required>
-    <input type="number" name="dias_cortesia" placeholder="Dias de cortesia" min="0" max="365">
-    <button type="submit">Criar cliente</button>
+<form action="{{ url_for('admin_empresa_nova') }}" method="POST" class="form-grade">
+    <label class="campo-largo">
+        Nome da empresa
+        <input type="text" name="nome" value="{{ f.nome }}" maxlength="150" required>
+    </label>
+    <label>
+        <span>CNPJ <small>(opcional)</small></span>
+        <input type="text" name="cnpj" value="{{ f.cnpj }}" maxlength="20" inputmode="numeric">
+    </label>
+    <label>
+        <span>Nome do responsável <small>(opcional)</small></span>
+        <input type="text" name="nome_usuario" value="{{ f.nome_usuario }}" maxlength="150">
+    </label>
+    <label>
+        E-mail de acesso
+        <input type="email" name="email" value="{{ f.email }}" maxlength="150" required>
+    </label>
+    <label>
+        <span>Senha provisória <small>(mín. 8)</small></span>
+        <input type="password" name="senha" minlength="8" autocomplete="new-password" required>
+    </label>
+    <label>
+        <span>Dias de cortesia <small>(opcional)</small></span>
+        <input type="number" name="dias_cortesia" value="{{ f.dias_cortesia }}" min="0" max="365" inputmode="numeric">
+    </label>
+    <div class="form-acoes">
+        <button type="submit">Criar cliente</button>
+    </div>
 </form>
 
 <h3 class="titulo-secao">Situação dos clientes</h3>
@@ -73,7 +93,7 @@
             </td>
             <td>
                 <form action="{{ url_for('admin_empresa_asaas', id=e.id) }}" method="POST" class="form-inline">
-                    <input type="text" name="asaas_cliente_id" value="{{ e.asaas_cliente_id or '' }}"
+                    <input type="text" name="asaas_cliente_id" value="{{ e.asaas_cliente_id or '' }}" aria-label="ID no Asaas de {{ e.nome }}"
                            placeholder="automático pelo CPF/CNPJ" maxlength="60" size="14">
                     <button type="submit" class="btn-acao btn-editar">Salvar</button>
                 </form>
@@ -88,7 +108,7 @@
                                ') até ' ~ novo_fim.strftime('%d/%m/%Y') ~ '?' %}
                 {% endif %}
                 <form action="{{ url_for('admin_empresa_assinatura', id=e.id) }}" method="POST" class="form-inline"
-                      onsubmit="return confirm({{ aviso|tojson|forceescape }});">
+                      data-confirmar="{{ aviso }}">
                     <input type="hidden" name="acao" value="liberar">
                     <button type="submit" class="btn-acao btn-concluir">
                         {{ 'Renovar' if e.assinatura_em_dia else 'Liberar' }}
@@ -96,7 +116,7 @@
                 </form>
                 {% if e.assinatura_em_dia %}
                 <form action="{{ url_for('admin_empresa_assinatura', id=e.id) }}" method="POST" class="form-inline"
-                      onsubmit="return confirm({{ ('Encerrar o acesso de ' ~ e.nome ~ '? O bloqueio é imediato.')|tojson|forceescape }});">
+                      data-confirmar="{{ ('Encerrar o acesso de ' ~ e.nome ~ '? O bloqueio é imediato.') }}">
                     <input type="hidden" name="acao" value="encerrar">
                     <button type="submit" class="btn-acao btn-excluir">Encerrar</button>
                 </form>

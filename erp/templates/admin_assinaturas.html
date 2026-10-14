@@ -42,13 +42,14 @@
     </label>
     <label>
         Mensalidade (R$) <small>(cobrada de quem se cadastra pelo site)</small>
-        <input type="number" name="valor" step="0.01" min="0" value="{{ '%.2f'|format(asaas.valor) }}">
+        <input type="text" name="valor" inputmode="decimal" data-valor-br maxlength="20"
+               value="{{ asaas.valor|valor_campo }}">
     </label>
     <label>
         Acesso adicional (R$)
         <small>(por pessoa acima das {{ inclusos }} inclusas na mensalidade)</small>
-        <input type="number" name="valor_usuario" step="0.01" min="0"
-               value="{{ '%.2f'|format(asaas.valor_usuario) }}">
+        <input type="text" name="valor_usuario" inputmode="decimal" data-valor-br maxlength="20"
+               value="{{ asaas.valor_usuario|valor_campo }}">
     </label>
     <div class="form-acoes">
         <button type="submit">Salvar</button>
@@ -114,7 +115,7 @@
             <td>{{ p.empresa.nome if p.empresa else '—' }}</td>
             <td><small>{{ p.asaas_id }}</small></td>
             <td>{{ p.pago_em.strftime('%d/%m/%Y') if p.pago_em else '—' }}</td>
-            <td>R$ {{ "%.2f"|format(p.valor or 0) }}</td>
+            <td>{{ (p.valor or 0)|brl }}</td>
             <td>{{ p.liberado_ate.strftime('%d/%m/%Y') if p.liberado_ate else '—' }}</td>
         </tr>
         {% else %}

@@ -52,15 +52,15 @@
 <div class="dashboard">
     <div class="card receber">
         <h3>Total Entradas</h3>
-        <h2>R$ {{ "%.2f"|format(total_entradas) }}</h2>
+        <h2>{{ (total_entradas)|brl }}</h2>
     </div>
     <div class="card pagar">
         <h3>Total Saídas</h3>
-        <h2>R$ {{ "%.2f"|format(total_saidas) }}</h2>
+        <h2>{{ (total_saidas)|brl }}</h2>
     </div>
     <div class="card {{ 'receber' if saldo >= 0 else 'pagar' }}">
         <h3>Saldo do Período</h3>
-        <h2>R$ {{ "%.2f"|format(saldo) }}</h2>
+        <h2>{{ (saldo)|brl }}</h2>
     </div>
 </div>
 
@@ -94,9 +94,9 @@
         <tr>
             <td>{{ g.nome }}</td>
             <td>{{ g.qtde }}</td>
-            <td style="color: #28a745">R$ {{ "%.2f"|format(g.entradas) }}</td>
-            <td style="color: #dc3545">R$ {{ "%.2f"|format(g.saidas) }}</td>
-            <td style="color: {{ '#28a745' if g.saldo >= 0 else '#dc3545' }}">R$ {{ "%.2f"|format(g.saldo) }}</td>
+            <td style="color: #28a745">{{ (g.entradas)|brl }}</td>
+            <td style="color: #dc3545">{{ (g.saidas)|brl }}</td>
+            <td style="color: {{ '#28a745' if g.saldo >= 0 else '#dc3545' }}">{{ (g.saldo)|brl }}</td>
         </tr>
         {% else %}
         <tr><td colspan="5">Nenhum lançamento no período selecionado.</td></tr>
@@ -140,7 +140,7 @@
             <td>{{ t.conta_bancaria.nome if t.conta_bancaria else '—' }}</td>
             <td>{{ t.data_vencimento.strftime('%d/%m/%Y') }}</td>
             <td>{{ t.data_pagamento.strftime('%d/%m/%Y') if t.data_pagamento else '—' }}</td>
-            <td>R$ {{ "%.2f"|format(t.valor) }}</td>
+            <td>{{ (t.valor)|brl }}</td>
             <td>
                 {{ t.status }}
                 {% if t.status == 'Pendente' and t.data_vencimento < hoje %}<span class="badge-atrasado">Atrasado</span>{% endif %}

@@ -3,26 +3,54 @@
 {% block content %}
 <h2>{{ titulo }}</h2>
 
-<form action="{{ url_for(prefixo + '_adicionar') }}" method="POST">
-    <input type="text" name="cnpj_cpf" placeholder="CNPJ ou CPF" maxlength="20" required>
-    <input type="text" name="nome" placeholder="Nome" maxlength="150" required>
-    <input type="text" name="endereco" placeholder="Endereço" maxlength="200" required>
-    <input type="text" name="telefone" placeholder="Telefone (opcional)" maxlength="20">
-    <input type="email" name="email" placeholder="E-mail (opcional)" maxlength="150">
-    <select name="categoria_id">
-        <option value="">Categoria padrão (opcional)</option>
-        {% for c in categorias %}
-        <option value="{{ c.id }}">{{ c.nome }}</option>
-        {% endfor %}
-    </select>
-    <select name="conta_bancaria_id">
-        <option value="">Conta padrão (opcional)</option>
-        {% for c in contas_bancarias %}
-        <option value="{{ c.id }}">{{ c.nome }}</option>
-        {% endfor %}
-    </select>
-    <button type="submit">Adicionar {{ titulo_singular }}</button>
-</form>
+{% if not somente_leitura() %}
+<details class="bloco-recolhivel" open data-fechar-no-celular {{ 'data-manter-aberto' if f else '' }}>
+    <summary>+ Novo {{ titulo_singular|lower }}</summary>
+    <form action="{{ url_for(prefixo + '_adicionar') }}" method="POST" class="form-grade">
+        <label class="campo-largo">
+            Nome
+            <input type="text" name="nome" value="{{ f.nome }}" maxlength="150" required>
+        </label>
+        <label>
+            <span>CNPJ ou CPF <small>(opcional)</small></span>
+            <input type="text" name="cnpj_cpf" value="{{ f.cnpj_cpf }}" maxlength="20" inputmode="numeric">
+        </label>
+        <label>
+            <span>Telefone <small>(opcional)</small></span>
+            <input type="tel" name="telefone" value="{{ f.telefone }}" maxlength="20">
+        </label>
+        <label class="campo-largo">
+            <span>Endereço <small>(opcional)</small></span>
+            <input type="text" name="endereco" value="{{ f.endereco }}" maxlength="200">
+        </label>
+        <label>
+            <span>E-mail <small>(opcional)</small></span>
+            <input type="email" name="email" value="{{ f.email }}" maxlength="150">
+        </label>
+        <label>
+            <span>Categoria padrão <small>(opcional)</small></span>
+            <select name="categoria_id">
+                <option value="">Nenhuma</option>
+                {% for c in categorias %}
+                <option value="{{ c.id }}" {{ 'selected' if f.categoria_id == c.id|string else '' }}>{{ c.nome }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>
+            <span>Banco padrão <small>(opcional)</small></span>
+            <select name="conta_bancaria_id">
+                <option value="">Nenhum</option>
+                {% for c in contas_bancarias %}
+                <option value="{{ c.id }}" {{ 'selected' if f.conta_bancaria_id == c.id|string else '' }}>{{ c.nome }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <div class="form-acoes">
+            <button type="submit">Adicionar {{ titulo_singular|lower }}</button>
+        </div>
+    </form>
+</details>
+{% endif %}
 
 <div class="exportar">
     <span>Exportar {{ titulo|lower }}:</span>
@@ -34,25 +62,25 @@
 <table>
     <thead>
         <tr>
-            <th>CNPJ/CPF</th>
             <th>Nome</th>
+            <th>CNPJ/CPF</th>
             <th>Endereço</th>
             <th>Telefone</th>
             <th>E-mail</th>
-            <th>Categoria Padrão</th>
-            <th>Conta Padrão</th>
+            <th>Categoria padrão</th>
+            <th>Banco padrão</th>
             <th>Ação</th>
         </tr>
     </thead>
     <tbody>
         {% for r in registros %}
         <tr>
-            <td>
-                {{ formatar_cnpj_cpf(r.cnpj_cpf) }}
+            <td>{{ r.nome }}</td>
+            <td class="sem-quebra">
+                {{ formatar_cnpj_cpf(r.cnpj_cpf) if r.cnpj_cpf else '—' }}
                 {% if r.cnpj_cpf in duplicados %}<span class="badge-sem-categoria">repetido</span>{% endif %}
             </td>
-            <td>{{ r.nome }}</td>
-            <td>{{ r.endereco }}</td>
+            <td>{{ r.endereco or '—' }}</td>
             <td>{{ r.telefone or '—' }}</td>
             <td>{{ r.email or '—' }}</td>
             <td>{{ r.categoria.nome if r.categoria else '—' }}</td>
@@ -60,7 +88,7 @@
             <td class="acoes">
                 <a href="{{ url_for(prefixo + '_editar', id=r.id) }}" class="btn-acao btn-editar">Editar</a>
                 <form action="{{ url_for(prefixo + '_excluir', id=r.id) }}" method="POST" class="form-inline"
-                      onsubmit="return confirm('Excluir \'{{ r.nome }}\'? Essa ação não pode ser desfeita.');">
+                      data-confirmar="Excluir '{{ r.nome }}'? Essa ação não pode ser desfeita.">
                     <button type="submit" class="btn-acao btn-excluir">Excluir</button>
                 </form>
             </td>

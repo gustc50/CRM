@@ -216,6 +216,37 @@
     </div>
 </form>
 
+<h3 class="titulo-secao" id="backup">Backup do banco de dados</h3>
+<p class="aviso-cadastro">
+    A rotina diária grava uma cópia do banco — com <strong>todas as empresas</strong> —
+    em <code>{{ backups_pasta }}</code> e guarda as dos últimos 30 dias. Ela fica
+    no mesmo servidor: leve uma cópia para fora dele de tempos em tempos (outro
+    servidor, nuvem ou HD externo), porque um problema no disco leva as duas
+    juntas. Antes ficava na tela de cada cliente; como o banco é um só, passou
+    para cá.
+</p>
+<form action="{{ url_for('admin_backup') }}" method="POST" class="form-inline-bloco">
+    <button type="submit">Fazer backup agora</button>
+</form>
+<div class="table-scroll">
+<table class="tabela-compacta">
+    <thead>
+        <tr><th>Arquivo</th><th>Gravado em</th><th class="num">Tamanho</th></tr>
+    </thead>
+    <tbody>
+        {% for b in backups %}
+        <tr>
+            <td>{{ b.nome }}</td>
+            <td>{{ b.data.strftime('%d/%m/%Y %H:%M') }}</td>
+            <td class="num">{{ b.tamanho_kb }} KB</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="3">Nenhum backup gravado ainda.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
 <h3 class="titulo-secao">Rotina diária</h3>
 <p class="nota-grafico">
     Uma vez por dia o servidor põe em dia os lançamentos recorrentes, faz o

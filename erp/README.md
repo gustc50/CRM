@@ -19,16 +19,17 @@ A navegação fica em um menu lateral, com estas seções:
   categoria e conta, mostrando total de entradas, saídas e o saldo do
   período, com atalhos de fluxo de caixa projetado (7/15/30 dias) e
   exportação em CSV ou Excel (XLSX).
-- **Recorrentes**: lançamentos que se repetem todo mês (aluguel, salários),
-  gerados automaticamente.
-- **Cadastros** (sub-abas **Fornecedores** e **Clientes**): CNPJ/CPF, nome,
-  endereço, telefone, e-mail, com editar, excluir e exportação em CSV/XLSX.
-  Cada lançamento de "Conta a Pagar" é vinculado a um fornecedor, e cada
-  "Conta a Receber" a um cliente.
+- **Recorrentes** (sub-aba de Lançamentos): lançamentos que se repetem todo
+  mês (aluguel, salários), gerados automaticamente.
+- **Cadastros** (sub-abas **Fornecedores** e **Clientes**): nome e,
+  opcionalmente, CNPJ/CPF, endereço, telefone e e-mail, com editar, excluir e
+  exportação em CSV/XLSX. O lançamento pode ficar ligado a um fornecedor
+  (conta a pagar) ou a um cliente (a receber), mas não é obrigatório — e dá
+  para cadastrar um novo na hora, só com o nome.
 - **Categorias**: classificam os lançamentos, cada uma exclusiva de Contas
   a Pagar ou a Receber, com centro de custo opcional. Pode ser definida como
   categoria padrão no cadastro de um Fornecedor ou Cliente.
-- **Contas** (bancárias): cadastro com banco, agência e número da conta.
+- **Bancos** (contas bancárias): cadastro com banco, agência e número da conta.
   Permite importar o extrato em **OFX** (gerado pelo internet banking) e
   ver as movimentações importadas em uma sub-aba, filtráveis por período.
 - **Notas Fiscais** (sub-abas **NFS-e** e **NF-e**): notas baixadas
@@ -37,8 +38,9 @@ A navegação fica em um menu lateral, com estas seções:
   nas compras.
 - **Contabilidade**: envia ao contador, por e-mail, os lançamentos e os XMLs
   das notas de um período escolhido.
-- **⚙ Configurações**: certificado digital, ambientes, controle de
-  sincronização, envio de e-mail (SMTP) e backup do banco de dados.
+- **Configurações**: certificado digital, ambientes, busca de notas antigas
+  e o e-mail que manda os documentos ao contador. (O backup do banco fica nas
+  Configurações do administrador.)
 
 ## Como colocar no ar (servidor hospedado)
 
@@ -120,9 +122,9 @@ Tudo fica na pasta do projeto e **não** está no Git:
 | `backups/`       | cópias automáticas do `erp.db`                       |
 
 Perder o `.chave_secreta` não perde os lançamentos, mas obriga a cadastrar de
-novo a senha do certificado, o SMTP e o token do Asaas. A aba
-**⚙ Configurações** tem um backup do banco sob demanda, e o sistema também faz
-cópias sozinho em `backups/`.
+novo a senha do certificado, o SMTP e o token do Asaas. As **Configurações do
+administrador** têm um backup do banco sob demanda, e a rotina diária também
+faz cópias sozinha em `backups/`.
 
 ## Testar na sua máquina
 
@@ -1238,6 +1240,97 @@ aparece com "—" nas taxas e no líquido, e fica de fora dos totais.
 > registrados e lojas reais. Os pontos que podem precisar de ajuste no
 > primeiro uso estão em *Limitações conhecidas*.
 
+## Décima nona rodada: usabilidade
+
+Antes desta rodada, um teste de uso de verdade — no navegador, como cliente
+novo, cliente, contador e admin, no computador e no celular — achou três
+problemas que causavam prejuízo e vários pontos de atrito. Todos foram
+corrigidos.
+
+### Os três que causavam prejuízo
+
+| Problema | O que acontecia | Agora |
+|---|---|---|
+| **Valor com vírgula** | O campo era `type="number"`, e a vírgula ficava a cargo do navegador: "150,50" foi gravado como **R$ 15.050,00**, com mensagem de sucesso. | O campo é texto e quem lê é o servidor (`formatos.ler_valor`), sempre igual: aceita "150,50", "1.234,56", "R$ 1.234,56" e "150.50". O que é ambíguo ("1,234") é recusado com explicação, em vez de chutado. Ao sair do campo, o valor aparece como foi entendido. |
+| **Excluir sem confirmar** | A pergunta era escrita dentro do script (`onsubmit="return confirm('…{{ nome }}…')"`). Um apóstrofo — "Conta d'água" — quebrava o script, a pergunta não aparecia e **Cancelar excluía**. A mesma brecha deixava um nome mal-intencionado (vindo de um XML de nota, por exemplo) rodar código. | A pergunta vai num atributo comum (`data-confirmar`), com o escape normal do HTML, e um script único (`static/app.js`) faz a pergunta. Valia para 17 botões em 13 telas. |
+| **Configurações de programa local** | A tela do cliente pedia o "caminho do arquivo (C:\…)" do certificado, mostrava a pasta do servidor e deixava qualquer cliente fazer backup do banco **de todas as empresas**. O campo de caminho permitia apontar para qualquer arquivo do servidor, inclusive o certificado de outra empresa. | O certificado só entra por envio do arquivo. O backup foi para as Configurações do administrador (`/admin/backup`), e o cliente vê só um aviso de que as cópias são automáticas. |
+
+### Menos atrito
+
+- **Fornecedor e cliente opcionais.** Lançar uma tarifa de R$ 15 exigia
+  antes cadastrar o banco, com CNPJ e endereço, em outra tela. Agora o campo é
+  opcional, e a opção **"+ Cadastrar novo…"** cria o fornecedor (ou cliente)
+  ali mesmo, só com o nome — se já existe um com esse nome, usa o existente.
+  No cadastro completo, CNPJ/CPF e endereço também ficaram opcionais (quando o
+  CNPJ vem, continua sendo conferido e não pode repetir).
+- **Erro não apaga mais o que foi digitado.** Quando o servidor recusa um
+  formulário, ele volta preenchido (`guardar_formulario` / `form_anterior`,
+  que funcionam como o flash: valem só para a página seguinte; senha nunca é
+  guardada). Vale para lançamentos, recorrentes, fornecedores, clientes,
+  categorias, bancos, equipe e os cadastros do admin. No login, senha errada
+  mantém o e-mail.
+- **Dinheiro sempre como R$ 1.234,56.** Dez telas mostravam "R$ 15050.00"
+  (Lançamentos, Notas fiscais, Relatório por período, Bancos, Recorrentes,
+  Equipe, Admin). Agora há o filtro `|brl` para todas.
+- **Celular:**
+  - o menu fica recolhido atrás do botão **☰ Menu** (antes ocupava 560 px no
+    topo de toda tela);
+  - em Lançamentos, o formulário de novo lançamento e os filtros começam
+    fechados, e cada lançamento vira um cartão com descrição, valor,
+    vencimento e situação à vista;
+  - Categorias, Configurações e o gráfico do Início passavam da largura da
+    tela; não passam mais (nenhuma das 17 telas do cliente).
+
+### Mais clareza
+
+- **Rótulo em todo campo.** Os formulários de lançamento, recorrente,
+  fornecedor, cliente, categoria, banco e do admin eram só campos com texto
+  de exemplo, que some ao digitar; depois de escolher "Sem conta", não dava
+  para saber de que campo era. Agora cada um tem nome e diz quando é
+  opcional.
+- **"Contas" virou "Bancos".** O mesmo nome servia para conta bancária e para
+  boleto ("contas a pagar").
+- **Menu em grupos:** Financeiro (Lançamentos, Bancos), Vendas (Vendas,
+  Marketplace, Notas fiscais), Análise (Relatórios, Contabilidade) e Ajustes
+  (Cadastros, Equipe, Configurações). **Recorrentes** virou sub-aba de
+  Lançamentos.
+- **Lançamentos:**
+  - tem título e abre no **mês atual** (antes trazia tudo desde sempre, do
+    mais antigo para o mais novo), com atalhos *‹ mês anterior · Este mês ·
+    próximo mês › · Tudo*;
+  - avisa quando há **contas vencidas de antes do período** que ficaram fora
+    da lista, com o link para vê-las;
+  - pagina de 100 em 100, com o total do que está filtrado no rodapé;
+  - Dar baixa, Reabrir, Editar e Excluir voltam para a lista **com os filtros
+    que estavam aplicados**;
+  - a tabela ficou com 8 colunas (categoria embaixo da descrição, data do
+    pagamento dentro da situação) e os botões cabem sem rolar de lado;
+  - o contador não vê mais o formulário nem os botões que ele não pode usar.
+- **Sem jargão** nas telas do cliente: "cursor (NSU)", "Zerar cursor" e
+  "mTLS" viraram **Notas que não apareceram › Buscar de novo**. A tela de
+  Bancos explica onde achar o extrato OFX no internet banking.
+- **Primeiros passos** reordenados: banco, primeiro lançamento e, opcional,
+  fornecedores e clientes.
+
+### Como foi testado
+
+- `testes/test_usabilidade.py` — 57 conferências: leitura de valores, os
+  formulários que voltam preenchidos (e só na volta do erro, e só para quem
+  errou), fornecedor opcional e cadastrado na hora sem duplicar, fornecedor de
+  outra empresa enfiado no formulário, a confirmação com apóstrofo, o
+  "voltar" que não aceita endereço de fora, o mês atual e o aviso das
+  vencidas, a paginação, o menu (do cliente e do contador), as Configurações
+  sem caminho nem backup, e o backup só para o admin.
+- Para provar que esses testes pegam defeitos, estraguei de propósito sete
+  pontos (a vírgula, o formulário guardado, o fornecedor opcional, o
+  "voltar", o caminho do certificado, o mês atual e a reutilização do nome):
+  cada um fez o teste falhar no ponto certo.
+- `testes/test_navegador.py` — 16 conferências num Chromium de verdade,
+  repetindo o que deu errado no teste original: "150,50" gravado como 150,50,
+  "Conta d'água" com Cancelar continua lá, o cadastro na hora, o e-mail que
+  fica no login, o menu no celular e nenhuma tela mais larga que o celular.
+- As quatro suítes anteriores continuam passando (200 conferências).
+
 ## Limitações conhecidas (fora do escopo desta revisão)
 
 - Banco de dados SQLite, com um worker só. Aguenta bem dezenas de empresas;
@@ -1248,7 +1341,14 @@ aparece com "—" nas taxas e no líquido, e fica de fora dos totais.
 - As suítes de papéis, isolamento, autocadastro, equipe e SMTP ainda não
   foram recriadas depois da perda do ambiente. Estão versionadas
   `test_relatorios.py`, `test_liberacao.py` (esta cobre o que a antiga de
-  pagamento cobria, e mais), `test_vendas.py` e `test_marketplace.py`.
+  pagamento cobria, e mais), `test_vendas.py`, `test_marketplace.py`,
+  `test_usabilidade.py` e `test_navegador.py`.
+- O campo de data usa o calendário do próprio navegador: em navegador em
+  português aparece dd/mm/aaaa; num navegador em inglês, mm/dd/yyyy. O valor
+  gravado é o mesmo nos dois casos.
+- Fornecedor e cliente criados na hora ficam só com o nome. O sistema avisa,
+  mas não lembra depois de completar o CNPJ/CPF — isso fica a cargo de quem
+  usa, em Cadastros.
 - **Marketplaces, pontos a conferir no primeiro uso real** (os conectores
   seguem a documentação pública, mas não rodaram contra as APIs de verdade):
   - Shopee: o endereço do sandbox muda de tempos em tempos — por isso é

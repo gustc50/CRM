@@ -8,13 +8,13 @@ function atualizarCampoEntidade() {
 
     var ehPagar = tipoSelect.value === 'Pagar';
 
+    // Fornecedor e cliente são opcionais: dá para lançar uma tarifa sem
+    // cadastrar o banco antes.
     fornecedorSelect.classList.toggle('campo-oculto', !ehPagar);
     fornecedorSelect.disabled = !ehPagar;
-    fornecedorSelect.required = ehPagar;
 
     clienteSelect.classList.toggle('campo-oculto', ehPagar);
     clienteSelect.disabled = ehPagar;
-    clienteSelect.required = !ehPagar;
 
     // Quando o <select> está dentro de um <label> próprio (telas de edição),
     // esconde o rótulo inteiro para não deixar o texto "órfão" na tela.
@@ -48,6 +48,29 @@ function atualizarCampoEntidade() {
     if (categoriaReceberCampo) {
         categoriaReceberCampo.classList.toggle('campo-oculto', ehPagar);
     }
+
+    atualizarCadastroNovo();
+}
+
+// "+ Cadastrar novo…" na lista abre o campo do nome, que passa a ser
+// obrigatório; qualquer outra escolha esconde o campo de novo.
+var NOVO_CADASTRO = '__novo__';
+
+function atualizarCadastroNovo() {
+    var tipoSelect = document.getElementById('tipo-select');
+    var ehPagar = tipoSelect && tipoSelect.value === 'Pagar';
+    [['fornecedor', ehPagar], ['cliente', !ehPagar]].forEach(function (par) {
+        var select = document.getElementById(par[0] + '-select');
+        var campo = document.getElementById(par[0] + '-novo-campo');
+        if (!select || !campo) {
+            return;
+        }
+        var input = campo.querySelector('input');
+        var mostrar = par[1] && select.value === NOVO_CADASTRO;
+        campo.classList.toggle('campo-oculto', !mostrar);
+        input.disabled = !mostrar;
+        input.required = mostrar;
+    });
 }
 
 // Quando o usuário escolhe um fornecedor/cliente que já tem uma categoria
@@ -75,6 +98,10 @@ document.addEventListener('DOMContentLoaded', function () {
     var fornecedorSelect = document.getElementById('fornecedor-select');
     if (fornecedorSelect) {
         fornecedorSelect.addEventListener('change', function () {
+            atualizarCadastroNovo();
+            if (fornecedorSelect.value === NOVO_CADASTRO) {
+                document.querySelector('#fornecedor-novo-campo input').focus();
+            }
             aplicarValorPadrao(fornecedorSelect, 'categoria-pagar-select', 'data-categoria');
             aplicarValorPadrao(fornecedorSelect, 'conta-bancaria-select', 'data-conta');
         });
@@ -82,6 +109,10 @@ document.addEventListener('DOMContentLoaded', function () {
     var clienteSelect = document.getElementById('cliente-select');
     if (clienteSelect) {
         clienteSelect.addEventListener('change', function () {
+            atualizarCadastroNovo();
+            if (clienteSelect.value === NOVO_CADASTRO) {
+                document.querySelector('#cliente-novo-campo input').focus();
+            }
             aplicarValorPadrao(clienteSelect, 'categoria-receber-select', 'data-categoria');
             aplicarValorPadrao(clienteSelect, 'conta-bancaria-select', 'data-conta');
         });

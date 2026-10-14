@@ -1,32 +1,37 @@
 {% extends 'base.html' %}
 {% import '_macros_fiscal.html' as fiscal %}
+{% import '_macros_lancamento.html' as campos %}
 
 {% block content %}
+<h2>Lançamentos <span class="subtitulo">{{ titulo_periodo }}</span></h2>
+
 <div class="dashboard">
     <div class="card receber">
-        <h3>A Receber (Pendentes)</h3>
-        <h2>R$ {{ "%.2f"|format(total_receber) }}</h2>
+        <h3>A receber (pendente)</h3>
+        <h2>{{ total_receber|brl }}</h2>
+        <small>todos os vencimentos</small>
     </div>
     <div class="card pagar">
-        <h3>A Pagar (Pendentes)</h3>
-        <h2>R$ {{ "%.2f"|format(total_pagar) }}</h2>
+        <h3>A pagar (pendente)</h3>
+        <h2>{{ total_pagar|brl }}</h2>
+        <small>todos os vencimentos</small>
     </div>
     <div class="card">
-        <h3>Saldo em Contas</h3>
+        <h3>Saldo nos bancos</h3>
         {% if saldo_contas is not none %}
-        <h2>R$ {{ "%.2f"|format(saldo_contas) }}</h2>
-        {% if saldo_contas_data %}<small>Atualizado pelo último OFX importado em {{ saldo_contas_data.strftime('%d/%m/%Y') }}</small>{% endif %}
+        <h2>{{ saldo_contas|brl }}</h2>
+        {% if saldo_contas_data %}<small>pelo último extrato importado, em {{ saldo_contas_data.strftime('%d/%m/%Y') }}</small>{% endif %}
         {% else %}
         <h2>—</h2>
-        <small><a href="{{ url_for('contas_listar') }}">Importe um OFX</a> para ver o saldo real das contas.</small>
+        <small><a href="{{ url_for('contas_listar') }}">Importe o extrato do banco</a> para ver o saldo real.</small>
         {% endif %}
     </div>
 </div>
 
-{% if not fornecedores or not clientes %}
-<p class="aviso-cadastro">
-    {% if not fornecedores %}Cadastre pelo menos um <a href="{{ url_for('fornecedores_listar') }}">fornecedor</a> para lançar contas a pagar.{% endif %}
-    {% if not clientes %}Cadastre pelo menos um <a href="{{ url_for('clientes_listar') }}">cliente</a> para lançar contas a receber.{% endif %}
+{% if vencidas_fora %}
+<p class="aviso-certificado">
+    ⚠ Há <strong>{{ vencidas_fora.qtde }} conta(s) vencida(s)</strong> de antes deste período, somando
+    {{ vencidas_fora.total|brl }}. <a href="{{ vencidas_fora.url }}">Ver as vencidas</a>
 </p>
 {% endif %}
 
@@ -37,173 +42,207 @@
 </p>
 {% endif %}
 
-<form action="{{ url_for('adicionar') }}" method="POST">
-    <select name="tipo" id="tipo-select" required>
-        <option value="Receber">Conta a Receber</option>
-        <option value="Pagar">Conta a Pagar</option>
-    </select>
-    <select name="fornecedor_id" id="fornecedor-select" class="campo-oculto" disabled>
-        <option value="">Selecione o fornecedor...</option>
-        {% for f in fornecedores %}
-        <option value="{{ f.id }}" data-categoria="{{ f.categoria_id or '' }}" data-conta="{{ f.conta_bancaria_id or '' }}">{{ f.nome }}</option>
-        {% endfor %}
-    </select>
-    <select name="cliente_id" id="cliente-select" required>
-        <option value="">Selecione o cliente...</option>
-        {% for c in clientes %}
-        <option value="{{ c.id }}" data-categoria="{{ c.categoria_id or '' }}" data-conta="{{ c.conta_bancaria_id or '' }}">{{ c.nome }}</option>
-        {% endfor %}
-    </select>
-    <select name="categoria_id" id="categoria-pagar-select" class="campo-oculto" disabled>
-        <option value="">Sem categoria (Pagar)</option>
-        {% for c in categorias_pagar %}
-        <option value="{{ c.id }}">{{ c.nome }}</option>
-        {% endfor %}
-    </select>
-    <select name="categoria_id" id="categoria-receber-select">
-        <option value="">Sem categoria (Receber)</option>
-        {% for c in categorias_receber %}
-        <option value="{{ c.id }}">{{ c.nome }}</option>
-        {% endfor %}
-    </select>
-    <select name="conta_bancaria_id" id="conta-bancaria-select">
-        <option value="">Sem conta</option>
-        {% for c in contas_bancarias %}
-        <option value="{{ c.id }}">{{ c.nome }}</option>
-        {% endfor %}
-    </select>
-    <input type="text" name="descricao" placeholder="Descrição (ex: Aluguel)" maxlength="100" required>
-    <input type="number" step="0.01" min="0.01" name="valor" placeholder="Valor (R$)" required>
-    <input type="date" name="data_vencimento" required>
-    <button type="submit">Adicionar Lançamento</button>
-</form>
+{% set v = valores_do_formulario(f, None, ('tipo', 'fornecedor_id', 'cliente_id', 'fornecedor_novo',
+        'cliente_novo', 'categoria_id', 'conta_bancaria_id', 'descricao', 'valor', 'data_vencimento')) %}
+{% if not v.tipo %}{% set _ = v.update({'tipo': 'Receber'}) %}{% endif %}
 
-<form action="{{ url_for('lancamentos') }}" method="GET" class="form-filtro">
-    <label>
-        Buscar
-        <input type="text" name="busca" value="{{ busca }}" placeholder="Descrição, fornecedor ou cliente...">
-    </label>
-    <label>
-        Vencimento de
-        <input type="date" name="filtro_inicio" value="{{ filtro_inicio.isoformat() if filtro_inicio else '' }}">
-    </label>
-    <label>
-        até
-        <input type="date" name="filtro_fim" value="{{ filtro_fim.isoformat() if filtro_fim else '' }}">
-    </label>
-    <label>
-        Tipo
-        <select name="filtro_tipo">
-            <option value="Todos" {{ 'selected' if filtro_tipo == 'Todos' else '' }}>Todos</option>
-            <option value="Receber" {{ 'selected' if filtro_tipo == 'Receber' else '' }}>Receber</option>
-            <option value="Pagar" {{ 'selected' if filtro_tipo == 'Pagar' else '' }}>Pagar</option>
-        </select>
-    </label>
-    <label>
-        Status
-        <select name="filtro_status">
-            <option value="Todos" {{ 'selected' if filtro_status == 'Todos' else '' }}>Todos</option>
-            <option value="Pendente" {{ 'selected' if filtro_status == 'Pendente' else '' }}>Pendente</option>
-            <option value="Concluído" {{ 'selected' if filtro_status == 'Concluído' else '' }}>Concluído</option>
-        </select>
-    </label>
-    <label>
-        Categoria
-        <select name="filtro_categoria">
-            <option value="">Todas</option>
-            <option value="sem" {{ 'selected' if filtro_categoria == 'sem' else '' }}>Sem categoria</option>
-            {% for c in categorias %}
-            <option value="{{ c.id }}" {{ 'selected' if filtro_categoria == c.id|string else '' }}>{{ c.nome }} ({{ c.tipo }})</option>
-            {% endfor %}
-        </select>
-    </label>
-    <label>
-        Conta
-        <select name="filtro_conta">
-            <option value="">Todas</option>
-            {% for c in contas_bancarias %}
-            <option value="{{ c.id }}" {{ 'selected' if filtro_conta == c.id|string else '' }}>{{ c.nome }}</option>
-            {% endfor %}
-        </select>
-    </label>
-    <button type="submit">Buscar</button>
-    <a href="{{ url_for('lancamentos') }}" class="btn-acao btn-cancelar">Limpar</a>
-</form>
+{% if not somente_leitura() %}
+<details class="bloco-recolhivel" open data-fechar-no-celular {{ 'data-manter-aberto' if f else '' }}>
+    <summary>+ Novo lançamento</summary>
+    <form action="{{ url_for('adicionar') }}" method="POST" class="form-grade">
+        <input type="hidden" name="voltar" value="{{ voltar }}">
+        {{ campos.campos_classificacao(v, fornecedores, clientes, categorias_pagar, categorias_receber, contas_bancarias) }}
+        <label class="campo-largo">
+            Descrição
+            <input type="text" name="descricao" value="{{ v.descricao }}" placeholder="ex.: Aluguel de outubro"
+                   maxlength="100" required>
+        </label>
+        {{ campos.campo_valor(v.valor) }}
+        <label>
+            Vencimento
+            <input type="date" name="data_vencimento" value="{{ v.data_vencimento }}" required>
+        </label>
+        <div class="form-acoes">
+            <button type="submit">Adicionar lançamento</button>
+        </div>
+    </form>
+</details>
+{% endif %}
+
+<div class="atalhos-periodo" role="group" aria-label="Período">
+    {% for rotulo, url, ativo in atalhos %}
+    <a href="{{ url }}" class="atalho {{ 'ativo' if ativo else '' }}" {{ 'aria-current=true' if ativo else '' }}>{{ rotulo }}</a>
+    {% endfor %}
+</div>
+
+<details class="bloco-recolhivel" open data-fechar-no-celular
+         {{ 'data-manter-aberto' if busca or filtro_tipo != 'Todos' or filtro_status != 'Todos' or filtro_categoria or filtro_conta else '' }}>
+    <summary>Filtros</summary>
+    <form action="{{ url_for('lancamentos') }}" method="GET" class="form-filtro">
+        <label>
+            Buscar
+            <input type="text" name="busca" value="{{ busca }}" placeholder="Descrição, fornecedor ou cliente">
+        </label>
+        <label>
+            Vencimento de
+            <input type="date" name="filtro_inicio" value="{{ filtro_inicio.isoformat() if filtro_inicio else '' }}">
+        </label>
+        <label>
+            até
+            <input type="date" name="filtro_fim" value="{{ filtro_fim.isoformat() if filtro_fim else '' }}">
+        </label>
+        <label>
+            Tipo
+            <select name="filtro_tipo">
+                <option value="Todos" {{ 'selected' if filtro_tipo == 'Todos' else '' }}>Todos</option>
+                <option value="Receber" {{ 'selected' if filtro_tipo == 'Receber' else '' }}>A receber</option>
+                <option value="Pagar" {{ 'selected' if filtro_tipo == 'Pagar' else '' }}>A pagar</option>
+            </select>
+        </label>
+        <label>
+            Situação
+            <select name="filtro_status">
+                <option value="Todos" {{ 'selected' if filtro_status == 'Todos' else '' }}>Todas</option>
+                <option value="Pendente" {{ 'selected' if filtro_status == 'Pendente' else '' }}>Pendente</option>
+                <option value="Concluído" {{ 'selected' if filtro_status == 'Concluído' else '' }}>Concluído</option>
+            </select>
+        </label>
+        <label>
+            Categoria
+            <select name="filtro_categoria">
+                <option value="">Todas</option>
+                <option value="sem" {{ 'selected' if filtro_categoria == 'sem' else '' }}>Sem categoria</option>
+                {% for c in categorias %}
+                <option value="{{ c.id }}" {{ 'selected' if filtro_categoria == c.id|string else '' }}>{{ c.nome }} ({{ c.tipo }})</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>
+            Banco
+            <select name="filtro_conta">
+                <option value="">Todos</option>
+                {% for c in contas_bancarias %}
+                <option value="{{ c.id }}" {{ 'selected' if filtro_conta == c.id|string else '' }}>{{ c.nome }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <div class="form-acoes">
+            <button type="submit">Buscar</button>
+            <a href="{{ url_for('lancamentos') }}" class="btn-secundario btn-link">Limpar</a>
+        </div>
+    </form>
+</details>
 
 <div class="table-scroll">
-<table>
+<table class="tabela-lancamentos tabela-cartoes">
     <thead>
         <tr>
             <th>Descrição</th>
             <th>Tipo</th>
             <th>Fornecedor/Cliente</th>
-            <th>Categoria</th>
-            <th>Conta</th>
             <th>Vencimento</th>
-            <th>Pagamento</th>
-            <th>Valor</th>
-            <th>Status</th>
+            <th class="num">Valor</th>
+            <th>Situação</th>
+            <th>Banco</th>
             <th>Ação</th>
         </tr>
     </thead>
     <tbody>
         {% for t in transacoes %}
-        <tr class="{{ 'atrasado' if t.status == 'Pendente' and t.data_vencimento < hoje else '' }}">
-            <td>{{ t.descricao }} {{ fiscal.badge_origem(t) }}</td>
-            <td style="color: {{ '#28a745' if t.tipo == 'Receber' else '#dc3545' }}">{{ t.tipo }}</td>
-            <td>{{ nome_entidade(t) or '—' }}</td>
-            <td>
+        {% set atrasado = t.status == 'Pendente' and t.data_vencimento < hoje %}
+        <tr class="{{ 'atrasado' if atrasado else '' }}">
+            <td data-rotulo="Descrição">
+                {{ t.descricao }} {{ fiscal.badge_origem(t) }}
+                <br>
                 {% if t.categoria %}
-                {{ t.categoria.nome }}{% if t.categoria.centro_custo %} <small>({{ t.categoria.centro_custo }})</small>{% endif %}
+                <small class="detalhe-linha">{{ t.categoria.nome }}{% if t.categoria.centro_custo %} · {{ t.categoria.centro_custo }}{% endif %}</small>
                 {% else %}
                 <span class="badge-sem-categoria">sem categoria</span>
                 {% endif %}
             </td>
-            <td>{{ t.conta_bancaria.nome if t.conta_bancaria else '—' }}</td>
-            <td>{{ t.data_vencimento.strftime('%d/%m/%Y') }}</td>
-            <td>{{ t.data_pagamento.strftime('%d/%m/%Y') if t.data_pagamento else '—' }}</td>
-            <td>R$ {{ "%.2f"|format(t.valor) }}</td>
-            <td>
-                {{ t.status }}
-                {% if t.status == 'Pendente' and t.data_vencimento < hoje %}<span class="badge-atrasado">Atrasado</span>{% endif %}
+            <td data-rotulo="Tipo" class="{{ 'valor-bom' if t.tipo == 'Receber' else 'valor-ruim' }}">{{ 'A receber' if t.tipo == 'Receber' else 'A pagar' }}</td>
+            <td data-rotulo="{{ 'Cliente' if t.tipo == 'Receber' else 'Fornecedor' }}">{{ nome_entidade(t) or '—' }}</td>
+            <td data-rotulo="Vencimento" class="sem-quebra">{{ t.data_vencimento.strftime('%d/%m/%Y') }}</td>
+            <td data-rotulo="Valor" class="num"><strong>{{ t.valor|brl }}</strong></td>
+            <td data-rotulo="Situação" class="sem-quebra">
+                <span>
+                {% if t.status == 'Concluído' %}
+                <span class="badge-baixado">{{ 'Recebido' if t.tipo == 'Receber' else 'Pago' }}</span>
+                {% if t.data_pagamento %}<small class="detalhe-linha">em {{ t.data_pagamento.strftime('%d/%m/%Y') }}</small>{% endif %}
+                {% elif atrasado %}
+                <span class="badge-atrasado">Atrasado</span>
+                {% else %}
+                <span class="badge-pendente">Pendente</span>
+                {% endif %}
+                </span>
             </td>
+            <td data-rotulo="Banco">{{ t.conta_bancaria.nome if t.conta_bancaria else '—' }}</td>
             <td class="acoes">
+                {% if not somente_leitura() %}
                 {% if t.status == 'Pendente' %}
-                <button type="button" class="btn-acao btn-concluir" onclick="document.getElementById('dialogo-baixa-{{ t.id }}').showModal()">Dar Baixa</button>
+                <button type="button" class="btn-acao btn-concluir" onclick="document.getElementById('dialogo-baixa-{{ t.id }}').showModal()">Dar baixa</button>
                 <dialog id="dialogo-baixa-{{ t.id }}" class="dialogo-baixa">
                     <form action="{{ url_for('concluir', id=t.id) }}" method="POST">
-                        <p>Em que data o pagamento de <strong>{{ t.descricao }}</strong> foi realizado?</p>
+                        <input type="hidden" name="voltar" value="{{ voltar }}">
+                        <p>Em que data o pagamento de <strong>{{ t.descricao }}</strong> foi feito?</p>
                         <label>
                             Data do pagamento
                             <input type="date" name="data_pagamento" value="{{ hoje.isoformat() }}" required>
                         </label>
                         <div class="form-acoes">
-                            <button type="submit">Confirmar Baixa</button>
+                            <button type="submit">Confirmar baixa</button>
                             <button type="button" class="btn-acao btn-cancelar" onclick="document.getElementById('dialogo-baixa-{{ t.id }}').close()">Cancelar</button>
                         </div>
                     </form>
                 </dialog>
                 {% else %}
                 <form action="{{ url_for('reabrir', id=t.id) }}" method="POST" class="form-inline">
+                    <input type="hidden" name="voltar" value="{{ voltar }}">
                     <button type="submit" class="btn-acao btn-reabrir">Reabrir</button>
                 </form>
                 {% endif %}
-                <a href="{{ url_for('editar', id=t.id) }}" class="btn-acao btn-editar">Editar</a>
+                <a href="{{ url_for('editar', id=t.id, voltar=voltar) }}" class="btn-acao btn-editar">Editar</a>
+                {% endif %}
                 {% if t.anexo_arquivo %}
                 <a href="{{ url_for('baixar_anexo', id=t.id) }}" class="btn-acao btn-anexo" target="_blank" title="Ver anexo">📎</a>
                 {% endif %}
+                {% if not somente_leitura() %}
                 <form action="{{ url_for('excluir', id=t.id) }}" method="POST" class="form-inline"
-                      onsubmit="return confirm('Excluir o lançamento \'{{ t.descricao }}\'? Essa ação não pode ser desfeita.');">
+                      data-confirmar="Excluir o lançamento '{{ t.descricao }}'? Essa ação não pode ser desfeita.">
+                    <input type="hidden" name="voltar" value="{{ voltar }}">
                     <button type="submit" class="btn-acao btn-excluir">Excluir</button>
                 </form>
+                {% endif %}
             </td>
         </tr>
         {% else %}
         <tr>
-            <td colspan="10">Nenhum lançamento encontrado.</td>
+            <td colspan="8">
+                Nenhum lançamento {{ 'com esses filtros' if busca or filtro_tipo != 'Todos' or filtro_status != 'Todos' or filtro_categoria or filtro_conta else 'neste período' }}.
+                {% if filtro_inicio or filtro_fim %}<a href="{{ atalhos[-1][1] }}">Ver todos os períodos</a>{% endif %}
+            </td>
         </tr>
         {% endfor %}
     </tbody>
+    {% if qtde_total %}
+    <tfoot>
+        <tr>
+            <td colspan="8">
+                {{ qtde_total }} lançamento(s)
+                {% if soma_filtrada.Receber %} · a receber {{ soma_filtrada.Receber[1]|brl }}{% endif %}
+                {% if soma_filtrada.Pagar %} · a pagar {{ soma_filtrada.Pagar[1]|brl }}{% endif %}
+            </td>
+        </tr>
+    </tfoot>
+    {% endif %}
 </table>
 </div>
+
+{% if paginas > 1 %}
+<nav class="paginacao" aria-label="Páginas">
+    {% if pagina_anterior %}<a href="{{ pagina_anterior }}" class="atalho">‹ Anterior</a>{% endif %}
+    <span>Página {{ pagina }} de {{ paginas }}</span>
+    {% if pagina_seguinte %}<a href="{{ pagina_seguinte }}" class="atalho">Próxima ›</a>{% endif %}
+</nav>
+{% endif %}
 {% endblock %}

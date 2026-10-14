@@ -10,22 +10,39 @@
     quando o próprio cliente informa este e-mail na aba Contabilidade.
     <strong>Administrador</strong> gerencia o sistema e não tem dados financeiros.
 </p>
-<form action="{{ url_for('admin_usuario_novo') }}" method="POST">
-    <input type="text" name="nome" placeholder="Nome" maxlength="150">
-    <input type="email" name="email" placeholder="E-mail" maxlength="150" required>
-    <input type="password" name="senha" placeholder="Senha provisória (mín. 8)" minlength="8" required>
-    <select name="papel">
-        <option value="user">Cliente</option>
-        <option value="contador">Contador</option>
-        <option value="admin">Administrador</option>
-    </select>
-    <select name="empresa_id">
-        <option value="">Empresa (só para Cliente)</option>
-        {% for e in empresas %}
-        <option value="{{ e.id }}">{{ e.nome }}</option>
-        {% endfor %}
-    </select>
-    <button type="submit">Criar usuário</button>
+<form action="{{ url_for('admin_usuario_novo') }}" method="POST" class="form-grade">
+    <label>
+        <span>Nome <small>(opcional)</small></span>
+        <input type="text" name="nome" value="{{ f.nome }}" maxlength="150">
+    </label>
+    <label>
+        E-mail
+        <input type="email" name="email" value="{{ f.email }}" maxlength="150" required>
+    </label>
+    <label>
+        <span>Senha provisória <small>(mín. 8)</small></span>
+        <input type="password" name="senha" minlength="8" autocomplete="new-password" required>
+    </label>
+    <label>
+        Papel
+        <select name="papel">
+            <option value="user" {{ 'selected' if f.papel == 'user' else '' }}>Cliente</option>
+            <option value="contador" {{ 'selected' if f.papel == 'contador' else '' }}>Contador</option>
+            <option value="admin" {{ 'selected' if f.papel == 'admin' else '' }}>Administrador</option>
+        </select>
+    </label>
+    <label>
+        <span>Empresa <small>(só para Cliente)</small></span>
+        <select name="empresa_id">
+            <option value="">Nenhuma</option>
+            {% for e in empresas %}
+            <option value="{{ e.id }}" {{ 'selected' if f.empresa_id == e.id|string else '' }}>{{ e.nome }}</option>
+            {% endfor %}
+        </select>
+    </label>
+    <div class="form-acoes">
+        <button type="submit">Criar usuário</button>
+    </div>
 </form>
 
 <div class="table-scroll">
@@ -55,15 +72,15 @@
             </td>
             <td class="acoes">
                 <form action="{{ url_for('admin_usuario_bloqueio', id=u.id) }}" method="POST" class="form-inline"
-                      onsubmit="return confirm('{{ 'Bloquear' if u.ativo else 'Desbloquear' }} {{ u.email }}?');">
+                      data-confirmar="{{ 'Bloquear' if u.ativo else 'Desbloquear' }} {{ u.email }}?">
                     <button type="submit" class="btn-acao {{ 'btn-excluir' if u.ativo else 'btn-concluir' }}">
                         {{ 'Bloquear' if u.ativo else 'Desbloquear' }}
                     </button>
                 </form>
                 <form action="{{ url_for('admin_usuario_senha', id=u.id) }}" method="POST" class="form-inline"
-                      onsubmit="return confirm('Definir uma nova senha para {{ u.email }}?');">
+                      data-confirmar="Definir uma nova senha para {{ u.email }}?">
                     <input type="password" name="senha" placeholder="Nova senha" minlength="8" required
-                           class="campo-estreito">
+                           class="campo-estreito" aria-label="Nova senha para {{ u.email }}" autocomplete="new-password">
                     <button type="submit" class="btn-acao btn-editar">Redefinir</button>
                 </form>
                 {% if u.em_castigo %}

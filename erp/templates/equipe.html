@@ -21,11 +21,11 @@
     <div class="card {{ 'pagar' if empresa.usuarios_extras else '' }}">
         <h3>Acessos adicionais</h3>
         <h2>{{ empresa.usuarios_extras }}</h2>
-        <small>R$ {{ '%.2f'|format(valor_extra)|replace('.', ',') }} cada</small>
+        <small>{{ (valor_extra)|brl }} cada</small>
     </div>
     <div class="card">
         <h3>Mensalidade atual</h3>
-        <h2>R$ {{ '%.2f'|format(mensalidade)|replace('.', ',') }}</h2>
+        <h2>{{ (mensalidade)|brl }}</h2>
         <small>cobrada na próxima renovação</small>
     </div>
 </div>
@@ -51,7 +51,7 @@
             <td class="acoes">
                 {% if sou_socio and p.id != eu.id %}
                 <form action="{{ url_for('equipe_remover', id=p.id) }}" method="POST" class="form-inline"
-                      onsubmit="return confirm('Tirar o acesso de {{ p.email }}? Os lançamentos que essa pessoa criou continuam no sistema.');">
+                      data-confirmar="Tirar o acesso de {{ p.email }}? Os lançamentos que essa pessoa criou continuam no sistema.">
                     <button type="submit" class="btn-acao btn-excluir">Tirar acesso</button>
                 </form>
                 {% else %}
@@ -75,7 +75,7 @@
 {% else %}
 <p class="aviso-cadastro">
     As {{ inclusos }} vagas inclusas já estão ocupadas. Cada nova pessoa soma
-    <strong>R$ {{ '%.2f'|format(valor_extra)|replace('.', ',') }}</strong> na
+    <strong>{{ (valor_extra)|brl }}</strong> na
     mensalidade, cobrados na próxima renovação.
 </p>
 {% endif %}
@@ -83,11 +83,11 @@
 <form action="{{ url_for('equipe_adicionar') }}" method="POST" class="form-coluna form-config">
     <label>
         Nome
-        <input type="text" name="nome" maxlength="150" required>
+        <input type="text" name="nome" value="{{ f.nome }}" maxlength="150" required>
     </label>
     <label>
         E-mail <small>(será o login dela)</small>
-        <input type="email" name="email" maxlength="150" required>
+        <input type="email" name="email" value="{{ f.email }}" maxlength="150" required>
     </label>
     <label>
         Senha provisória <small>(mínimo de 8 caracteres; a pessoa troca depois em Minha conta)</small>
@@ -97,7 +97,7 @@
         Cargo
         <select name="cargo" required>
             {% for valor, rotulo in cargos %}
-            <option value="{{ valor }}">{{ rotulo }}</option>
+            <option value="{{ valor }}" {{ 'selected' if f.cargo == valor else '' }}>{{ rotulo }}</option>
             {% endfor %}
         </select>
     </label>

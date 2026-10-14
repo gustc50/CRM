@@ -3,21 +3,32 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E%F0%9F%93%92%3C/text%3E%3C/svg%3E">
     <title>ERP Pequenas Empresas</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
     <div class="app">
         <aside class="lateral">
-            <div class="marca">
-                <span class="marca-icone">📒</span>
-                <span class="marca-nome">Gestão<br>Financeira</span>
+            <div class="topo-lateral">
+                <div class="marca">
+                    <span class="marca-icone">📒</span>
+                    <span class="marca-nome">Gestão<br>Financeira</span>
+                </div>
+                <button type="button" id="botao-menu" class="botao-menu" aria-expanded="false"
+                        aria-controls="menu-principal">☰ Menu</button>
             </div>
 
-            <nav class="menu">
+            <nav class="menu" id="menu-principal">
+                {% set ns = namespace(grupo=None) %}
                 {% for item in menu_do_usuario() %}
+                {% if item.grupo and item.grupo != ns.grupo %}
+                <div class="menu-grupo">{{ item.grupo }}</div>
+                {% set ns.grupo = item.grupo %}
+                {% endif %}
                 {% set secao_ativa = request.endpoint in item.ativo_em %}
-                <a href="{{ url_for(item.endpoint) }}" class="menu-item {{ 'ativo' if secao_ativa else '' }}">
+                <a href="{{ url_for(item.endpoint) }}" class="menu-item {{ 'ativo' if secao_ativa else '' }}"
+                   {{ 'aria-current=page' if secao_ativa else '' }}>
                     <span class="menu-icone">{{ item.icone }}</span>
                     <span class="menu-rotulo">{{ item.rotulo }}</span>
                 </a>
@@ -73,6 +84,7 @@
             {% block content %}{% endblock %}
         </main>
     </div>
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
     <script src="{{ url_for('static', filename='lancamento.js') }}"></script>
     <script src="{{ url_for('static', filename='fiscal.js') }}"></script>
 </body>

@@ -180,8 +180,57 @@ body {
     font-weight: bold;
 }
 
+.menu-grupo {
+    margin: 12px 10px 2px;
+    font-size: 11px;
+    font-weight: bold;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #8a8a86;
+}
+.topo-lateral {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+.topo-lateral .marca { flex: 1; }
+/* O botão do menu só existe no celular (e só funciona com o script; sem ele
+   o menu fica sempre aberto, como antes). */
+.botao-menu { display: none; }
+
 @media (max-width: 860px) {
     body { padding: 12px; }
+    .botao-menu {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 10px 14px;
+        background: #f1f4f8;
+        color: #333;
+        font-weight: bold;
+        border-radius: 8px;
+    }
+    .botao-menu:hover { background: #e2e8f0; }
+    .lateral.menu-aberto .botao-menu { background: #e7f1ff; color: #0056b3; }
+    .topo-lateral .marca { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+    .lateral.menu-recolhivel:not(.menu-aberto) .menu { display: none; }
+    .lateral.menu-aberto .menu { margin-top: 10px; padding-top: 6px; border-top: 1px solid #eee; }
+    .lateral { padding: 12px; }
+    .menu-grupo { width: 100%; margin: 8px 4px 0; }
+    /* Rodapé do usuário numa linha só: nome, papel e Sair */
+    .usuario-logado {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 4px 10px;
+        margin-top: 10px;
+        padding-top: 8px;
+    }
+    .usuario-logado strong { display: inline; }
+    .usuario-logado .papel,
+    .usuario-logado a { margin-top: 0; }
+    .usuario-logado .aviso-vencimento { width: 100%; margin-top: 2px; }
     .app {
         flex-direction: column;
         /* Empilhado, o `flex-start` herdado fazia cada bloco crescer até a
@@ -1125,3 +1174,167 @@ th.col-marca, td.col-marca { width: 36px; text-align: center; }
 .subtitulo-form small { font-weight: normal; color: #8a8a86; }
 .rotulo-caixa { flex-direction: row !important; align-items: center; gap: 8px !important; }
 code { background: #f1f4f8; padding: 1px 5px; border-radius: 3px; font-size: 12px; word-break: break-all; }
+
+/* ---- Rodada de usabilidade ---- */
+
+/* Campo nunca mais largo que a tela: um <select> com opção comprida
+   ("Gmail — smtp.gmail.com:587") empurrava Configurações para o lado no
+   celular. */
+input, select, textarea, button { box-sizing: border-box; max-width: 100%; }
+
+h2 .subtitulo { margin-left: 6px; }
+
+/* Formulário em grade com rótulo visível em cada campo. Antes eram campos
+   soltos só com texto de exemplo, que some ao digitar. */
+.form-grade {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 12px 14px;
+    align-items: end;
+}
+.form-grade label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 13px;
+    color: #555;
+    min-width: 0;
+}
+.form-grade label small,
+.form-coluna label small { color: #8a8a86; font-weight: normal; }
+.form-grade .campo-largo { grid-column: span 2; }
+.form-grade .form-acoes { margin-top: 0; }
+.form-grade .checkbox-inline { align-self: center; }
+.form-grade input, .form-grade select { width: 100%; }
+
+/* Bloco que abre e fecha (novo lançamento, filtros). No celular começa
+   fechado, para a lista aparecer primeiro. */
+.bloco-recolhivel {
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    margin-bottom: 20px;
+}
+.bloco-recolhivel > summary {
+    cursor: pointer;
+    padding: 14px 20px;
+    font-weight: bold;
+    color: #0056b3;
+    list-style: none;
+}
+.bloco-recolhivel > summary::-webkit-details-marker { display: none; }
+.bloco-recolhivel > summary::before { content: '▸ '; }
+.bloco-recolhivel[open] > summary::before { content: '▾ '; }
+.bloco-recolhivel > form {
+    box-shadow: none;
+    margin: 0;
+    padding-top: 0;
+}
+
+/* Atalhos de período e paginação */
+.atalhos-periodo { flex-wrap: wrap; }
+.atalho {
+    display: inline-block;
+    padding: 7px 12px;
+    border-radius: 16px;
+    background: #fff;
+    border: 1px solid #ddd;
+    color: #333;
+    text-decoration: none;
+    font-size: 14px;
+}
+.atalho:hover { background: #f1f4f8; }
+.atalho.ativo { background: #e7f1ff; border-color: #9ec5fe; color: #0056b3; font-weight: bold; }
+.paginacao {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    margin: 14px 0;
+    font-size: 14px;
+}
+.tabela-lancamentos tfoot td { background: #fafbfc; font-size: 14px; color: #52514e; }
+
+/* Link com cara de botão secundário (Cancelar, Limpar) */
+.btn-link {
+    display: inline-block;
+    padding: 10px 14px;
+    border-radius: 4px;
+    text-decoration: none;
+    font-size: 14px;
+}
+
+/* Tabela pequena (poucas colunas) não precisa da largura mínima das grandes */
+.table-scroll table.tabela-compacta { min-width: 0; }
+
+.botoes-linha { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; }
+.form-config input, .form-config select { width: 100%; }
+
+@media (max-width: 560px) {
+    .form-grade { grid-template-columns: 1fr; }
+    .form-grade .campo-largo { grid-column: auto; }
+    .bloco-recolhivel > form { padding: 0 14px 14px; }
+}
+
+/* Botões de ação lado a lado: empilhados, cada linha da tabela ficava com
+   três andares de altura. A tabela já rola de lado quando não cabe. */
+td.acoes { white-space: nowrap; }
+.tabela-lancamentos td:nth-child(2) { white-space: nowrap; }
+
+@media (max-width: 560px) {
+    /* No celular os rótulos sobre as barras não cabem (o do último mês saía
+       da tela); os números ficam na tabela logo abaixo do gráfico. */
+    .grafico-barras { gap: 8px; }
+    .grafico-barras .rotulo-barra { display: none; }
+    .barra { width: 14px; }
+}
+
+.detalhe-linha { color: #8a8a86; font-size: 12px; }
+.tabela-lancamentos td.sem-quebra .detalhe-linha { display: block; }
+.table-scroll table.tabela-lancamentos { min-width: 820px; }
+
+/* No celular, cada lançamento vira um cartão: descrição, valor, vencimento
+   e situação à vista, sem precisar arrastar a tabela para o lado. */
+@media (max-width: 560px) {
+    .table-scroll table.tabela-cartoes { min-width: 0; }
+    .tabela-cartoes thead { display: none; }
+    .tabela-cartoes tbody tr { display: block; padding: 10px 12px; border-bottom: 1px solid #ddd; }
+    .tabela-cartoes tbody td {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 12px;
+        padding: 3px 0;
+        border: none;
+        text-align: right;
+    }
+    .tabela-cartoes tbody td::before {
+        content: attr(data-rotulo);
+        color: #8a8a86;
+        font-size: 13px;
+        text-align: left;
+        flex-shrink: 0;
+    }
+    .tabela-cartoes tbody td:first-child {
+        display: block;
+        text-align: left;
+        font-weight: bold;
+        padding-bottom: 6px;
+    }
+    .tabela-cartoes tbody td:first-child::before,
+    .tabela-cartoes tbody td.acoes::before,
+    .tabela-cartoes tbody td[colspan]::before { content: none; }
+    .tabela-cartoes tbody td.acoes { justify-content: flex-start; flex-wrap: wrap; padding-top: 8px; }
+    .tabela-cartoes tbody td[colspan] { display: block; text-align: left; }
+    .tabela-cartoes .detalhe-linha { font-weight: normal; }
+    .tabela-cartoes tfoot td { display: block; }
+}
+
+@media (max-width: 560px) {
+    /* Cartões de resumo mais baixos: três deles ocupavam meia tela */
+    .dashboard { gap: 10px; margin-bottom: 18px; }
+    .dashboard .card { padding: 12px 16px; }
+    .dashboard .card h3 { margin: 0 0 4px; font-size: 15px; }
+    .dashboard .card h2 { margin: 0 0 2px; font-size: 22px; }
+    .tabela-cartoes td.sem-quebra .detalhe-linha { display: inline; margin-left: 6px; }
+}

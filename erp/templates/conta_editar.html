@@ -1,37 +1,38 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<h2>Editar Conta Bancária</h2>
+<h2>Editar banco</h2>
 
+{% set v = valores_do_formulario(f, registro, ('nome', 'banco', 'agencia', 'conta_numero')) %}
 <form action="{{ url_for('contas_editar', id=registro.id) }}" method="POST" class="form-coluna">
     <label>
         Nome
-        <input type="text" name="nome" value="{{ registro.nome }}" maxlength="80" required>
+        <input type="text" name="nome" value="{{ v.nome }}" maxlength="80" required>
     </label>
 
     <label>
-        Banco
+        <span>Banco <small>(opcional)</small></span>
         <select name="banco">
-            <option value="">Selecione...</option>
+            <option value="">Nenhum (caixa)</option>
             {% for codigo, nome in BANCOS_BRASIL %}
-            <option value="{{ codigo }}" {{ 'selected' if registro.banco == codigo else '' }}>{{ nome }}</option>
+            <option value="{{ codigo }}" {{ 'selected' if v.banco == codigo else '' }}>{{ nome }}</option>
             {% endfor %}
         </select>
     </label>
 
     <label>
-        Agência
-        <input type="text" name="agencia" value="{{ registro.agencia or '' }}" maxlength="20">
+        <span>Agência <small>(opcional)</small></span>
+        <input type="text" name="agencia" value="{{ v.agencia }}" maxlength="20" inputmode="numeric">
     </label>
 
     <label>
-        Conta
-        <input type="text" name="conta_numero" value="{{ registro.conta_numero or '' }}" maxlength="30">
+        <span>Número da conta <small>(opcional)</small></span>
+        <input type="text" name="conta_numero" value="{{ v.conta_numero }}" maxlength="30">
     </label>
 
     <div class="form-acoes">
-        <button type="submit">Salvar Alterações</button>
-        <a href="{{ url_for('contas_listar') }}" class="btn-acao btn-cancelar">Cancelar</a>
+        <button type="submit">Salvar alterações</button>
+        <a href="{{ url_for('contas_listar') }}" class="btn-secundario btn-link">Cancelar</a>
     </div>
 </form>
 {% endblock %}

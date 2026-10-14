@@ -70,7 +70,7 @@
         <tr>
             <td>{{ p.empresa.nome if p.empresa else '—' }}</td>
             <td>{{ p.pago_em.strftime('%d/%m/%Y') if p.pago_em else '—' }}</td>
-            <td>R$ {{ "%.2f"|format(p.valor or 0) }}</td>
+            <td>{{ (p.valor or 0)|brl }}</td>
             <td>{{ p.liberado_ate.strftime('%d/%m/%Y') if p.liberado_ate else '—' }}</td>
         </tr>
         {% else %}
