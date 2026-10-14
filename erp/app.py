@@ -4,6 +4,7 @@ import gzip
 import io
 import os
 import re
+import secrets
 import sqlite3
 import sys
 import time
@@ -32,6 +33,7 @@ import fiscal_manifestacao
 import fiscal_nfe
 import fiscal_nfse
 import fiscal_sync
+import marketplaces
 import ofx_parser
 from models import (
     CARGO_FUNCIONARIO,
@@ -39,16 +41,19 @@ from models import (
     CARGOS,
     DIAS_POR_PAGAMENTO,
     MINUTOS_DE_BLOQUEIO,
+    MODOS_LANCAMENTO,
     ORIGEM_ASAAS,
     ORIGEM_MANUAL,
     ORIGENS,
     PAPEL_ADMIN,
     PAPEL_CONTADOR,
     PAPEL_USUARIO,
+    PEDIDO_PAGO,
     Categoria,
     Cliente,
     ContaBancaria,
     ContaMovimentacao,
+    ConexaoMarketplace,
     Empresa,
     Fornecedor,
     LancamentoRecorrente,
@@ -56,6 +61,7 @@ from models import (
     NotaEletronica,
     NotaServico,
     Pagamento,
+    PedidoMarketplace,
     RegistroAuditoria,
     Transacao,
     USUARIOS_INCLUSOS,
@@ -703,12 +709,23 @@ MENU_LATERAL = [
      'ativo_em': ('inicio',)},
     {'icone': '💰', 'rotulo': 'Lançamentos', 'endpoint': 'lancamentos',
      'ativo_em': ('lancamentos', 'editar')},
+    {'icone': '🛒', 'rotulo': 'Vendas', 'endpoint': 'vendas_servicos',
+     'ativo_em': ('vendas_servicos', 'vendas_produtos'),
+     'filhos': [
+         {'rotulo': 'Serviços', 'endpoint': 'vendas_servicos', 'ativo_em': ('vendas_servicos',)},
+         {'rotulo': 'Produtos', 'endpoint': 'vendas_produtos', 'ativo_em': ('vendas_produtos',)},
+     ]},
+    {'icone': '🏪', 'rotulo': 'Marketplace', 'endpoint': 'marketplace',
+     'ativo_em': ('marketplace',)},
     {'icone': '📊', 'rotulo': 'Relatórios', 'endpoint': 'relatorio',
      'ativo_em': ('relatorio', 'relatorio_dre', 'relatorio_vendas'),
      'filhos': [
          {'rotulo': 'Por período', 'endpoint': 'relatorio', 'ativo_em': ('relatorio',)},
          {'rotulo': 'DRE', 'endpoint': 'relatorio_dre', 'ativo_em': ('relatorio_dre',)},
-         {'rotulo': 'Vendas', 'endpoint': 'relatorio_vendas', 'ativo_em': ('relatorio_vendas',)},
+         # Era "Vendas"; com a aba Vendas no menu, dois itens com o mesmo nome
+         # confundiriam. Este é a análise dos lançamentos a receber.
+         {'rotulo': 'Faturamento', 'endpoint': 'relatorio_vendas',
+          'ativo_em': ('relatorio_vendas',)},
      ]},
     {'icone': '🔁', 'rotulo': 'Recorrentes', 'endpoint': 'recorrentes_listar',
      'ativo_em': ('recorrentes_listar', 'recorrentes_editar')},
@@ -777,8 +794,8 @@ def menu_do_usuario():
         if auth.empresa_atual() is None:
             return MENU_CONTADOR + [ITEM_MINHA_CONTA]
         # Dentro de um cliente: as telas de leitura, sem os cadastros
-        somente_leitura = ('inicio', 'lancamentos', 'relatorio', 'notas_servico',
-                           'notas_eletronicas', 'contabilidade')
+        somente_leitura = ('inicio', 'lancamentos', 'vendas_servicos', 'relatorio',
+                           'notas_servico', 'notas_eletronicas', 'contabilidade')
         return (MENU_CONTADOR
                 + [i for i in MENU_LATERAL if i['endpoint'] in somente_leitura]
                 + [ITEM_MINHA_CONTA])
@@ -1701,6 +1718,10 @@ ROTULOS_AUDITORIA = {
     'pagamento_confirmado': 'Pagamento confirmado',
     'acesso_liberado': 'Acesso liberado pelo admin',
     'acesso_encerrado': 'Acesso encerrado pelo admin',
+    'relatorio_notas': 'Gerou relatório de vendas',
+    'marketplace_conectado': 'Conectou um marketplace',
+    'marketplace_sincronizado': 'Sincronizou um marketplace',
+    'marketplace_desconectado': 'Desconectou um marketplace',
 }
 
 
@@ -2699,6 +2720,348 @@ def relatorio_vendas():
         variacao_qtde=_variacao(dados['qtde'], anterior['qtde']),
         variacao_ticket=_variacao(dados['ticket_medio'], anterior['ticket_medio']),
     )
+
+
+# ------------------------------------------------------------------ #
+# Vendas: notas emitidas, com seleção e relatório
+# ------------------------------------------------------------------ #
+
+TIPOS_VENDA = {
+    'servicos': {'titulo': 'Serviços', 'nota': 'NFS-e', 'endpoint': 'vendas_servicos',
+                 'arquivo': 'vendas_servicos'},
+    'produtos': {'titulo': 'Produtos', 'nota': 'NF-e', 'endpoint': 'vendas_produtos',
+                 'arquivo': 'vendas_produtos'},
+}
+
+
+def vendas_do_periodo(tipo, inicio, fim, ids=None):
+    """Notas emitidas pela empresa no período, já no formato da tela.
+
+    Serviços vêm das NFS-e emitidas (o cliente é o tomador); produtos, das
+    NF-e emitidas (o cliente é o destinatário). Nota cancelada ou denegada
+    não é venda e fica de fora — a contagem delas vai junto, para a tela
+    poder dizer que existem. `ids` restringe às notas escolhidas.
+    """
+    if tipo == 'servicos':
+        query = da_empresa(NotaServico).filter(
+            NotaServico.papel == 'emitida',
+            NotaServico.data_emissao >= inicio,
+            NotaServico.data_emissao <= fim,
+        )
+        if ids is not None:
+            query = query.filter(NotaServico.id.in_(ids))
+        notas = query.order_by(NotaServico.data_emissao, NotaServico.id).all()
+        validas = [n for n in notas if (n.situacao or 'ATIVA') == 'ATIVA']
+        linhas = [{'id': n.id, 'data': n.data_emissao, 'cliente': n.tomador_nome or '—',
+                   'doc': n.tomador_doc or '', 'valor': n.valor_servico or 0.0,
+                   'numero': n.numero} for n in validas]
+    else:
+        query = da_empresa(NotaEletronica).filter(
+            NotaEletronica.papel == 'emitida',
+            NotaEletronica.data_emissao >= inicio,
+            NotaEletronica.data_emissao <= fim,
+        )
+        if ids is not None:
+            query = query.filter(NotaEletronica.id.in_(ids))
+        notas = query.order_by(NotaEletronica.data_emissao, NotaEletronica.id).all()
+        validas = [n for n in notas if str(n.situacao or '') not in ('2', '3')]
+        linhas = [{'id': n.id, 'data': n.data_emissao, 'cliente': n.dest_nome or '—',
+                   'doc': n.dest_doc or '', 'valor': n.valor_total or 0.0,
+                   'numero': n.chave[25:34].lstrip('0') if n.chave and len(n.chave) == 44 else ''}
+                  for n in validas]
+    return linhas, len(notas) - len(validas)
+
+
+def _tela_vendas(tipo):
+    inicio, fim = _periodo_simples(request.args)
+    linhas, canceladas = vendas_do_periodo(tipo, inicio, fim)
+    return render_template(
+        'vendas.html',
+        tipo=tipo, info=TIPOS_VENDA[tipo],
+        inicio=inicio, fim=fim,
+        linhas=linhas, canceladas=canceladas,
+        total=sum(l['valor'] for l in linhas),
+    )
+
+
+@app.route('/vendas/servicos')
+def vendas_servicos():
+    return _tela_vendas('servicos')
+
+
+@app.route('/vendas/produtos')
+def vendas_produtos():
+    return _tela_vendas('produtos')
+
+
+@app.route('/vendas/<tipo>/relatorio', methods=['POST'])
+def vendas_relatorio(tipo):
+    """XLSX só com as notas marcadas.
+
+    Os ids vêm do formulário, mas a consulta passa por `da_empresa`: um id de
+    outra empresa enfiado no POST simplesmente não aparece.
+    """
+    if tipo not in TIPOS_VENDA:
+        abort(404)
+    info = TIPOS_VENDA[tipo]
+    inicio, fim = _periodo_simples(request.form)
+
+    ids = [int(i) for i in request.form.getlist('ids') if i.isdigit()]
+    if not ids:
+        flash('Marque pelo menos uma nota para gerar o relatório.', 'erro')
+        return redirect(url_for(info['endpoint'], inicio=inicio.isoformat(), fim=fim.isoformat()))
+
+    linhas, _ = vendas_do_periodo(tipo, inicio, fim, ids=ids)
+    planilha = [[l['data'].strftime('%d/%m/%Y') if l['data'] else '', l['cliente'],
+                 formatar_cnpj_cpf(l['doc']) if l['doc'] else '', round(l['valor'], 2)]
+                for l in linhas]
+    planilha.append(['', '', f'Total ({len(linhas)} nota(s))',
+                     round(sum(l['valor'] for l in linhas), 2)])
+
+    registrar_acao('relatorio_notas', f"{info['titulo']}: {len(linhas)} nota(s) de "
+                                       f"{inicio:%d/%m/%Y} a {fim:%d/%m/%Y}")
+    return _exportar_xlsx_generico(
+        ['Data', 'Cliente', 'CNPJ/CPF', 'Valor (R$)'], planilha,
+        f"{info['arquivo']}_{inicio.isoformat()}_a_{fim.isoformat()}", info['titulo'])
+
+
+# ------------------------------------------------------------------ #
+# Marketplace
+# ------------------------------------------------------------------ #
+
+def _redirect_marketplace(chave):
+    """Endereço de retorno da autorização — precisa ser o mesmo registrado no
+    aplicativo do marketplace, por isso usa o endereço do sistema configurado
+    pelo admin e só cai no da requisição quando ele não existe."""
+    base = _endereco_do_sistema() or request.url_root
+    return f"{base.rstrip('/')}/marketplace/{chave}/retorno"
+
+
+def _conexao(chave):
+    return da_empresa(ConexaoMarketplace).filter_by(marketplace=chave).first()
+
+
+def _somente_cliente():
+    """As ações de conexão são do cliente; o contador só lê."""
+    if auth.somente_leitura() or auth.empresa_atual() is None:
+        flash('Só a própria empresa conecta e sincroniza os marketplaces.', 'erro')
+        return redirect(url_for('marketplace'))
+    return None
+
+
+@app.route('/marketplace')
+def marketplace():
+    inicio, fim = _periodo_simples(request.args)
+    pedidos = (da_empresa(PedidoMarketplace)
+               .filter(PedidoMarketplace.data >= inicio, PedidoMarketplace.data <= fim)
+               .order_by(PedidoMarketplace.data, PedidoMarketplace.id).all())
+    pagos = [p for p in pedidos if p.situacao == PEDIDO_PAGO]
+
+    lojas = []
+    for chave, conector in marketplaces.CONECTORES.items():
+        lojas.append({'chave': chave, 'nome': conector.nome,
+                      'disponivel': conector.configurado(),
+                      'conexao': _conexao(chave)})
+
+    tem_nfe_emitida = da_empresa(NotaEletronica).filter_by(papel='emitida').first() is not None
+    return render_template(
+        'marketplace.html',
+        lojas=lojas, pedidos=pedidos, inicio=inicio, fim=fim,
+        modos=MODOS_LANCAMENTO, rotulo_modo={m[0]: m[1] for m in MODOS_LANCAMENTO},
+        total_bruto=sum(p.valor_bruto for p in pagos),
+        total_taxas=sum(p.taxas for p in pagos),
+        total_liquido=sum(p.valor_liquido for p in pagos),
+        qtde_pagos=len(pagos),
+        tem_nfe_emitida=tem_nfe_emitida,
+    )
+
+
+@app.route('/marketplace/<chave>/conectar')
+def marketplace_conectar(chave):
+    if chave not in marketplaces.CONECTORES:
+        abort(404)
+    bloqueio = _somente_cliente()
+    if bloqueio:
+        return bloqueio
+    conector = marketplaces.CONECTORES[chave]
+    if not conector.configurado():
+        flash(f'A integração com {conector.nome} ainda não foi ativada pelo administrador.', 'erro')
+        return redirect(url_for('marketplace'))
+
+    # O "state" amarra a volta do marketplace a esta sessão: sem ele, alguém
+    # poderia mandar um link de retorno forjado e ligar a loja dele à sua conta.
+    state = secrets.token_urlsafe(24)
+    session['marketplace_state'] = {'chave': chave, 'state': state}
+    return redirect(conector.url_autorizacao(_redirect_marketplace(chave), state,
+                                             data_path('.chave_secreta')))
+
+
+@app.route('/marketplace/<chave>/retorno')
+def marketplace_retorno(chave):
+    if chave not in marketplaces.CONECTORES:
+        abort(404)
+    esperado = session.pop('marketplace_state', None) or {}
+    if esperado.get('chave') != chave or not esperado.get('state') \
+            or not secrets.compare_digest(esperado['state'], request.args.get('state', '')):
+        flash('A autorização voltou sem a confirmação desta sessão e foi ignorada. '
+              'Clique em Conectar de novo.', 'erro')
+        return redirect(url_for('marketplace'))
+    if request.args.get('error'):
+        flash(f"O marketplace não autorizou: {request.args.get('error_description') or request.args['error']}",
+              'erro')
+        return redirect(url_for('marketplace'))
+
+    conector = marketplaces.CONECTORES[chave]
+    try:
+        tokens = conector.concluir_autorizacao(request.args, _redirect_marketplace(chave),
+                                               data_path('.chave_secreta'))
+    except marketplaces.ErroMarketplace as exc:
+        flash(str(exc), 'erro')
+        return redirect(url_for('marketplace'))
+
+    _salvar_conexao(chave, tokens)
+    flash(f"{conector.nome} conectado: {tokens.get('conta_nome') or tokens.get('conta_id')}. "
+          f"Clique em Sincronizar para trazer os pedidos.", 'sucesso')
+    return redirect(url_for('marketplace'))
+
+
+def _salvar_conexao(chave, tokens):
+    conexao = _conexao(chave) or novo_registro(ConexaoMarketplace, marketplace=chave)
+    conexao.conta_id = tokens.get('conta_id') or conexao.conta_id
+    conexao.conta_nome = (tokens.get('conta_nome') or conexao.conta_nome or '')[:150]
+    conexao.conectado_em = datetime.now()
+    marketplaces.salvar_tokens(conexao, tokens, data_path('.chave_secreta'))
+    db.session.add(conexao)
+    db.session.commit()
+    registrar_acao('marketplace_conectado',
+                   f"{marketplaces.CONECTORES[chave].nome}: {conexao.conta_nome}")
+    return conexao
+
+
+@app.route('/marketplace/amazon/token', methods=['POST'])
+def marketplace_amazon_token():
+    """Autoautorização da Amazon: o vendedor cola o refresh token gerado no
+    Seller Central, em vez de passar pela tela de consentimento."""
+    bloqueio = _somente_cliente()
+    if bloqueio:
+        return bloqueio
+    refresh = request.form.get('refresh_token', '').strip()
+    if not refresh.startswith('Atzr|'):
+        flash('Esse não parece um refresh token da Amazon (eles começam com "Atzr|").', 'erro')
+        return redirect(url_for('marketplace'))
+    try:
+        tokens = marketplaces.CONECTORES['amazon'].conectar_com_refresh_token(
+            refresh, request.form.get('seller_id', '').strip(), data_path('.chave_secreta'))
+    except marketplaces.ErroMarketplace as exc:
+        flash(str(exc), 'erro')
+        return redirect(url_for('marketplace'))
+    _salvar_conexao('amazon', tokens)
+    flash('Amazon conectada. Clique em Sincronizar para trazer os pedidos.', 'sucesso')
+    return redirect(url_for('marketplace'))
+
+
+@app.route('/marketplace/<chave>/sincronizar', methods=['POST'])
+def marketplace_sincronizar(chave):
+    bloqueio = _somente_cliente()
+    if bloqueio:
+        return bloqueio
+    conexao = _conexao(chave)
+    if conexao is None:
+        abort(404)
+    hoje = date.today()
+    inicio = parse_data(request.form.get('inicio', '')) or hoje - timedelta(days=30)
+    fim = parse_data(request.form.get('fim', '')) or hoje
+    if inicio > fim:
+        inicio, fim = fim, inicio
+    try:
+        resumo = marketplaces.sincronizar(conexao, inicio, fim, data_path('.chave_secreta'))
+    except marketplaces.ErroMarketplace as exc:
+        db.session.rollback()
+        conexao.ultimo_resultado = f'Erro: {exc}'[:300]
+        db.session.commit()
+        flash(str(exc), 'erro')
+        return redirect(url_for('marketplace'))
+    registrar_acao('marketplace_sincronizado', f'{conexao.nome_marketplace}: {resumo}')
+    flash(f'{conexao.nome_marketplace}: {resumo}', 'sucesso')
+    return redirect(url_for('marketplace', inicio=inicio.isoformat(), fim=fim.isoformat()))
+
+
+@app.route('/marketplace/<chave>/modo', methods=['POST'])
+def marketplace_modo(chave):
+    bloqueio = _somente_cliente()
+    if bloqueio:
+        return bloqueio
+    conexao = _conexao(chave)
+    modo = request.form.get('modo', '')
+    if conexao is None or modo not in {m[0] for m in MODOS_LANCAMENTO}:
+        abort(404)
+    conexao.modo_lancamento = modo
+    db.session.commit()
+    flash(f'{conexao.nome_marketplace}: a partir da próxima sincronização, '
+          f'"{dict((m[0], m[1]) for m in MODOS_LANCAMENTO)[modo]}". '
+          f'Lançamentos já criados não são alterados.', 'sucesso')
+    return redirect(url_for('marketplace'))
+
+
+@app.route('/marketplace/<chave>/desconectar', methods=['POST'])
+def marketplace_desconectar(chave):
+    bloqueio = _somente_cliente()
+    if bloqueio:
+        return bloqueio
+    conexao = _conexao(chave)
+    if conexao is None:
+        abort(404)
+    nome = conexao.nome_marketplace
+    db.session.delete(conexao)
+    db.session.commit()
+    registrar_acao('marketplace_desconectado', nome)
+    flash(f'{nome} desconectado. Os pedidos já trazidos e os lançamentos continuam aqui; '
+          f'para cortar o acesso também do lado de lá, revogue o aplicativo na sua conta {nome}.',
+          'sucesso')
+    return redirect(url_for('marketplace'))
+
+
+@app.route('/marketplace/relatorio', methods=['POST'])
+def marketplace_relatorio():
+    ids = [int(i) for i in request.form.getlist('ids') if i.isdigit()]
+    if not ids:
+        flash('Marque pelo menos um pedido para gerar o relatório.', 'erro')
+        return redirect(url_for('marketplace'))
+    pedidos = (da_empresa(PedidoMarketplace).filter(PedidoMarketplace.id.in_(ids))
+               .order_by(PedidoMarketplace.data, PedidoMarketplace.id).all())
+    pagos = [p for p in pedidos if p.situacao == PEDIDO_PAGO]
+    linhas = [[p.data.strftime('%d/%m/%Y') if p.data else '', p.nome_marketplace, p.pedido_id,
+               p.comprador_nome or '', formatar_cnpj_cpf(p.comprador_doc) if p.comprador_doc else '',
+               p.situacao, round(p.valor_bruto, 2),
+               # Cancelado ou não pago não deixou dinheiro nem taxa
+               round(p.taxas, 2) if p.situacao == PEDIDO_PAGO else '',
+               round(p.valor_liquido, 2) if p.situacao == PEDIDO_PAGO else '']
+              for p in pedidos]
+    linhas.append(['', '', '', '', '', f'Total dos pagos ({len(pagos)})',
+                   round(sum(p.valor_bruto for p in pagos), 2),
+                   round(sum(p.taxas for p in pagos), 2),
+                   round(sum(p.valor_liquido for p in pagos), 2)])
+    return _exportar_xlsx_generico(
+        ['Data', 'Marketplace', 'Pedido', 'Cliente', 'CNPJ/CPF', 'Situação',
+         'Bruto (R$)', 'Taxas (R$)', 'Líquido (R$)'],
+        linhas, f'marketplace_{date.today().isoformat()}', 'Pedidos')
+
+
+def sincronizar_marketplaces_do_dia(dias=15):
+    """Rotina diária: traz os pedidos dos últimos dias de todas as lojas."""
+    hoje = date.today()
+    feitos, erros = 0, []
+    for conexao in ConexaoMarketplace.query.all():
+        try:
+            marketplaces.sincronizar(conexao, hoje - timedelta(days=dias), hoje,
+                                     data_path('.chave_secreta'))
+            feitos += 1
+        except Exception as exc:
+            db.session.rollback()
+            conexao.ultimo_resultado = f'Erro na rotina diária: {exc}'[:300]
+            db.session.commit()
+            erros.append(f'{conexao.nome_marketplace} (empresa {conexao.empresa_id}): {exc}')
+    return feitos, erros
 
 
 @app.route('/relatorios/dre/exportar')
@@ -4001,6 +4364,20 @@ def admin_configuracoes():
         rotina_execucao=fiscal_sync.sistema_get('rotina_ultima_execucao'),
         rotina_resultado=fiscal_sync.sistema_get('rotina_ultimo_resultado'),
         dias_aviso=avisos.DIAS_DE_AVISO,
+        mkt={
+            'ml_client_id': fiscal_sync.sistema_get('mkt_mercadolivre_client_id'),
+            'ml_secret': bool(fiscal_sync.sistema_get('mkt_mercadolivre_secret_cripto')),
+            'shopee_partner_id': fiscal_sync.sistema_get('mkt_shopee_partner_id'),
+            'shopee_key': bool(fiscal_sync.sistema_get('mkt_shopee_key_cripto')),
+            'shopee_ambiente': fiscal_sync.sistema_get('mkt_shopee_ambiente', 'sandbox'),
+            'shopee_host': fiscal_sync.sistema_get('mkt_shopee_host'),
+            'amazon_app_id': fiscal_sync.sistema_get('mkt_amazon_app_id'),
+            'amazon_client_id': fiscal_sync.sistema_get('mkt_amazon_client_id'),
+            'amazon_secret': bool(fiscal_sync.sistema_get('mkt_amazon_secret_cripto')),
+            'amazon_ambiente': fiscal_sync.sistema_get('mkt_amazon_ambiente', 'sandbox'),
+            'amazon_beta': fiscal_sync.sistema_get('mkt_amazon_beta') == '1',
+        },
+        retorno_marketplace=f"{(_endereco_do_sistema() or request.url_root).rstrip('/')}/marketplace/{{marketplace}}/retorno",
     )
 
 
@@ -4016,6 +4393,47 @@ def admin_suporte():
     fiscal_sync.sistema_set('suporte_whatsapp', whatsapp)
     flash('Contato do suporte salvo.' if whatsapp
           else 'Suporte removido: o botão deixa de aparecer para os clientes.', 'sucesso')
+    return redirect(url_for('admin_configuracoes'))
+
+
+@app.route('/admin/marketplaces', methods=['POST'])
+@auth.exigir_papel(PAPEL_ADMIN)
+def admin_marketplaces():
+    """Credenciais do aplicativo de cada marketplace — um só para o sistema.
+
+    Segredos ficam criptografados e, como nos outros campos de senha, só são
+    trocados quando o campo vem preenchido.
+    """
+    chave_secreta = data_path('.chave_secreta')
+    abertos = {
+        'mkt_mercadolivre_client_id': 'ml_client_id',
+        'mkt_shopee_partner_id': 'shopee_partner_id',
+        'mkt_shopee_ambiente': 'shopee_ambiente',
+        'mkt_shopee_host': 'shopee_host',
+        'mkt_amazon_app_id': 'amazon_app_id',
+        'mkt_amazon_client_id': 'amazon_client_id',
+        'mkt_amazon_ambiente': 'amazon_ambiente',
+    }
+    for chave, campo in abertos.items():
+        fiscal_sync.sistema_set(chave, request.form.get(campo, '').strip())
+    fiscal_sync.sistema_set('mkt_amazon_beta', '1' if request.form.get('amazon_beta') else '')
+
+    secretos = {
+        'mkt_mercadolivre_secret_cripto': 'ml_secret',
+        'mkt_shopee_key_cripto': 'shopee_key',
+        'mkt_amazon_secret_cripto': 'amazon_secret',
+    }
+    for chave, campo in secretos.items():
+        valor = request.form.get(campo, '').strip()
+        if valor:
+            fiscal_sync.sistema_set(chave, fiscal_certificado.criptografar_senha(valor, chave_secreta))
+
+    if request.form.get('shopee_partner_id', '').strip() and \
+            not request.form['shopee_partner_id'].strip().isdigit():
+        flash('O Partner ID da Shopee é um número.', 'erro')
+        return redirect(url_for('admin_configuracoes'))
+
+    flash('Aplicativos de marketplace salvos.', 'sucesso')
     return redirect(url_for('admin_configuracoes'))
 
 
@@ -4391,6 +4809,9 @@ def tarefas_do_dia():
         except Exception as exc:
             resumo['erros'].append(f'{empresa.nome} (notas): {exc}')
 
+    feitos, erros = sincronizar_marketplaces_do_dia()
+    resumo['marketplaces'] = feitos
+    resumo['erros'] += erros
     return resumo
 
 
@@ -4398,7 +4819,8 @@ def _texto_do_resumo(resumo):
     partes = [f"{resumo['empresas']} empresa(s)",
               f"{resumo['recorrentes']} recorrente(s)",
               f"{resumo['notas']} lançamento(s) de nota",
-              f"backup: {resumo['backup']}"]
+              f"backup: {resumo['backup']}",
+              f"{resumo.get('marketplaces', 0)} loja(s) de marketplace"]
     if resumo['erros']:
         partes.append(f"{len(resumo['erros'])} erro(s)")
     return ', '.join(partes) + '.'

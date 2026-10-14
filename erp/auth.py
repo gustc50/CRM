@@ -33,6 +33,11 @@ SENHA_MINIMA = 8
 # Rotas que podem ser abertas sem estar logado
 ROTAS_LIVRES = {'login', 'logout', 'static', 'sem_acesso', 'cadastro'}
 
+# POSTs que só geram arquivo e não gravam nada. São POST porque levam a lista
+# de notas marcadas (que pode ser longa demais para a URL), mas o contador,
+# que é somente leitura, também precisa deles.
+ROTAS_POST_DE_LEITURA = {'vendas_relatorio', 'marketplace_relatorio'}
+
 # Rotas que quem está barrado ainda alcança. São as da própria assinatura:
 # barrar quem quer pagar deixaria a conta presa sem saída.
 ROTAS_DO_BLOQUEIO = {'assinatura', 'assinatura_cobrar', 'assinatura_conferir'}
@@ -198,6 +203,8 @@ def bloquear_escrita_do_contador(app):
         if request.method in ('GET', 'HEAD', 'OPTIONS'):
             return None
         if request.endpoint in ROTAS_LIVRES or request.endpoint is None:
+            return None
+        if request.endpoint in ROTAS_POST_DE_LEITURA:
             return None
         if somente_leitura() and not (request.endpoint or '').startswith('contador_'):
             flash('Contador tem acesso somente de leitura aos dados do cliente.', 'erro')

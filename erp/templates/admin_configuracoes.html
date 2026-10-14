@@ -113,6 +113,92 @@
     </div>
 </form>
 
+<h3 class="titulo-secao">Marketplaces</h3>
+<p class="aviso-cadastro">
+    Para os clientes conectarem as lojas deles, cada marketplace exige um
+    <strong>aplicativo registrado no portal de desenvolvedor</strong> — um só,
+    do sistema, que todos os clientes autorizam. Registre o aplicativo em cada
+    portal, informe o <strong>endereço de retorno</strong> abaixo e cole aqui as
+    credenciais. Marketplace sem credencial aparece para o cliente como "ainda
+    não ativado".
+</p>
+
+<form action="{{ url_for('admin_marketplaces') }}" method="POST" class="form-coluna form-config">
+    <h4 class="subtitulo-form">Mercado Livre <small>— developers.mercadolivre.com.br</small></h4>
+    <p class="nota-grafico">Endereço de retorno (Redirect URI):
+        <code>{{ retorno_marketplace.replace('{marketplace}', 'mercadolivre') }}</code></p>
+    <label>
+        Client ID (App ID)
+        <input type="text" name="ml_client_id" value="{{ mkt.ml_client_id }}" maxlength="60">
+    </label>
+    <label>
+        Client Secret {% if mkt.ml_secret %}<small>(já salvo — preencha só para trocar)</small>{% endif %}
+        <input type="password" name="ml_secret" autocomplete="new-password"
+               placeholder="{{ '••••••••' if mkt.ml_secret else '' }}">
+    </label>
+
+    <h4 class="subtitulo-form">Shopee <small>— open.shopee.com</small></h4>
+    <p class="nota-grafico">Endereço de retorno (Redirect URL Domain):
+        <code>{{ retorno_marketplace.replace('{marketplace}', 'shopee') }}</code></p>
+    <div class="linha-campos">
+        <label>
+            Partner ID
+            <input type="text" name="shopee_partner_id" value="{{ mkt.shopee_partner_id }}" maxlength="20">
+        </label>
+        <label>
+            Ambiente
+            <select name="shopee_ambiente">
+                <option value="sandbox" {{ 'selected' if mkt.shopee_ambiente == 'sandbox' else '' }}>Sandbox (testes)</option>
+                <option value="producao" {{ 'selected' if mkt.shopee_ambiente == 'producao' else '' }}>Produção</option>
+            </select>
+        </label>
+    </div>
+    <label>
+        Partner Key {% if mkt.shopee_key %}<small>(já salva — preencha só para trocar)</small>{% endif %}
+        <input type="password" name="shopee_key" autocomplete="new-password"
+               placeholder="{{ '••••••••' if mkt.shopee_key else '' }}">
+    </label>
+    <label>
+        Endereço da API <small>(opcional — só se a Shopee indicar outro para o seu aplicativo)</small>
+        <input type="url" name="shopee_host" value="{{ mkt.shopee_host }}" maxlength="120"
+               placeholder="padrão do ambiente escolhido">
+    </label>
+
+    <h4 class="subtitulo-form">Amazon <small>— Seller Central › Apps e serviços › Desenvolver apps</small></h4>
+    <p class="nota-grafico">Endereço de retorno (OAuth Redirect URI):
+        <code>{{ retorno_marketplace.replace('{marketplace}', 'amazon') }}</code></p>
+    <label>
+        Application ID <small>(amzn1.sp.solution…)</small>
+        <input type="text" name="amazon_app_id" value="{{ mkt.amazon_app_id }}" maxlength="100">
+    </label>
+    <label>
+        LWA Client ID <small>(amzn1.application-oa2-client…)</small>
+        <input type="text" name="amazon_client_id" value="{{ mkt.amazon_client_id }}" maxlength="120">
+    </label>
+    <label>
+        LWA Client Secret {% if mkt.amazon_secret %}<small>(já salvo — preencha só para trocar)</small>{% endif %}
+        <input type="password" name="amazon_secret" autocomplete="new-password"
+               placeholder="{{ '••••••••' if mkt.amazon_secret else '' }}">
+    </label>
+    <div class="linha-campos">
+        <label>
+            Ambiente
+            <select name="amazon_ambiente">
+                <option value="sandbox" {{ 'selected' if mkt.amazon_ambiente == 'sandbox' else '' }}>Sandbox (testes)</option>
+                <option value="producao" {{ 'selected' if mkt.amazon_ambiente == 'producao' else '' }}>Produção</option>
+            </select>
+        </label>
+        <label class="rotulo-caixa">
+            <input type="checkbox" name="amazon_beta" {{ 'checked' if mkt.amazon_beta else '' }}>
+            App em rascunho (autorização beta)
+        </label>
+    </div>
+
+    <div class="form-acoes">
+        <button type="submit">Salvar aplicativos</button>
+    </div>
+</form>
+
 <h3 class="titulo-secao">Suporte ao cliente</h3>
 <p class="aviso-cadastro">
     Aparece como <strong>Falar com o suporte</strong> para quem está com o

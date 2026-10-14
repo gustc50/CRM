@@ -21,7 +21,7 @@
 {% endmacro %}
 
 {% block content %}
-<h2>Vendas <small class="subtitulo">de {{ inicio.strftime('%d/%m/%Y') }} a {{ fim.strftime('%d/%m/%Y') }}</small></h2>
+<h2>Faturamento <small class="subtitulo">de {{ inicio.strftime('%d/%m/%Y') }} a {{ fim.strftime('%d/%m/%Y') }}</small></h2>
 
 <form action="{{ url_for('relatorio_vendas') }}" method="GET" class="form-filtro">
     <label>

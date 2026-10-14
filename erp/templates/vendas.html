@@ -1,0 +1,123 @@
+{% extends 'base.html' %}
+
+{% macro dinheiro(valor) %}
+{%- set absoluto = "{:,.2f}".format(valor|abs).replace(',', 'X').replace('.', ',').replace('X', '.') -%}
+{{ '-' if valor < 0 else '' }}R$ {{ absoluto }}
+{%- endmacro %}
+
+{% block content %}
+<h2>Vendas — {{ info.titulo }}
+    <small class="subtitulo">{{ info.nota }} emitidas de {{ inicio.strftime('%d/%m/%Y') }} a {{ fim.strftime('%d/%m/%Y') }}</small>
+</h2>
+
+<form action="{{ url_for(info.endpoint) }}" method="GET" class="form-filtro">
+    <label>
+        De
+        <input type="date" name="inicio" value="{{ inicio.isoformat() }}">
+    </label>
+    <label>
+        Até
+        <input type="date" name="fim" value="{{ fim.isoformat() }}">
+    </label>
+    <button type="submit">Filtrar</button>
+</form>
+
+<form action="{{ url_for('vendas_relatorio', tipo=tipo) }}" method="POST" id="form-vendas" class="form-tabela">
+    <input type="hidden" name="inicio" value="{{ inicio.isoformat() }}">
+    <input type="hidden" name="fim" value="{{ fim.isoformat() }}">
+
+    <div class="barra-selecao">
+        <span>
+            <strong id="qtde-marcadas">{{ linhas|length }}</strong> de {{ linhas|length }} marcada(s) ·
+            <strong id="soma-marcadas">{{ dinheiro(total) }}</strong>
+        </span>
+        <button type="submit" {{ '' if linhas else 'disabled' }}>⬇ Gerar relatório</button>
+    </div>
+
+    <div class="table-scroll">
+    <table class="tabela-vendas">
+        <thead>
+            <tr>
+                <th class="col-marca">
+                    <input type="checkbox" id="marcar-todas" checked
+                           aria-label="Marcar ou desmarcar todas" {{ '' if linhas else 'disabled' }}>
+                </th>
+                <th>Data</th>
+                <th>Cliente</th>
+                <th>CNPJ/CPF</th>
+                <th class="num">Valor</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for l in linhas %}
+            <tr>
+                <td class="col-marca">
+                    <input type="checkbox" name="ids" value="{{ l.id }}" checked
+                           data-valor="{{ '%.2f'|format(l.valor) }}"
+                           aria-label="Incluir a nota de {{ l.cliente }}">
+                </td>
+                <td class="sem-quebra">{{ l.data.strftime('%d/%m/%Y') if l.data else '—' }}</td>
+                <td>{{ l.cliente }}{% if l.numero %} <small>· nº {{ l.numero }}</small>{% endif %}</td>
+                <td class="sem-quebra">{{ formatar_cnpj_cpf(l.doc) if l.doc else '—' }}</td>
+                <td class="num">{{ dinheiro(l.valor) }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5">Nenhuma {{ info.nota }} emitida no período.</td></tr>
+            {% endfor %}
+        </tbody>
+        {% if linhas %}
+        <tfoot>
+            <tr>
+                <td></td><td></td>
+                <td colspan="2"><strong>Total do período ({{ linhas|length }} nota(s))</strong></td>
+                <td class="num"><strong>{{ dinheiro(total) }}</strong></td>
+            </tr>
+        </tfoot>
+        {% endif %}
+    </table>
+    </div>
+</form>
+
+<p class="nota-grafico">
+    {% if tipo == 'servicos' %}
+    Lista das NFS-e emitidas pela empresa — o cliente é o tomador do serviço.
+    {% else %}
+    Lista das NF-e emitidas pela empresa — o cliente é o destinatário.
+    {% endif %}
+    O relatório leva só as notas marcadas.
+    {% if canceladas %}
+    {{ canceladas }} nota(s) cancelada(s) ou denegada(s) no período ficaram de fora, porque não são venda.
+    {% endif %}
+</p>
+
+<script>
+    // Marcar/desmarcar e o total das marcadas, sem recarregar a página.
+    (function () {
+        var form = document.getElementById('form-vendas');
+        var todas = document.getElementById('marcar-todas');
+        var caixas = form.querySelectorAll('input[name="ids"]');
+        var qtde = document.getElementById('qtde-marcadas');
+        var soma = document.getElementById('soma-marcadas');
+        var botao = form.querySelector('button[type="submit"]');
+        var moeda = new Intl.NumberFormat('pt-BR', {style: 'currency', currency: 'BRL'});
+
+        function atualizar() {
+            var marcadas = 0, total = 0;
+            caixas.forEach(function (c) {
+                if (c.checked) { marcadas++; total += parseFloat(c.dataset.valor); }
+            });
+            qtde.textContent = marcadas;
+            soma.textContent = moeda.format(total);
+            botao.disabled = marcadas === 0;
+            todas.checked = marcadas === caixas.length && caixas.length > 0;
+            todas.indeterminate = marcadas > 0 && marcadas < caixas.length;
+        }
+
+        todas.addEventListener('change', function () {
+            caixas.forEach(function (c) { c.checked = todas.checked; });
+            atualizar();
+        });
+        caixas.forEach(function (c) { c.addEventListener('change', atualizar); });
+    })();
+</script>
+{% endblock %}

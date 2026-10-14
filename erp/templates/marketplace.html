@@ -1,0 +1,210 @@
+{% extends 'base.html' %}
+
+{% macro dinheiro(valor) %}
+{%- set absoluto = "{:,.2f}".format(valor|abs).replace(',', 'X').replace('.', ',').replace('X', '.') -%}
+{{ '-' if valor < 0 else '' }}R$ {{ absoluto }}
+{%- endmacro %}
+
+{% block content %}
+<h2>Marketplace</h2>
+
+<p class="aviso-cadastro">
+    Conecte suas lojas e o sistema traz os pedidos sozinho todo dia: cada venda
+    paga vira lançamento, com a comissão do marketplace separada, e o comprador
+    vira cliente quando o CPF/CNPJ vem junto. Conectar abre a página do próprio
+    marketplace para você autorizar — sua senha de lá nunca passa por aqui.
+</p>
+
+<div class="cartoes-marketplace">
+    {% for loja in lojas %}
+    {% set c = loja.conexao %}
+    <section class="painel cartao-mkt">
+        <div class="cabecalho-mkt">
+            <h3>{{ loja.nome }}</h3>
+            {% if c %}
+            <span class="badge-baixado">Conectado</span>
+            {% elif loja.disponivel %}
+            <span class="badge-pendente">Desconectado</span>
+            {% else %}
+            <span class="badge-cancelada">Não ativado</span>
+            {% endif %}
+        </div>
+
+        {% if c %}
+        <p class="nota-grafico">
+            Loja: <strong>{{ c.conta_nome or c.conta_id }}</strong><br>
+            {% if c.ultima_sync %}
+            Última sincronização: {{ c.ultima_sync.strftime('%d/%m/%Y %H:%M') }}<br>
+            <small>{{ c.ultimo_resultado }}</small>
+            {% else %}
+            Ainda não sincronizado.
+            {% endif %}
+        </p>
+
+        <form action="{{ url_for('marketplace_modo', chave=loja.chave) }}" method="POST" class="form-coluna form-mkt">
+            <label>
+                Como lançar as vendas
+                <select name="modo" onchange="this.form.submit()">
+                    {% for valor, rotulo, explicacao in modos %}
+                    <option value="{{ valor }}" {{ 'selected' if c.modo_lancamento == valor else '' }}
+                            title="{{ explicacao }}">{{ rotulo }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <small class="explica-modo">
+                {% for valor, rotulo, explicacao in modos %}{% if c.modo_lancamento == valor %}{{ explicacao }}{% endif %}{% endfor %}
+            </small>
+            {% if tem_nfe_emitida and c.modo_lancamento == 'receita_taxas' %}
+            <small class="alerta-modo">
+                ⚠️ Esta empresa emite NF-e, e NF-e emitida já vira conta a receber.
+                Se as vendas daqui têm nota, prefira "Só as taxas" para não contar a
+                receita duas vezes.
+            </small>
+            {% endif %}
+        </form>
+
+        <form action="{{ url_for('marketplace_sincronizar', chave=loja.chave) }}" method="POST" class="form-coluna form-mkt">
+            <small class="explica-modo">Buscar os pedidos de:</small>
+            <div class="linha-campos">
+                <label>De <input type="date" name="inicio" value="{{ inicio.isoformat() }}"></label>
+                <label>Até <input type="date" name="fim" value="{{ fim.isoformat() }}"></label>
+            </div>
+            <div class="form-acoes">
+                <button type="submit">🔄 Sincronizar</button>
+            </div>
+        </form>
+        <form action="{{ url_for('marketplace_desconectar', chave=loja.chave) }}" method="POST" class="form-mkt"
+              onsubmit="return confirm({{ ('Desconectar ' ~ loja.nome ~ '? Os pedidos e lançamentos já trazidos continuam.')|tojson|forceescape }});">
+            <button type="submit" class="btn-secundario">Desconectar</button>
+        </form>
+
+        {% elif loja.disponivel %}
+        <p class="nota-grafico">Autorize o acesso à sua loja para o sistema trazer os pedidos.</p>
+        <a href="{{ url_for('marketplace_conectar', chave=loja.chave) }}" class="btn-acao btn-editar btn-grande">
+            Conectar {{ loja.nome }}
+        </a>
+        {% if loja.chave == 'amazon' %}
+        <details class="detalhe-mkt">
+            <summary>Já tenho um refresh token (aplicativo privado)</summary>
+            <form action="{{ url_for('marketplace_amazon_token') }}" method="POST" class="form-coluna form-mkt">
+                <label>
+                    Refresh token <small>(começa com Atzr|)</small>
+                    <input type="password" name="refresh_token" autocomplete="off" required>
+                </label>
+                <label>
+                    ID do vendedor <small>(opcional)</small>
+                    <input type="text" name="seller_id" maxlength="40">
+                </label>
+                <button type="submit">Conectar com o token</button>
+            </form>
+        </details>
+        {% endif %}
+
+        {% else %}
+        <p class="nota-grafico">
+            A integração com {{ loja.nome }} ainda não foi ativada pelo
+            administrador do sistema.
+        </p>
+        {% endif %}
+    </section>
+    {% endfor %}
+</div>
+
+<h3 class="titulo-secao">Pedidos de {{ inicio.strftime('%d/%m/%Y') }} a {{ fim.strftime('%d/%m/%Y') }}</h3>
+
+<form action="{{ url_for('marketplace') }}" method="GET" class="form-filtro">
+    <label>De <input type="date" name="inicio" value="{{ inicio.isoformat() }}"></label>
+    <label>Até <input type="date" name="fim" value="{{ fim.isoformat() }}"></label>
+    <button type="submit">Filtrar</button>
+</form>
+
+<div class="dashboard">
+    <div class="card receber">
+        <h3>Vendido (bruto)</h3>
+        <h2>{{ dinheiro(total_bruto) }}</h2>
+        <small>{{ qtde_pagos }} pedido(s) pago(s)</small>
+    </div>
+    <div class="card pagar">
+        <h3>Taxas do marketplace</h3>
+        <h2>{{ dinheiro(total_taxas) }}</h2>
+        <small>{% if total_bruto %}{{ ('%.1f'|format(total_taxas / total_bruto * 100))|replace('.', ',') }}% do bruto{% else %}—{% endif %}</small>
+    </div>
+    <div class="card">
+        <h3>Líquido</h3>
+        <h2>{{ dinheiro(total_liquido) }}</h2>
+        <small>o que sobra para a empresa</small>
+    </div>
+</div>
+
+<form action="{{ url_for('marketplace_relatorio') }}" method="POST" id="form-pedidos" class="form-tabela">
+    <div class="barra-selecao">
+        <span><strong id="qtde-marcadas">{{ pedidos|length }}</strong> de {{ pedidos|length }} marcado(s)</span>
+        <button type="submit" {{ '' if pedidos else 'disabled' }}>⬇ Gerar relatório</button>
+    </div>
+    <div class="table-scroll">
+    <table class="tabela-vendas">
+        <thead>
+            <tr>
+                <th class="col-marca"><input type="checkbox" id="marcar-todas" checked
+                    aria-label="Marcar ou desmarcar todos" {{ '' if pedidos else 'disabled' }}></th>
+                <th>Data</th><th>Marketplace</th><th>Cliente</th><th>CNPJ/CPF</th>
+                <th>Situação</th><th class="num">Bruto</th><th class="num">Taxas</th><th class="num">Líquido</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in pedidos %}
+            <tr class="{{ 'atrasado' if p.situacao == 'cancelado' else '' }}">
+                <td class="col-marca"><input type="checkbox" name="ids" value="{{ p.id }}" checked
+                    aria-label="Incluir o pedido {{ p.pedido_id }}"></td>
+                <td class="sem-quebra">{{ p.data.strftime('%d/%m/%Y') if p.data else '—' }}</td>
+                <td>{{ p.nome_marketplace }}<br><small>{{ p.pedido_id }}</small></td>
+                <td>{{ p.comprador_nome or '—' }}{% if p.itens %}<br><small>{{ p.itens[:80] }}</small>{% endif %}</td>
+                <td class="sem-quebra">{{ formatar_cnpj_cpf(p.comprador_doc) if p.comprador_doc else '—' }}</td>
+                <td>
+                    {% if p.situacao == 'pago' %}<span class="badge-baixado">Pago</span>
+                    {% elif p.situacao == 'cancelado' %}<span class="badge-cancelada">Cancelado</span>
+                    {% else %}<span class="badge-pendente">Aguardando</span>{% endif %}
+                    {% if p.transacao_receita_id or p.transacao_taxas_id %}<br><small>lançado</small>{% endif %}
+                </td>
+                <td class="num">{{ dinheiro(p.valor_bruto) }}</td>
+                {# Pedido cancelado ou não pago não deixou dinheiro: mostrar o
+                   líquido dele como se tivesse entrado seria informação errada. #}
+                {% if p.situacao == 'pago' %}
+                <td class="num">{{ dinheiro(p.taxas) }}</td>
+                <td class="num">{{ dinheiro(p.valor_liquido) }}</td>
+                {% else %}
+                <td class="num">—</td>
+                <td class="num">—</td>
+                {% endif %}
+            </tr>
+            {% else %}
+            <tr><td colspan="9">Nenhum pedido no período. Conecte uma loja e clique em Sincronizar.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</form>
+
+<script>
+    (function () {
+        var form = document.getElementById('form-pedidos');
+        var todas = document.getElementById('marcar-todas');
+        var caixas = form.querySelectorAll('input[name="ids"]');
+        var qtde = document.getElementById('qtde-marcadas');
+        var botao = form.querySelector('button[type="submit"]');
+        function atualizar() {
+            var n = 0;
+            caixas.forEach(function (c) { if (c.checked) { n++; } });
+            qtde.textContent = n;
+            botao.disabled = n === 0;
+            todas.checked = n === caixas.length && caixas.length > 0;
+            todas.indeterminate = n > 0 && n < caixas.length;
+        }
+        todas.addEventListener('change', function () {
+            caixas.forEach(function (c) { c.checked = todas.checked; });
+            atualizar();
+        });
+        caixas.forEach(function (c) { c.addEventListener('change', atualizar); });
+    })();
+</script>
+{% endblock %}

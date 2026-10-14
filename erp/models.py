@@ -512,3 +512,101 @@ class NotaEletronica(db.Model):
     transacao = db.relationship('Transacao', backref=db.backref('nota_eletronica', uselist=False))
 
     __table_args__ = (db.UniqueConstraint('empresa_id', 'chave'),)
+
+
+# ------------------------------------------------------------------ #
+# Marketplaces
+# ------------------------------------------------------------------ #
+
+MARKETPLACES = {
+    'mercadolivre': 'Mercado Livre',
+    'shopee': 'Shopee',
+    'amazon': 'Amazon',
+}
+
+# Como as vendas de um marketplace entram nos lançamentos. A escolha existe
+# porque quem vende no marketplace normalmente também emite NF-e de cada
+# venda — e a NF-e emitida já vira conta a receber sozinha. Lançar a receita
+# pelos dois caminhos contaria a mesma venda duas vezes.
+MODO_RECEITA_E_TAXAS = 'receita_taxas'
+MODO_SO_TAXAS = 'so_taxas'
+MODO_NAO_LANCAR = 'nao_lancar'
+MODOS_LANCAMENTO = (
+    (MODO_RECEITA_E_TAXAS, 'Receita e taxas',
+     'Cada pedido pago vira uma conta a receber (valor bruto) e uma conta a '
+     'pagar com as taxas do marketplace. Use se você NÃO emite NF-e por este sistema.'),
+    (MODO_SO_TAXAS, 'Só as taxas',
+     'A receita já entra pelas NF-e emitidas; daqui vêm só as comissões e '
+     'tarifas, que a nota não mostra. Evita contar a venda duas vezes.'),
+    (MODO_NAO_LANCAR, 'Não lançar',
+     'Os pedidos aparecem aqui para consulta, sem mexer nos lançamentos.'),
+)
+
+# Situação normalizada do pedido, igual para os três marketplaces
+PEDIDO_PAGO = 'pago'
+PEDIDO_PENDENTE = 'pendente'
+PEDIDO_CANCELADO = 'cancelado'
+
+
+class ConexaoMarketplace(db.Model):
+    """Loja de uma empresa autorizada num marketplace.
+
+    Os tokens ficam criptografados com a mesma chave do certificado digital.
+    O aplicativo (client id, chave secreta) é um só para o sistema todo e fica
+    nas configurações do administrador; aqui fica só o que é desta loja.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    empresa_id = db.Column(db.Integer, db.ForeignKey('empresa.id'), nullable=False, index=True)
+    marketplace = db.Column(db.String(20), nullable=False)
+
+    conta_id = db.Column(db.String(60), nullable=True)     # vendedor / loja no marketplace
+    conta_nome = db.Column(db.String(150), nullable=True)
+    access_token_cripto = db.Column(db.Text, nullable=True)
+    refresh_token_cripto = db.Column(db.Text, nullable=True)
+    expira_em = db.Column(db.DateTime, nullable=True)
+
+    modo_lancamento = db.Column(db.String(20), nullable=False, default=MODO_RECEITA_E_TAXAS)
+    conectado_em = db.Column(db.DateTime, nullable=False, default=dt.datetime.now)
+    ultima_sync = db.Column(db.DateTime, nullable=True)
+    ultimo_resultado = db.Column(db.String(300), nullable=True)
+
+    __table_args__ = (db.UniqueConstraint('empresa_id', 'marketplace'),)
+
+    @property
+    def nome_marketplace(self):
+        return MARKETPLACES.get(self.marketplace, self.marketplace)
+
+
+class PedidoMarketplace(db.Model):
+    """Pedido trazido de um marketplace, no mesmo formato para os três."""
+    id = db.Column(db.Integer, primary_key=True)
+    empresa_id = db.Column(db.Integer, db.ForeignKey('empresa.id'), nullable=False, index=True)
+    marketplace = db.Column(db.String(20), nullable=False)
+    pedido_id = db.Column(db.String(60), nullable=False)
+
+    data = db.Column(db.Date, nullable=True)
+    situacao = db.Column(db.String(15), nullable=False, default=PEDIDO_PENDENTE)
+    status_original = db.Column(db.String(40), nullable=True)
+
+    comprador_nome = db.Column(db.String(200), nullable=True)
+    comprador_doc = db.Column(db.String(20), nullable=True)
+    itens = db.Column(db.String(300), nullable=True)
+
+    valor_bruto = db.Column(db.Float, nullable=False, default=0.0)
+    taxas = db.Column(db.Float, nullable=False, default=0.0)
+    frete = db.Column(db.Float, nullable=False, default=0.0)
+    valor_liquido = db.Column(db.Float, nullable=False, default=0.0)
+
+    cliente_id = db.Column(db.Integer, db.ForeignKey('cliente.id'), nullable=True)
+    cliente = db.relationship('Cliente')
+    transacao_receita_id = db.Column(db.Integer, db.ForeignKey('transacao.id'), nullable=True)
+    transacao_taxas_id = db.Column(db.Integer, db.ForeignKey('transacao.id'), nullable=True)
+
+    importado_em = db.Column(db.DateTime, nullable=False, default=dt.datetime.now)
+    atualizado_em = db.Column(db.DateTime, nullable=False, default=dt.datetime.now)
+
+    __table_args__ = (db.UniqueConstraint('empresa_id', 'marketplace', 'pedido_id'),)
+
+    @property
+    def nome_marketplace(self):
+        return MARKETPLACES.get(self.marketplace, self.marketplace)

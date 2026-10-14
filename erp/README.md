@@ -1120,6 +1120,124 @@ dizem pegar, desliguei de propósito a ordenação dos pagamentos, a absorção 
 liberação manual e o casamento pelo documento — cada um fez o teste falhar no
 ponto esperado (sem a ordenação, o cliente ganhava um mês a mais).
 
+## Décima oitava rodada: abas Vendas e Marketplace
+
+### Vendas: Serviços e Produtos
+
+Aba nova no menu, com duas sub-abas:
+
+| Sub-aba | De onde vêm as linhas | O que fica de fora |
+|---|---|---|
+| **Serviços** | NFS-e **emitidas** pela empresa (as "a receber") | canceladas e as recebidas de fornecedores |
+| **Produtos** | NF-e **emitidas** pela empresa (as "a receber") | canceladas, denegadas e as recebidas |
+
+As colunas seguem a ordem pedida: **data, cliente** (o tomador da NFS-e ou o
+destinatário da NF-e), **CNPJ/CPF** e **valor**, em ordem de data. Em cima,
+o filtro de período; em cada linha, uma caixa de seleção — todas já vêm
+marcadas, e a do cabeçalho marca ou desmarca tudo. Enquanto se marca, a barra
+mostra quantas estão marcadas e a soma delas.
+
+**Gerar relatório** baixa um XLSX só com as notas marcadas, com uma linha de
+total no fim, e o período no nome do arquivo
+(`vendas_servicos_2026-10-01_a_2026-10-31.xlsx`). As notas canceladas não
+somem sem aviso: a tela diz quantas foram deixadas de fora.
+
+O contador vê as duas sub-abas e também gera o relatório — é um POST, mas não
+grava nada, então foi liberado junto com o de marketplace
+(`auth.ROTAS_POST_DE_LEITURA`). Os POSTs que gravam continuam barrados.
+
+> O antigo **Relatórios › Vendas** (gráficos e ranking de clientes a partir
+> dos lançamentos) passou a se chamar **Faturamento**, para não haver duas
+> coisas chamadas "Vendas" no menu.
+
+### Marketplace: Mercado Livre, Shopee e Amazon
+
+Nenhum dos três oferece um "link de API" que o vendedor copia e cola. O
+acesso funciona por **autorização (OAuth)**: o sistema tem um aplicativo
+registrado no portal de desenvolvedor de cada marketplace, e cada cliente
+clica em **Conectar**, entra no próprio marketplace e autoriza. A senha do
+vendedor nunca passa pelo sistema; o que volta é um token, guardado
+criptografado.
+
+Por isso a configuração tem duas partes:
+
+1. **Admin, uma vez só** — em *Configurações do sistema › Marketplaces*, cola
+   as credenciais do aplicativo de cada marketplace. A tela mostra o
+   **endereço de retorno** que precisa ser cadastrado no portal (usa o
+   *Endereço do sistema* configurado no e-mail; precisa ser HTTPS e público
+   para funcionar de verdade).
+   - Mercado Livre: Client ID e Client Secret (developers.mercadolivre.com.br).
+   - Shopee: Partner ID e Partner Key (open.shopee.com), com a escolha entre
+     sandbox e produção e, se a Shopee indicar outro, o endereço da API.
+   - Amazon: Application ID, LWA Client ID e Secret (Seller Central › Apps e
+     serviços › Desenvolver apps), ambiente e a opção de app em rascunho.
+2. **Cliente** — na aba **Marketplace**, clica em *Conectar* em cada loja.
+   Marketplace sem credencial do admin aparece como "ainda não ativado". Na
+   Amazon dá também para colar um refresh token de aplicativo privado.
+
+Uma vez conectado, os pedidos chegam de dois jeitos: no botão
+**Sincronizar** (o período padrão é o dos últimos 30 dias) e na **rotina
+diária**, que busca os últimos 15 dias de todas as lojas conectadas. Pedido
+que já existe é atualizado, não duplicado.
+
+### Como as vendas entram no resto do sistema
+
+Cada loja conectada tem um **modo de lançamento**:
+
+| Modo | O que cria para cada pedido pago | Quando usar |
+|---|---|---|
+| **Receita e taxas** (padrão) | conta a receber com o valor bruto + conta a pagar com as taxas | quem **não** emite NF-e por este sistema |
+| **Só as taxas** | só a conta a pagar das taxas | quem emite NF-e aqui: a NF-e emitida já vira conta a receber, e lançar a venda de novo contaria a receita duas vezes |
+| **Não lançar** | nada — só lista os pedidos | quem quer só consultar |
+
+Se a empresa tem NF-e emitida e a loja está em *Receita e taxas*, a tela
+avisa e sugere *Só as taxas*.
+
+- **Cliente**: quando o pedido traz o CPF/CNPJ do comprador, ele vira
+  cliente no cadastro (ou é reaproveitado, se já existir com esse
+  documento). Sem documento, o pedido entra sem cliente — não se cria
+  cadastro com dado incompleto.
+- **Categorias**: *Vendas Mercado Livre* / *Vendas Shopee* / *Vendas Amazon*
+  para as receitas e *Taxas de marketplace* para as despesas, criadas
+  sozinhas no centro de custo *Marketplace* — aparecem na DRE e no
+  Faturamento sem configurar nada.
+- **Taxas**: a comissão de cada pedido — no Mercado Livre a `sale_fee` de
+  cada item, na Shopee as comissões e tarifas do repasse (escrow), na Amazon
+  as tarifas dos eventos financeiros.
+- **Pedido cancelado depois de lançado**: os lançamentos ainda em aberto são
+  apagados; os já baixados ficam, porque alguém já mexeu neles.
+- Os lançamentos entram **em aberto**, com vencimento na data do pedido: a
+  baixa é feita quando o marketplace repassar o dinheiro.
+
+A aba mostra os totais do período (bruto, taxas e líquido, só dos pedidos
+pagos) e a lista de pedidos com caixas de seleção e **Gerar relatório** em
+XLSX, no mesmo esquema da aba Vendas. Pedido cancelado ou ainda não pago
+aparece com "—" nas taxas e no líquido, e fica de fora dos totais.
+
+### Como foi testado
+
+- `testes/test_vendas.py` — 32 conferências: notas de serviço e de produto,
+  ordem por data, CNPJ e CPF formatados, canceladas/denegadas/recebidas fora,
+  período, isolamento entre empresas (inclusive um ID de outra empresa
+  enfiado no formulário), XLSX só com as marcadas e o total delas, e o
+  acesso do contador.
+- `testes/test_marketplace.py` — os três marketplaces contra um servidor de
+  mentira que imita as APIs: autorização com conferência do `state`,
+  assinatura HMAC da Shopee, janela de 15 dias da Shopee, renovação do token
+  do Mercado Livre (que troca o refresh token a cada uso), paginação da
+  Amazon, os três modos de lançamento, cancelamento depois de lançado,
+  sincronizar duas vezes sem duplicar, cliente pelo CPF/CNPJ, credenciais
+  criptografadas no banco, permissões do contador e o XLSX.
+- Para provar que os testes pegam defeitos, estraguei de propósito a
+  assinatura da Shopee, a janela de 15 dias e a troca do refresh token do
+  Mercado Livre: cada um fez o teste falhar no ponto certo.
+- As telas foram conferidas no navegador, inclusive em largura de celular,
+  clicando nas caixas e baixando os arquivos.
+
+> **Não foi testado contra as APIs de verdade** — isso exige os aplicativos
+> registrados e lojas reais. Os pontos que podem precisar de ajuste no
+> primeiro uso estão em *Limitações conhecidas*.
+
 ## Limitações conhecidas (fora do escopo desta revisão)
 
 - Banco de dados SQLite, com um worker só. Aguenta bem dezenas de empresas;
@@ -1129,8 +1247,25 @@ ponto esperado (sem a ordenação, o cliente ganhava um mês a mais).
   pela lista de usuários.
 - As suítes de papéis, isolamento, autocadastro, equipe e SMTP ainda não
   foram recriadas depois da perda do ambiente. Estão versionadas
-  `test_relatorios.py` e `test_liberacao.py` (esta cobre o que a antiga de
-  pagamento cobria, e mais).
+  `test_relatorios.py`, `test_liberacao.py` (esta cobre o que a antiga de
+  pagamento cobria, e mais), `test_vendas.py` e `test_marketplace.py`.
+- **Marketplaces, pontos a conferir no primeiro uso real** (os conectores
+  seguem a documentação pública, mas não rodaram contra as APIs de verdade):
+  - Shopee: o endereço do sandbox muda de tempos em tempos — por isso é
+    configurável na tela do admin. O CPF do comprador (`buyer_cpf_id`) só
+    vem para alguns vendedores; sem ele o pedido entra sem cliente.
+  - Mercado Livre: a `sale_fee` foi tratada como valor **por unidade** e
+    multiplicada pela quantidade. Se a primeira sincronização mostrar taxas
+    em dobro nos pedidos com várias unidades, é aqui.
+  - Amazon: os dados do comprador (nome, CPF) normalmente não são entregues
+    pela API sem aprovação especial da Amazon, então os pedidos da Amazon
+    tendem a entrar sem cliente. A API de tarifas tem limite de chamadas
+    baixo; com muitos pedidos, a sincronização fica lenta.
+  - Os endereços de retorno precisam ser HTTPS e estar cadastrados igualzinho
+    no portal de cada marketplace. Rodando só em `localhost`, o botão
+    Conectar abre a autorização, mas a volta não chega.
+- Os pedidos de marketplace entram como contas em aberto; a baixa é manual,
+  quando o repasse cai na conta. O sistema não lê os extratos de repasse.
 - Liberação manual feita **antes** do pagamento (adiantando o acesso) não é
   reconhecida como "a mesma" do pagamento que vem depois: o pagamento soma
   seus 30 dias normalmente. A absorção só vale para liberações feitas no dia

@@ -1065,3 +1065,63 @@ th.num, td.num { text-align: right; white-space: nowrap; }
 .valor-mes { font-size: 11px; color: #8a8a86; white-space: nowrap; }
 
 .sem-quebra { white-space: nowrap; }
+
+/* ---- Listas com seleção (Vendas, Marketplace) ---- */
+
+/* Formulário que envolve uma tabela: sem o cartão nem a linha flex do
+   `form` comum, senão a barra e a tabela ficam lado a lado. */
+.form-tabela {
+    display: block;
+    background: none;
+    box-shadow: none;
+    padding: 0;
+    margin-bottom: 16px;
+}
+.barra-selecao {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    background: #fff;
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 10px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.06);
+    font-size: 14px;
+}
+th.col-marca, td.col-marca { width: 36px; text-align: center; }
+.col-marca input { width: 16px; height: 16px; cursor: pointer; }
+.tabela-vendas tfoot td { border-top: 2px solid #ddd; background: #fff; }
+
+/* ---- Marketplace ---- */
+
+.cartoes-marketplace {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+    align-items: start;  /* cada cartão do tamanho do seu conteúdo */
+}
+.cartao-mkt { margin-bottom: 0; display: flex; flex-direction: column; gap: 6px; }
+.cabecalho-mkt { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.cabecalho-mkt h3 { margin: 0; font-size: 17px; }
+.form-mkt { background: none; box-shadow: none; padding: 0; margin: 4px 0 0; max-width: none; }
+.form-mkt label { font-size: 13px; }
+.explica-modo { color: #52514e; font-size: 12px; line-height: 1.4; }
+.alerta-modo {
+    display: block;
+    background: #fff3cd;
+    color: #664d03;
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-size: 12px;
+    line-height: 1.4;
+}
+.btn-grande { padding: 10px 14px; font-size: 14px; text-align: center; margin-top: 4px; }
+.detalhe-mkt { font-size: 13px; margin-top: 8px; }
+.detalhe-mkt summary { cursor: pointer; color: #0056b3; }
+.subtitulo-form { margin: 18px 0 2px; font-size: 15px; color: #333; }
+.subtitulo-form small { font-weight: normal; color: #8a8a86; }
+.rotulo-caixa { flex-direction: row !important; align-items: center; gap: 8px !important; }
+code { background: #f1f4f8; padding: 1px 5px; border-radius: 3px; font-size: 12px; word-break: break-all; }
