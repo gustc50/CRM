@@ -82,13 +82,99 @@ class Empresa(db.Model):
         return max(0, USUARIOS_INCLUSOS - self.usuarios_ativos)
 
     def creditar_dias(self, dias=DIAS_POR_PAGAMENTO, a_partir_de=None):
-        """Estende a assinatura. Se ainda está em dia, soma ao prazo que resta;
-        se já venceu, conta a partir de hoje (não devolve o tempo parado)."""
-        base = a_partir_de or dt.date.today()
-        if self.assinatura_ate and self.assinatura_ate > base:
-            base = self.assinatura_ate
-        self.assinatura_ate = base + dt.timedelta(days=dias)
+        """Atalho antigo, mantido para cortesia e contas de teste."""
+        self.liberar(ORIGEM_CORTESIA, data_referencia=a_partir_de, dias=dias)
         return self.assinatura_ate
+
+    def liberar(self, origem, data_referencia=None, dias=DIAS_POR_PAGAMENTO,
+                usuario_id=None, asaas_id=None, observacao=None):
+        """Libera o acesso e registra a liberação. É a regra única do sistema.
+
+        A data de liberação fica gravada e, a cada acesso, é confrontada com a
+        data de hoje: passou do prazo, o sistema bloqueia sozinho.
+
+        - **Vencido (ou nunca liberado):** a contagem recomeça — a data
+          inicial nova é a de hoje (clique do admin) ou a do pagamento (Asaas).
+        - **Ainda em dia:** soma ao fim do período atual. Quem paga ou é
+          liberado antes do vencimento não perde os dias que ainda tinha.
+
+        `data_referencia` é a data em que o direito nasceu: o dia do clique
+        ou o dia em que o cliente pagou. Retorna o registro criado.
+        """
+        referencia = data_referencia or dt.date.today()
+        renovacao = self.assinatura_ate is not None and self.assinatura_ate >= referencia
+        inicio = self.assinatura_ate if renovacao else referencia
+
+        self.assinatura_ate = inicio + dt.timedelta(days=dias)
+
+        registro = Liberacao(
+            # Pela relação, e não pelo id: na criação da empresa (dias de
+            # cortesia) ela ainda não foi gravada e não tem id.
+            empresa=self,
+            inicio=inicio,
+            valido_ate=self.assinatura_ate,
+            dias=dias,
+            origem=origem,
+            renovacao=renovacao,
+            usuario_id=usuario_id,
+            asaas_id=asaas_id,
+            observacao=observacao,
+        )
+        db.session.add(registro)
+        return registro
+
+    @property
+    def ultima_liberacao(self):
+        return max(self.liberacoes, key=lambda l: l.id) if self.liberacoes else None
+
+    @property
+    def dias_vencido(self):
+        """Há quantos dias o acesso está bloqueado por prazo (None se em dia)."""
+        if self.assinatura_ate is None or self.assinatura_em_dia:
+            return None
+        return (dt.date.today() - self.assinatura_ate).days
+
+
+# De onde veio cada liberação
+ORIGEM_MANUAL = 'manual'      # clique do administrador
+ORIGEM_ASAAS = 'asaas'        # pagamento confirmado no Asaas
+ORIGEM_CORTESIA = 'cortesia'  # dias dados na criação da empresa
+ORIGENS = {
+    ORIGEM_MANUAL: 'Liberado pelo admin',
+    ORIGEM_ASAAS: 'Pagamento no Asaas',
+    ORIGEM_CORTESIA: 'Cortesia',
+}
+
+
+class Liberacao(db.Model):
+    """Cada vez que o acesso de uma empresa foi liberado.
+
+    É o histórico que responde "quando foi liberado, até quando, e por quê".
+    O prazo vigente fica em `Empresa.assinatura_ate`; aqui fica o caminho até
+    ele, um registro por clique ou por pagamento.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    empresa_id = db.Column(db.Integer, db.ForeignKey('empresa.id'), nullable=False, index=True)
+    empresa = db.relationship('Empresa', backref='liberacoes')
+
+    # Quando a liberação aconteceu (o clique, ou a confirmação do pagamento)
+    liberado_em = db.Column(db.DateTime, nullable=False, default=dt.datetime.now)
+    # De quando a contagem dos dias começa: hoje, a data do pagamento ou, numa
+    # renovação, o fim do período que ainda estava valendo
+    inicio = db.Column(db.Date, nullable=False)
+    valido_ate = db.Column(db.Date, nullable=False)
+    dias = db.Column(db.Integer, nullable=False)
+    renovacao = db.Column(db.Boolean, nullable=False, default=False)
+
+    origem = db.Column(db.String(20), nullable=False)
+    usuario_id = db.Column(db.Integer, db.ForeignKey('usuario.id'), nullable=True)
+    usuario = db.relationship('Usuario')
+    asaas_id = db.Column(db.String(60), nullable=True)
+    observacao = db.Column(db.String(200), nullable=True)
+
+    @property
+    def rotulo_origem(self):
+        return ORIGENS.get(self.origem, self.origem)
 
 
 class Usuario(db.Model):

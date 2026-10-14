@@ -39,6 +39,9 @@ from models import (
     CARGOS,
     DIAS_POR_PAGAMENTO,
     MINUTOS_DE_BLOQUEIO,
+    ORIGEM_ASAAS,
+    ORIGEM_MANUAL,
+    ORIGENS,
     PAPEL_ADMIN,
     PAPEL_CONTADOR,
     PAPEL_USUARIO,
@@ -49,6 +52,7 @@ from models import (
     Empresa,
     Fornecedor,
     LancamentoRecorrente,
+    Liberacao,
     NotaEletronica,
     NotaServico,
     Pagamento,
@@ -1695,6 +1699,8 @@ ROTULOS_AUDITORIA = {
     'senha_redefinida': 'Redefiniu uma senha',
     'login_destravado': 'Destravou um login',
     'pagamento_confirmado': 'Pagamento confirmado',
+    'acesso_liberado': 'Acesso liberado pelo admin',
+    'acesso_encerrado': 'Acesso encerrado pelo admin',
 }
 
 
@@ -3806,10 +3812,23 @@ def admin_painel():
 @app.route('/admin/clientes')
 @auth.exigir_papel(PAPEL_ADMIN)
 def admin_empresas():
+    hoje = date.today()
     return render_template(
         'admin_empresas.html',
         empresas=Empresa.query.order_by(Empresa.nome).all(),
+        hoje=hoje,
+        dias_periodo=DIAS_POR_PAGAMENTO,
+        vencimento_apos_liberar=_vencimento_apos_liberar,
     )
+
+
+def _vencimento_apos_liberar(empresa, referencia=None):
+    """Até quando ficaria liberado se clicassem agora — para o admin ver no
+    aviso de confirmação, antes de clicar, a mesma conta que `liberar` faz."""
+    referencia = referencia or date.today()
+    if empresa.assinatura_ate is not None and empresa.assinatura_ate >= referencia:
+        return empresa.assinatura_ate + timedelta(days=DIAS_POR_PAGAMENTO)
+    return referencia + timedelta(days=DIAS_POR_PAGAMENTO)
 
 
 @app.route('/admin/clientes/novo', methods=['POST'])
@@ -3853,21 +3872,40 @@ def admin_empresa_nova():
 @app.route('/admin/clientes/<int:id>/assinatura', methods=['POST'])
 @auth.exigir_papel(PAPEL_ADMIN)
 def admin_empresa_assinatura(id):
+    """Liberar ou encerrar o acesso de uma empresa na mão.
+
+    Liberar segue a mesma regra do pagamento pelo Asaas (`Empresa.liberar`):
+    a data é registrada e, a cada acesso, confrontada com a de hoje. Vencido,
+    o próximo clique abre um período novo a partir de hoje; ainda em dia,
+    soma ao fim do período atual.
+    """
     empresa = Empresa.query.get_or_404(id)
     acao = request.form.get('acao', '')
 
     if acao == 'liberar':
-        dias = request.form.get('dias', '30')
-        empresa.creditar_dias(int(dias) if dias.isdigit() else 30)
-        flash(f'Assinatura de "{empresa.nome}" liberada até {empresa.assinatura_ate.strftime("%d/%m/%Y")}.', 'sucesso')
+        liberacao = empresa.liberar(ORIGEM_MANUAL, usuario_id=auth.usuario_logado().id)
+        db.session.commit()
+        if liberacao.renovacao:
+            flash(f'"{empresa.nome}" ainda estava em dia: o acesso foi estendido até '
+                  f'{empresa.assinatura_ate:%d/%m/%Y}, sem perder os dias que restavam.',
+                  'sucesso')
+        else:
+            flash(f'"{empresa.nome}" liberado hoje ({liberacao.inicio:%d/%m/%Y}) até '
+                  f'{empresa.assinatura_ate:%d/%m/%Y}.', 'sucesso')
+        registrar_acao('acesso_liberado',
+                       f'{empresa.nome} até {empresa.assinatura_ate:%d/%m/%Y}',
+                       empresa_id=empresa.id)
+
     elif acao == 'encerrar':
         empresa.assinatura_ate = None
-        flash(f'Assinatura de "{empresa.nome}" encerrada: o acesso já está bloqueado.', 'sucesso')
+        db.session.commit()
+        registrar_acao('acesso_encerrado', empresa.nome, empresa_id=empresa.id)
+        flash(f'Assinatura de "{empresa.nome}" encerrada: o acesso já está bloqueado. '
+              f'O próximo "Liberar" começa um período novo a partir do dia do clique.',
+              'sucesso')
     else:
         flash('Ação inválida.', 'erro')
-        return redirect(url_for('admin_empresas'))
 
-    db.session.commit()
     return redirect(url_for('admin_empresas'))
 
 
@@ -4091,6 +4129,7 @@ def admin_assinaturas():
         'admin_assinaturas.html',
         **_resumo_assinaturas(),
         pagamentos=Pagamento.query.order_by(Pagamento.registrado_em.desc()).limit(50).all(),
+        liberacoes=Liberacao.query.order_by(Liberacao.liberado_em.desc()).limit(50).all(),
         asaas=asaas.configuracao(),
         ultima_verificacao=fiscal_sync.sistema_get('asaas_ultima_verificacao') or '',
         ultimo_resultado=fiscal_sync.sistema_get('asaas_ultimo_resultado') or '',
@@ -4138,6 +4177,7 @@ def admin_asaas_verificar():
             data_path('.chave_secreta'),
             desde=datetime.now().date() - timedelta(days=90),
             url_base=os.environ.get('ERP_ASAAS_URL'),
+            ao_liberar=avisar_liberacao,
         )
     except asaas.ErroAsaas as exc:
         fiscal_sync.sistema_set('asaas_ultimo_resultado', f'Erro: {exc}')
@@ -4181,6 +4221,7 @@ def verificar_pagamentos_em_segundo_plano():
                         data_path('.chave_secreta'),
                         desde=datetime.now().date() - timedelta(days=90),
                         url_base=os.environ.get('ERP_ASAAS_URL'),
+                        ao_liberar=avisar_liberacao,
                     )
                     fiscal_sync.sistema_set('asaas_ultimo_resultado', resumo)
                 except Exception as exc:
@@ -4246,6 +4287,14 @@ def avisar(destinatario, assunto_e_corpo):
     if not ok and erro and 'não configurado' not in erro:
         app.logger.warning('Aviso não enviado para %s: %s', destinatario, erro)
     return ok
+
+
+def avisar_liberacao(empresa):
+    """E-mail de pagamento confirmado para quem administra a empresa."""
+    for pessoa in empresa.usuarios:
+        if pessoa.papel == PAPEL_USUARIO and pessoa.ativo and pessoa.cargo == CARGO_SOCIO:
+            avisar(pessoa.email, avisos.pagamento_confirmado(empresa, pessoa,
+                                                             _endereco_do_sistema()))
 
 
 def avisar_assinaturas_vencendo():

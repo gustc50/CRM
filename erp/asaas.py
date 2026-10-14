@@ -15,10 +15,12 @@ então reencontrá-la numa consulta seguinte não soma 30 dias de novo.
 from __future__ import annotations
 
 import datetime as dt
+import re
 
 import requests
 
-from models import DIAS_POR_PAGAMENTO, Empresa, Pagamento, db
+from models import (DIAS_POR_PAGAMENTO, ORIGEM_ASAAS, ORIGEM_MANUAL, PAPEL_USUARIO,
+                    Empresa, Pagamento, Usuario, db)
 
 URLS = {
     'producao': 'https://api.asaas.com/v3',
@@ -247,14 +249,25 @@ def verificar_empresa(empresa, caminho_chave, url_base=None):
     """Confere as cobranças de UMA empresa, para o "já paguei" não esperar.
 
     A verificação automática roda de 6 em 6 horas; quem acabou de pagar não
-    tem por que esperar tudo isso para o acesso voltar.
+    tem por que esperar tudo isso para o acesso voltar. Se a empresa ainda
+    não tem o id do Asaas, procura lá o cliente pelo CPF/CNPJ cadastrado.
     """
-    if not empresa.asaas_cliente_id:
+    clientes = [empresa.asaas_cliente_id] if empresa.asaas_cliente_id else []
+    if not clientes:
+        documento = _so_digitos(empresa.cnpj)
+        if len(documento) in (11, 14):
+            resposta = _chamar('GET', '/customers', caminho_chave, url_base=url_base,
+                               params={'cpfCnpj': documento})
+            clientes = [c['id'] for c in resposta.get('data', []) if c.get('id')]
+
+    cobrancas = []
+    for cliente_id in clientes:
+        cobrancas.extend(listar_cobrancas_pagas(caminho_chave, url_base=url_base,
+                                                cliente=cliente_id))
+    if not cobrancas:
         return 0
-    cobrancas = listar_cobrancas_pagas(caminho_chave, url_base=url_base,
-                                       cliente=empresa.asaas_cliente_id)
-    creditados, _, _ = aplicar_pagamentos(cobrancas)
-    return creditados
+    r = aplicar_pagamentos(cobrancas, caminho_chave=caminho_chave, url_base=url_base)
+    return r['creditados'] + r['absorvidos']
 
 
 def _data(valor):
@@ -264,35 +277,146 @@ def _data(valor):
         return None
 
 
-def aplicar_pagamentos(cobrancas):
-    """Credita os dias de quem pagou. Retorna (creditados, ignorados, sem_dono).
+def _so_digitos(valor):
+    return re.sub(r'\D', '', valor or '')
 
-    Uma cobrança só entra se der para saber de qual empresa ela é — o vínculo
-    é o `asaas_cliente_id` gravado na empresa. Cobrança de cliente que não está
-    cadastrado aqui é contada como "sem dono" e aparece para o administrador
-    resolver, em vez de ser descartada em silêncio.
+
+def documento_do_cliente(cliente_id, caminho_chave, url_base=None, cache=None):
+    """CPF/CNPJ do cliente no Asaas (só dígitos), com cache por rodada.
+
+    A cobrança paga traz só o id do cliente; o documento vem do cadastro dele.
+    O cache evita perguntar de novo pelo mesmo cliente quando ele pagou várias
+    cobranças na mesma consulta.
     """
-    creditados = ignorados = sem_dono = 0
+    if cache is not None and cliente_id in cache:
+        return cache[cliente_id]
+    try:
+        dados = _chamar('GET', f'/customers/{cliente_id}', caminho_chave, url_base=url_base)
+        documento = _so_digitos(dados.get('cpfCnpj'))
+    except ErroAsaas:
+        documento = ''
+    if cache is not None:
+        cache[cliente_id] = documento
+    return documento
 
-    for cobranca in cobrancas:
-        asaas_id = cobranca.get('id')
-        if not asaas_id:
-            continue
-        if cobranca.get('status') not in SITUACOES_PAGAS:
-            continue
 
+def empresas_pelo_documento(documento):
+    """Empresas cujo CPF/CNPJ cadastrado é este — pela empresa ou pelo usuário.
+
+    Olha os dois lugares porque o cadastro pode ter o CNPJ na empresa e o
+    pagamento ter saído no CPF do sócio, ou o contrário.
+    """
+    if len(documento) not in (11, 14):
+        return []
+    achadas = {}
+    for empresa in Empresa.query.filter(Empresa.cnpj.isnot(None)).all():
+        if _so_digitos(empresa.cnpj) == documento:
+            achadas[empresa.id] = empresa
+    for usuario in Usuario.query.filter(Usuario.cpf_cnpj.isnot(None),
+                                        Usuario.papel == PAPEL_USUARIO).all():
+        if _so_digitos(usuario.cpf_cnpj) == documento and usuario.empresa is not None:
+            achadas[usuario.empresa.id] = usuario.empresa
+    return list(achadas.values())
+
+
+def _identificar_empresa(cliente_id, caminho_chave, url_base, cache):
+    """De quem é a cobrança. Retorna (empresa, como, detalhe).
+
+    `como` é 'vinculo' (id do Asaas gravado na empresa), 'documento' (casou
+    pelo CPF/CNPJ), 'ambiguo' (o documento bate com mais de uma empresa — não
+    libera ninguém, para não liberar a errada) ou 'sem_dono'.
+    """
+    empresa = Empresa.query.filter_by(asaas_cliente_id=cliente_id).first() if cliente_id else None
+    if empresa is not None:
+        return empresa, 'vinculo', None
+
+    if not cliente_id or caminho_chave is None:
+        return None, 'sem_dono', None
+
+    documento = documento_do_cliente(cliente_id, caminho_chave, url_base, cache)
+    candidatas = empresas_pelo_documento(documento)
+    if len(candidatas) == 1:
+        empresa = candidatas[0]
+        if not empresa.asaas_cliente_id:
+            # Grava o vínculo: das próximas vezes nem precisa consultar o documento
+            empresa.asaas_cliente_id = cliente_id
+        return empresa, 'documento', documento
+    if len(candidatas) > 1:
+        return None, 'ambiguo', documento
+    return None, 'sem_dono', documento
+
+
+def _liberacao_manual_que_cobre(empresa, pago_em):
+    """Liberação manual feita logo depois deste pagamento, ainda sem cobrança.
+
+    É o caso de o admin ver o pagamento no Asaas e clicar em Liberar antes de
+    a consulta automática passar. Sem esta checagem, o mesmo pagamento
+    renderia duas vezes: o clique e a consulta.
+    """
+    if pago_em is None:
+        return None
+    limite = pago_em + dt.timedelta(days=DIAS_POR_PAGAMENTO)
+    candidatas = [
+        l for l in empresa.liberacoes
+        if l.origem == ORIGEM_MANUAL and not l.asaas_id
+        and pago_em <= l.liberado_em.date() <= limite
+    ]
+    return min(candidatas, key=lambda l: l.liberado_em) if candidatas else None
+
+
+def aplicar_pagamentos(cobrancas, caminho_chave=None, url_base=None):
+    """Libera quem pagou, pela mesma regra do clique do admin.
+
+    Retorna um dicionário com o que aconteceu, para o resumo:
+    creditados, por_documento, absorvidos, ignorados, ambiguos e sem_dono.
+
+    - A cobrança é casada primeiro pelo id do cliente no Asaas e, se não
+      houver vínculo, pelo **CPF/CNPJ** dele — e o vínculo fica gravado.
+    - Documento que bate com mais de uma empresa não libera ninguém.
+    - Cada cobrança rende uma vez só (`Pagamento.asaas_id` é único).
+    - As cobranças são aplicadas em ordem de data de pagamento, para o
+      resultado não depender da ordem em que o Asaas as devolve.
+    """
+    resultado = {'creditados': 0, 'por_documento': 0, 'absorvidos': 0,
+                 'ignorados': 0, 'ambiguos': 0, 'sem_dono': 0, 'liberadas': []}
+    cache_documentos = {}
+
+    pagas = [c for c in cobrancas if c.get('id') and c.get('status') in SITUACOES_PAGAS]
+    pagas.sort(key=lambda c: (_data(c.get('paymentDate') or c.get('confirmedDate'))
+                              or dt.date.max, c.get('id')))
+
+    for cobranca in pagas:
+        asaas_id = cobranca['id']
         if Pagamento.query.filter_by(asaas_id=asaas_id).first():
-            ignorados += 1  # já creditado numa verificação anterior
+            resultado['ignorados'] += 1  # já creditado numa verificação anterior
             continue
 
-        cliente = cobranca.get('customer')
-        empresa = Empresa.query.filter_by(asaas_cliente_id=cliente).first() if cliente else None
+        empresa, como, documento = _identificar_empresa(
+            cobranca.get('customer'), caminho_chave, url_base, cache_documentos)
         if empresa is None:
-            sem_dono += 1
+            resultado['ambiguos' if como == 'ambiguo' else 'sem_dono'] += 1
             continue
 
         pago_em = _data(cobranca.get('paymentDate') or cobranca.get('confirmedDate'))
-        empresa.creditar_dias(DIAS_POR_PAGAMENTO, a_partir_de=pago_em)
+
+        manual = _liberacao_manual_que_cobre(empresa, pago_em)
+        if manual is not None:
+            # O admin já liberou por este pagamento: só amarra um ao outro.
+            manual.asaas_id = asaas_id
+            manual.observacao = (f'pagamento de {pago_em:%d/%m/%Y} já liberado na mão; '
+                                 f'não somou dias de novo')
+            resultado['absorvidos'] += 1
+        else:
+            if como == 'documento':
+                observacao = f'casado pelo CPF/CNPJ {documento}'
+                resultado['por_documento'] += 1
+            else:
+                observacao = None
+            empresa.liberar(ORIGEM_ASAAS, data_referencia=pago_em,
+                            asaas_id=asaas_id, observacao=observacao)
+            resultado['creditados'] += 1
+            if empresa not in resultado['liberadas']:
+                resultado['liberadas'].append(empresa)
 
         db.session.add(Pagamento(
             empresa_id=empresa.id,
@@ -302,22 +426,39 @@ def aplicar_pagamentos(cobrancas):
             situacao=cobranca.get('status'),
             liberado_ate=empresa.assinatura_ate,
         ))
-        creditados += 1
+        db.session.flush()  # o próximo pagamento da mesma empresa já enxerga este
 
-    if creditados:
-        db.session.commit()
-    return creditados, ignorados, sem_dono
+    db.session.commit()
+    return resultado
 
 
-def verificar(caminho_chave, desde=None, url_base=None):
-    """Consulta o Asaas e credita os pagamentos novos. Retorna o resumo em texto."""
+def verificar(caminho_chave, desde=None, url_base=None, ao_liberar=None):
+    """Consulta o Asaas e credita os pagamentos novos. Retorna o resumo em texto.
+
+    `ao_liberar(empresa)` é chamado para cada empresa que ganhou acesso — é
+    por ali que o app manda o e-mail de pagamento confirmado. Falha no aviso
+    não desfaz a liberação.
+    """
     cobrancas = listar_cobrancas_pagas(caminho_chave, desde=desde, url_base=url_base)
-    creditados, ignorados, sem_dono = aplicar_pagamentos(cobrancas)
+    r = aplicar_pagamentos(cobrancas, caminho_chave=caminho_chave, url_base=url_base)
+
+    if ao_liberar is not None:
+        for empresa in r['liberadas']:
+            try:
+                ao_liberar(empresa)
+            except Exception:
+                pass
 
     partes = [f'{len(cobrancas)} cobrança(s) paga(s) encontrada(s)']
-    partes.append(f'{creditados} creditada(s)')
-    if ignorados:
-        partes.append(f'{ignorados} já creditada(s) antes')
-    if sem_dono:
-        partes.append(f'{sem_dono} sem empresa vinculada (confira o ID do cliente Asaas no cadastro)')
+    partes.append(f"{r['creditados']} liberada(s)")
+    if r['por_documento']:
+        partes.append(f"{r['por_documento']} delas reconhecida(s) pelo CPF/CNPJ")
+    if r['absorvidos']:
+        partes.append(f"{r['absorvidos']} já tinha(m) sido liberada(s) na mão")
+    if r['ignorados']:
+        partes.append(f"{r['ignorados']} já creditada(s) antes")
+    if r['ambiguos']:
+        partes.append(f"{r['ambiguos']} com CPF/CNPJ de mais de uma empresa (não liberadas)")
+    if r['sem_dono']:
+        partes.append(f"{r['sem_dono']} sem empresa com esse CPF/CNPJ")
     return ', '.join(partes) + '.'

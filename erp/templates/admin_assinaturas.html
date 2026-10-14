@@ -69,6 +69,39 @@
     <a href="{{ url_for('admin_configuracoes') }}">⚙ Configurações</a>.
 </p>
 
+<h3 class="titulo-secao">Histórico de liberações</h3>
+<p class="nota-grafico">
+    Cada liberação, manual ou pelo Asaas, com a data em que aconteceu e o
+    período que abriu. "Renovação" é quando o cliente ainda estava em dia: o
+    período novo começa onde o anterior termina.
+</p>
+<div class="table-scroll">
+<table>
+    <thead>
+        <tr><th>Quando</th><th>Cliente</th><th>Origem</th><th>Período liberado</th><th>Detalhe</th></tr>
+    </thead>
+    <tbody>
+        {% for l in liberacoes %}
+        <tr>
+            <td>{{ l.liberado_em.strftime('%d/%m/%Y %H:%M') }}</td>
+            <td>{{ l.empresa.nome if l.empresa else '—' }}</td>
+            <td>
+                {{ l.rotulo_origem }}
+                {% if l.usuario %}<br><small>{{ l.usuario.nome }}</small>{% endif %}
+            </td>
+            <td>
+                {{ l.inicio.strftime('%d/%m/%Y') }} → {{ l.valido_ate.strftime('%d/%m/%Y') }}
+                {% if l.renovacao %}<br><small>renovação</small>{% endif %}
+            </td>
+            <td><small>{{ l.observacao or (l.asaas_id or '—') }}</small></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5">Nenhuma liberação registrada ainda.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
 <h3 class="titulo-secao">Pagamentos registrados</h3>
 <div class="table-scroll">
 <table>

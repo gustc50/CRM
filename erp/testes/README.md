@@ -19,6 +19,7 @@ O que cada um cobre:
 | Arquivo | Cobre |
 |---|---|
 | `test_relatorios.py` | DRE e Vendas: números conferidos na mão, os dois regimes, exportação, isolamento entre empresas e acesso do contador |
+| `test_liberacao.py` | Liberação manual (vencido, em dia, encerrado), bloqueio pelo prazo, Asaas casando CNPJ e CPF, documento ambíguo, pagamento repetido, liberação manual que já cobria o pagamento, ordem dos pagamentos e o "já paguei" sem vínculo |
 
 > Estes testes viviam fora do repositório e se perderam quando o ambiente de
 > desenvolvimento foi recriado. Ficam aqui para sobreviver a isso.

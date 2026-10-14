@@ -299,11 +299,17 @@ th, td {
     box-shadow: none;
     margin: 0;
 }
-.acoes {
-    display: flex;
-    gap: 6px;
-    flex-wrap: wrap;
-    align-items: center;
+/* Coluna de ações das tabelas. Era `display: flex` direto no <td>, o que
+   tirava a célula do layout da tabela: ela não esticava até a altura da
+   linha, ficava sem o fundo das linhas destacadas (atrasadas, vencidas) e a
+   borda saía desalinhada. Os botões é que ficam lado a lado, não a célula. */
+td.acoes { vertical-align: middle; }
+td.acoes > .form-inline,
+td.acoes > .btn-acao,
+td.acoes > a {
+    display: inline-block;
+    vertical-align: middle;
+    margin: 2px 4px 2px 0;
 }
 .btn-acao {
     text-decoration: none;
@@ -1057,3 +1063,5 @@ th.num, td.num { text-align: right; white-space: nowrap; }
 }
 .rotulo-mes { font-size: 12px; color: #52514e; }
 .valor-mes { font-size: 11px; color: #8a8a86; white-space: nowrap; }
+
+.sem-quebra { white-space: nowrap; }

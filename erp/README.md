@@ -1045,6 +1045,81 @@ O `test_relatorios.py` confere os números na mão (receitas de 18.000, despesas
 de 10.000, resultado de 8.000, margem de 44,4%), os dois regimes, o ranking de
 clientes, as exportações, o isolamento entre empresas e o acesso do contador.
 
+## Décima sétima rodada: data de liberação e Asaas pelo CPF/CNPJ
+
+### Uma regra só, para o clique e para o pagamento
+
+Toda liberação — o clique do admin ou o pagamento confirmado no Asaas — passa
+por `Empresa.liberar`, que **registra a data de liberação** e abre 30 dias de
+acesso. A cada entrada no sistema essa data é confrontada com a de hoje:
+
+| Situação na hora de liberar | O que acontece |
+|---|---|
+| Vencido ou nunca liberado | **Nova data inicial**: hoje (clique) ou a data do pagamento (Asaas). Vale 30 dias a partir dela. |
+| Ainda em dia | Soma 30 dias **ao fim do período atual** — quem renova antes de vencer não perde os dias que tinha. |
+
+Passou do prazo, o acesso é bloqueado sozinho; o próximo clique (ou
+pagamento) começa um período novo.
+
+Cada liberação fica num histórico (`Liberacao`) com o momento em que
+aconteceu, de quando a contagem começou, até quando vale, a origem (admin,
+Asaas ou cortesia), quem clicou e, quando houver, a cobrança do Asaas.
+
+### Tela Clientes
+
+- Coluna **Situação**: liberado até tal dia e quantos dias faltam, ou
+  bloqueado desde tal dia e há quantos dias.
+- Coluna **Última liberação**: quando, por qual origem e por quem.
+- O botão é **Liberar** para quem está bloqueado e **Renovar** para quem
+  ainda está em dia, e a confirmação mostra a data resultante antes do
+  clique ("Liberar a partir de hoje (14/10) até 13/11?").
+- O campo de quantidade de dias saiu: liberar é sempre um período de 30 dias,
+  como o pagamento. Dias de cortesia continuam na criação do cliente.
+
+A tela **Assinaturas** ganhou o **Histórico de liberações**, antes da lista
+de pagamentos.
+
+### Asaas reconhece o pagamento pelo CPF/CNPJ
+
+Antes, uma cobrança paga só liberava se a empresa tivesse o ID do cliente do
+Asaas digitado à mão. Agora, sem esse vínculo, o sistema consulta o cadastro do
+cliente no Asaas, pega o **CPF/CNPJ** e procura uma empresa com esse
+documento — no CNPJ da empresa ou no CPF/CNPJ de algum usuário dela (o
+pagamento pode sair no CPF do sócio). Achou **uma**, libera e grava o vínculo
+para as próximas vezes.
+
+Cuidados:
+
+- **Documento que bate com mais de uma empresa não libera nenhuma.** O
+  pagamento fica pendente e o resumo avisa, para o admin corrigir o cadastro.
+- **Liberação manual que já cobria o pagamento.** Se o admin viu o pagamento
+  no Asaas e clicou em Liberar antes de a consulta passar, a consulta não soma
+  outros 30 dias: amarra o pagamento à liberação manual e conta como "já
+  liberado na mão". Sem isso, o mesmo pagamento renderia duas vezes.
+- **Ordem dos pagamentos.** Vários pagamentos da mesma empresa são aplicados
+  em ordem de data. Sem isso, o resultado dependia da ordem em que o Asaas os
+  devolve — e podia dar um mês a mais.
+- O botão **"Já paguei"** também procura o cliente pelo CPF/CNPJ quando a
+  empresa ainda não tem vínculo.
+- Liberou pelo Asaas, os sócios recebem o **e-mail de pagamento confirmado**
+  (antes isso só acontecia pelo "já paguei").
+
+### Correção de layout em todas as tabelas
+
+A coluna **Ação** das tabelas usava `display: flex` direto na célula, o que a
+tirava do layout da tabela: não esticava até a altura da linha, ficava sem o
+fundo das linhas destacadas (atrasadas, bloqueadas) e a borda saía
+desalinhada. Afetava as 13 telas com essa coluna. Agora os botões é que ficam
+lado a lado, e a célula volta a ser célula.
+
+### Como foi testado
+
+`testes/test_liberacao.py`, com um Asaas de mentira que responde cobranças e
+cadastro de clientes: 48 conferências. Para provar que os testes pegam o que
+dizem pegar, desliguei de propósito a ordenação dos pagamentos, a absorção da
+liberação manual e o casamento pelo documento — cada um fez o teste falhar no
+ponto esperado (sem a ordenação, o cliente ganhava um mês a mais).
+
 ## Limitações conhecidas (fora do escopo desta revisão)
 
 - Banco de dados SQLite, com um worker só. Aguenta bem dezenas de empresas;
@@ -1052,9 +1127,14 @@ clientes, as exportações, o isolamento entre empresas e o acesso do contador.
   workers.
 - Não há recuperação de senha por e-mail com link: quem redefine é o admin,
   pela lista de usuários.
-- As demais suítes de teste (papéis, isolamento, pagamento, autocadastro,
-  equipe e SMTP) ainda não foram recriadas depois da perda do ambiente; só
-  `test_relatorios.py` está versionado até agora.
+- As suítes de papéis, isolamento, autocadastro, equipe e SMTP ainda não
+  foram recriadas depois da perda do ambiente. Estão versionadas
+  `test_relatorios.py` e `test_liberacao.py` (esta cobre o que a antiga de
+  pagamento cobria, e mais).
+- Liberação manual feita **antes** do pagamento (adiantando o acesso) não é
+  reconhecida como "a mesma" do pagamento que vem depois: o pagamento soma
+  seus 30 dias normalmente. A absorção só vale para liberações feitas no dia
+  do pagamento ou depois dele.
 - O histórico da equipe guarda tudo, sem limpeza automática; num uso muito
   intenso convém apagar os registros antigos de tempos em tempos.
 - A rotina diária roda no mesmo processo do servidor. Com o worker único que

@@ -19,51 +19,92 @@
     <button type="submit">Criar cliente</button>
 </form>
 
+<h3 class="titulo-secao">Situação dos clientes</h3>
+<p class="aviso-cadastro">
+    <strong>Liberar</strong> registra a data de hoje e abre {{ dias_periodo }} dias
+    de acesso. A cada entrada no sistema essa data é confrontada com a de hoje:
+    passou do prazo, o acesso é bloqueado sozinho, e o próximo clique começa um
+    período novo. Se o cliente ainda estiver em dia, o clique soma ao fim do
+    período atual — ninguém perde dias. O pagamento confirmado no Asaas segue
+    exatamente a mesma regra.
+</p>
+
 <div class="table-scroll">
 <table>
     <thead>
         <tr>
-            <th>Cliente</th><th>CNPJ</th><th>Assinatura</th>
-            <th>ID no Asaas</th><th>Ação</th>
+            <th>Cliente</th><th>CPF/CNPJ</th><th>Situação</th>
+            <th>Última liberação</th><th>ID no Asaas</th><th>Ação</th>
         </tr>
     </thead>
     <tbody>
         {% for e in empresas %}
+        {% set ultima = e.ultima_liberacao %}
         <tr class="{{ '' if e.assinatura_em_dia else 'atrasado' }}">
             <td>
                 {{ e.nome }}<br>
                 <small>{{ e.usuarios|map(attribute='email')|join(', ') or 'sem usuário' }}</small>
             </td>
-            <td>{{ formatar_cnpj_cpf(e.cnpj) if e.cnpj else '—' }}</td>
+            <td class="sem-quebra">{{ formatar_cnpj_cpf(e.cnpj) if e.cnpj else '—' }}</td>
             <td>
                 {% if e.assinatura_em_dia %}
-                <span class="badge-baixado">até {{ e.assinatura_ate.strftime('%d/%m/%Y') }}</span>
+                <span class="badge-baixado">Liberado</span><br>
+                <small class="sem-quebra">até {{ e.assinatura_ate.strftime('%d/%m/%Y') }}</small><br>
+                <small>faltam {{ e.dias_restantes }} dia(s)</small>
+                {% elif e.assinatura_ate %}
+                <span class="badge-cancelada">Bloqueado</span><br>
+                <small class="sem-quebra">venceu em {{ e.assinatura_ate.strftime('%d/%m/%Y') }}</small><br>
+                <small>há {{ e.dias_vencido }} dia(s)</small>
                 {% else %}
-                <span class="badge-cancelada">bloqueado</span>
+                <span class="badge-cancelada">Bloqueado</span><br>
+                <small>nunca liberado</small>
+                {% endif %}
+            </td>
+            <td>
+                {% if ultima %}
+                {{ ultima.liberado_em.strftime('%d/%m/%Y %H:%M') }}<br>
+                <small>
+                    {{ ultima.rotulo_origem }}{% if ultima.usuario %} · {{ ultima.usuario.nome }}{% endif %}
+                    {% if ultima.renovacao %} · renovação{% endif %}
+                </small>
+                {% else %}
+                <small>—</small>
                 {% endif %}
             </td>
             <td>
                 <form action="{{ url_for('admin_empresa_asaas', id=e.id) }}" method="POST" class="form-inline">
                     <input type="text" name="asaas_cliente_id" value="{{ e.asaas_cliente_id or '' }}"
-                           placeholder="cus_000..." maxlength="60" size="14">
+                           placeholder="automático pelo CPF/CNPJ" maxlength="60" size="14">
                     <button type="submit" class="btn-acao btn-editar">Salvar</button>
                 </form>
             </td>
             <td class="acoes">
-                <form action="{{ url_for('admin_empresa_assinatura', id=e.id) }}" method="POST" class="form-inline">
-                    <input type="hidden" name="acao" value="liberar">
-                    <input type="number" name="dias" value="30" min="1" max="365" size="3">
-                    <button type="submit" class="btn-acao btn-concluir">Liberar dias</button>
-                </form>
+                {% set novo_fim = vencimento_apos_liberar(e) %}
+                {% if e.assinatura_em_dia %}
+                {% set aviso = 'Renovar ' ~ e.nome ~ '? Ainda está em dia: o acesso passa de ' ~
+                               e.assinatura_ate.strftime('%d/%m/%Y') ~ ' para ' ~ novo_fim.strftime('%d/%m/%Y') ~ '.' %}
+                {% else %}
+                {% set aviso = 'Liberar ' ~ e.nome ~ ' a partir de hoje (' ~ hoje.strftime('%d/%m/%Y') ~
+                               ') até ' ~ novo_fim.strftime('%d/%m/%Y') ~ '?' %}
+                {% endif %}
                 <form action="{{ url_for('admin_empresa_assinatura', id=e.id) }}" method="POST" class="form-inline"
-                      onsubmit="return confirm('Encerrar a assinatura de {{ e.nome }}? O acesso é bloqueado na hora.');">
+                      onsubmit="return confirm({{ aviso|tojson|forceescape }});">
+                    <input type="hidden" name="acao" value="liberar">
+                    <button type="submit" class="btn-acao btn-concluir">
+                        {{ 'Renovar' if e.assinatura_em_dia else 'Liberar' }}
+                    </button>
+                </form>
+                {% if e.assinatura_em_dia %}
+                <form action="{{ url_for('admin_empresa_assinatura', id=e.id) }}" method="POST" class="form-inline"
+                      onsubmit="return confirm({{ ('Encerrar o acesso de ' ~ e.nome ~ '? O bloqueio é imediato.')|tojson|forceescape }});">
                     <input type="hidden" name="acao" value="encerrar">
                     <button type="submit" class="btn-acao btn-excluir">Encerrar</button>
                 </form>
+                {% endif %}
             </td>
         </tr>
         {% else %}
-        <tr><td colspan="5">Nenhum cliente cadastrado ainda.</td></tr>
+        <tr><td colspan="6">Nenhum cliente cadastrado ainda.</td></tr>
         {% endfor %}
     </tbody>
 </table>
