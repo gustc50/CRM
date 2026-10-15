@@ -139,7 +139,7 @@ checar(len(linhas) == 3 and linhas[1][1] == 'Maria Silva' and linhas[1][3] == 89
 
 # =============================================================== #
 print('\n--- contador ---')
-c.post('/contabilidade/contador', data={'email_contador': 'contador@teste.com.br'},
+c.post('/configuracoes/contador', data={'email_contador': 'contador@teste.com.br'},
        follow_redirects=True)
 k = appmod.app.test_client()
 k.post('/login', data={'email': 'contador@teste.com.br', 'senha': 'contador-teste-123'},

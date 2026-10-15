@@ -309,8 +309,20 @@ with appmod.app.app_context():
 print('--- 0) antes de o admin ativar ---')
 corpo = c.get('/marketplace').get_data(as_text=True)
 checar(corpo.count('Não ativado') == 3, 'os três aparecem como "não ativado"')
+checar(corpo.count('href="/marketplace/mercadolivre/conectar"') == 2,
+       'o nome do marketplace e o botão levam à conexão, mesmo antes de ativar')
+checar('Clique para conectar sua loja' in corpo, 'e o cabeçalho diz que é clicável')
+checar('Pedir a ativação ao suporte' not in corpo, 'sem WhatsApp do suporte cadastrado, não há botão de pedir')
 r = c.get('/marketplace/mercadolivre/conectar', follow_redirects=True)
-checar('ainda não foi ativada' in r.get_data(as_text=True), 'e Conectar avisa em vez de quebrar')
+checar('ainda não foi ativada' in r.get_data(as_text=True) and 'Marketplaces' in r.get_data(as_text=True),
+       'e Conectar explica o que falta, em vez de quebrar')
+with appmod.app.app_context():
+    appmod.fiscal_sync.sistema_set('suporte_whatsapp', '11999998888')
+corpo = c.get('/marketplace').get_data(as_text=True)
+checar(corpo.count('Pedir a ativação ao suporte') == 3 and 'wa.me/5511999998888' in corpo,
+       'com o WhatsApp cadastrado, cada cartão oferece pedir a ativação')
+checar('conectar%20minha%20loja%20do%20Mercado%20Livre' in corpo,
+       'e a mensagem já diz qual loja a pessoa quer conectar')
 
 adm.post('/admin/marketplaces', data={
     'ml_client_id': ML['client_id'], 'ml_secret': ML['secret'],
@@ -531,6 +543,11 @@ checar(nao_pago[7] is None and nao_pago[8] is None,
 checar(linhas[-1][8] == round(170 + (90 - 13.5), 2),
        f'total líquido só dos pagos: {linhas[-1][8]}')
 
+corpo = c.get('/marketplace').get_data(as_text=True)
+checar('href="/marketplace/shopee/conectar"' not in corpo and 'Pedir a ativação' not in corpo,
+       'loja conectada não mostra mais o Conectar')
+checar(corpo.count('mkt-conectado') == 3, 'os três cartões aparecem como conectados')
+
 corpo = c2.get(f'/marketplace?inicio={INICIO}&fim={HOJE}').get_data(as_text=True)
 checar('Ana Lima' not in corpo and 'SH001' not in corpo, 'outra empresa não vê esses pedidos')
 
@@ -540,7 +557,7 @@ with appmod.app.app_context():
 
 # ================================================================ #
 print('\n--- 11) contador: vê e baixa, mas não mexe nas conexões ---')
-c.post('/contabilidade/contador', data={'email_contador': 'contador@teste.com.br'},
+c.post('/configuracoes/contador', data={'email_contador': 'contador@teste.com.br'},
        follow_redirects=True)
 k = appmod.app.test_client()
 k.post('/login', data={'email': 'contador@teste.com.br', 'senha': 'contador-teste-123'},
@@ -548,6 +565,8 @@ k.post('/login', data={'email': 'contador@teste.com.br', 'senha': 'contador-test
 k.get(f'/contador/abrir/{eid}', follow_redirects=True)
 corpo = k.get(f'/marketplace?inicio={INICIO}&fim={HOJE}').get_data(as_text=True)
 checar('SH001' in corpo, 'o contador vê os pedidos do cliente')
+checar('/conectar"' not in corpo and 'Desconectar' not in corpo and 'Sincronizar' not in corpo,
+       'e não vê Conectar, Sincronizar nem Desconectar')
 r = k.post('/marketplace/relatorio', data={'ids': ids})
 checar(r.status_code == 200 and 'spreadsheetml' in r.mimetype, 'e gera o XLSX')
 

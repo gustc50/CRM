@@ -163,8 +163,8 @@ def primeiros_passos(empresa_id):
          'texto': 'Com ele o sistema busca sozinho as NFS-e e NF-e da sua empresa.',
          'url': url_for('configuracoes')},
         {'feito': tem_contador, 'titulo': 'Informe o e-mail do seu contador (opcional)',
-         'texto': 'Ele passa a ver seus dados sem você precisar mandar arquivo.',
-         'url': url_for('contabilidade')},
+         'texto': 'O sistema cria o acesso dele e manda por e-mail; ele passa a ver seus dados sem você mandar arquivo.',
+         'url': url_for('configuracoes') + '#contador'},
     ]
     return [] if all(p['feito'] for p in passos) else passos
 
@@ -1851,6 +1851,8 @@ def equipe():
 
 ROTULOS_AUDITORIA = {
     'login': 'Entrou no sistema',
+    'contador_liberado': 'Liberou o acesso do contador',
+    'contador_removido': 'Tirou o acesso do contador',
     'lancamento_excluido': 'Excluiu um lançamento',
     'baixa_dada': 'Deu baixa',
     'baixa_desfeita': 'Reabriu um lançamento',
@@ -1988,8 +1990,10 @@ def sem_acesso():
                            link_suporte=link_do_suporte(usuario))
 
 
-def link_do_suporte(usuario=None):
+def link_do_suporte(usuario=None, assunto=None):
     """Conversa no WhatsApp com o suporte, já com a pessoa identificada.
+
+    `assunto` troca o pedido padrão ("ajuda com o acesso") por um específico.
 
     Devolve None quando o administrador ainda não cadastrou o número — é
     melhor não mostrar o botão do que mandar a pessoa para um número errado.
@@ -2005,9 +2009,9 @@ def link_do_suporte(usuario=None):
     if usuario is not None:
         empresa = usuario.empresa.nome if usuario.empresa else 'sem empresa'
         texto = (f'Olá! Sou {usuario.nome} ({usuario.email}), da {empresa}. '
-                 f'Preciso de ajuda com o acesso ao sistema.')
+                 + (assunto or 'Preciso de ajuda com o acesso ao sistema.'))
     else:
-        texto = 'Olá! Preciso de ajuda com o sistema.'
+        texto = 'Olá! ' + (assunto or 'Preciso de ajuda com o sistema.')
 
     return f'https://wa.me/{numero}?text={quote(texto)}'
 
@@ -3101,17 +3105,23 @@ def marketplace():
                .order_by(PedidoMarketplace.data, PedidoMarketplace.id).all())
     pagos = [p for p in pedidos if p.situacao == PEDIDO_PAGO]
 
-    lojas = []
+    lojas, suporte = [], {}
     for chave, conector in marketplaces.CONECTORES.items():
         lojas.append({'chave': chave, 'nome': conector.nome,
                       'disponivel': conector.configurado(),
                       'conexao': _conexao(chave)})
+        if not conector.configurado():
+            # Marketplace ainda não ativado: em vez de um beco sem saída, o
+            # cliente pede a ativação ao suporte com um clique.
+            suporte[chave] = link_do_suporte(
+                auth.usuario_logado(), assunto=f'Quero conectar minha loja do {conector.nome} ao sistema.')
 
     tem_nfe_emitida = da_empresa(NotaEletronica).filter_by(papel='emitida').first() is not None
     return render_template(
         'marketplace.html',
         lojas=lojas, pedidos=pedidos, inicio=inicio, fim=fim,
         modos=MODOS_LANCAMENTO, rotulo_modo={m[0]: m[1] for m in MODOS_LANCAMENTO},
+        suporte={k: v for k, v in suporte.items() if v},
         total_bruto=sum(p.valor_bruto for p in pagos),
         total_taxas=sum(p.taxas for p in pagos),
         total_liquido=sum(p.valor_liquido for p in pagos),
@@ -3129,7 +3139,9 @@ def marketplace_conectar(chave):
         return bloqueio
     conector = marketplaces.CONECTORES[chave]
     if not conector.configurado():
-        flash(f'A integração com {conector.nome} ainda não foi ativada pelo administrador.', 'erro')
+        flash(f'A conexão com o {conector.nome} ainda não foi ativada no sistema: o administrador '
+              f'precisa cadastrar o aplicativo do {conector.nome} em Configurações do sistema › '
+              f'Marketplaces. Peça a ativação ao suporte; depois disso, é só clicar de novo.', 'erro')
         return redirect(url_for('marketplace'))
 
     # O "state" amarra a volta do marketplace a esta sessão: sem ele, alguém
@@ -3523,7 +3535,7 @@ def contabilidade():
         anexos=[{'nome': nome, 'kb': round(len(conteudo) / 1024)} for nome, conteudo in anexos],
         tamanho_mb=round(tamanho_mb, 2),
         limite_mb=envio_email.LIMITE_ANEXOS_MB,
-        smtp_ok=_smtp_configurado(),
+        smtp_ok=avisos.configurado(),
         empresa=_identificacao_empresa(),
         email_contador=email_contador,
         contador_com_acesso=_contador_com_acesso(email_contador),
@@ -3583,36 +3595,80 @@ def contabilidade_baixar():
     )
 
 
-@app.route('/contabilidade/contador', methods=['POST'])
-def contabilidade_contador():
-    """Grava o e-mail do contador — é o que libera o acesso dele aos dados.
+@app.route('/configuracoes/contador', methods=['POST'])
+def configuracoes_contador():
+    """O cliente informa só o e-mail do contador; o resto é com o sistema.
 
-    Fica separado do envio porque o cliente pode querer só dar o acesso, sem
-    mandar nenhum arquivo: com a conta ligada, o contador busca sozinho.
+    - e-mail novo: cria a conta de contador, com senha provisória, e manda
+      para ele o acesso junto com os dados do cliente;
+    - e-mail de um contador que já usa o sistema: só liga a empresa a ele e
+      avisa;
+    - e-mail de outro tipo de conta (cliente, admin): recusa — essa pessoa não
+      pode virar contador de ninguém;
+    - em branco: tira o acesso.
+
+    O e-mail sai pela conta do sistema (Configurações do administrador). Se ela
+    não estiver configurada ou falhar, a conta é criada mesmo assim e a senha
+    provisória aparece para o cliente repassar.
     """
+    destino = url_for('configuracoes') + '#contador'
     email = request.form.get('email_contador', '').strip().lower()
-    if email and not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email):
-        flash('Informe um e-mail válido para o contador.', 'erro')
-        return redirect(url_for('contabilidade'))
+    if request.form.get('acao') == 'remover':
+        email = ''
+    anterior = (fiscal_sync.config_get('email_contador') or '').strip().lower()
 
-    fiscal_sync.config_set('email_contador', email)
+    if email and (not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email) or len(email) > 150):
+        flash('Informe um e-mail válido para o contador.', 'erro')
+        guardar_formulario('contador')
+        return redirect(destino)
 
     if not email:
+        fiscal_sync.config_set('email_contador', '')
+        if anterior:
+            registrar_acao('contador_removido', anterior)
         flash('Contador removido: ninguém mais tem acesso aos seus dados.', 'sucesso')
-    elif _contador_com_acesso(email):
-        flash(
-            f'Contador {email} salvo. Ele já pode entrar e ver seus dados '
-            '(somente leitura), sem você precisar enviar nada.',
-            'sucesso',
-        )
+        return redirect(destino)
+
+    existente = Usuario.query.filter_by(email=email).first()
+    if existente is not None and existente.papel != PAPEL_CONTADOR:
+        flash(f'O e-mail {email} já é usado por uma conta que não é de contador '
+              '(um cliente ou alguém da equipe). Use o e-mail profissional do contador.', 'erro')
+        guardar_formulario('contador')
+        return redirect(destino)
+
+    if email == anterior and existente is not None:
+        flash(f'{email} já está com acesso aos seus dados.', 'sucesso')
+        return redirect(destino)
+
+    senha = None
+    if existente is None:
+        senha = auth.gerar_senha_provisoria()
+        existente = auth.criar_usuario(email, senha, email.split('@')[0], papel=PAPEL_CONTADOR)
+    fiscal_sync.config_set('email_contador', email)
+    db.session.commit()
+    registrar_acao('contador_liberado', f'{email}{" (conta criada)" if senha else ""}')
+
+    empresa = auth.empresa_atual()
+    assunto, corpo = avisos.acesso_contador(empresa, auth.usuario_logado(), email,
+                                            senha_provisoria=senha, endereco=_endereco_do_sistema())
+    ok, erro = avisos.enviar(email, assunto, corpo, data_path('.chave_secreta'),
+                             responder_para=auth.usuario_logado().email)
+
+    if ok:
+        if senha:
+            flash(f'Pronto: criamos a conta do contador e mandamos para {email} o acesso '
+                  'e os dados da sua empresa. Ele já pode entrar (somente leitura).', 'sucesso')
+        else:
+            flash(f'Pronto: {email} já usava o sistema e agora vê os seus dados também. '
+                  'Mandamos um aviso para ele.', 'sucesso')
+    elif senha:
+        flash(f'A conta do contador foi criada, mas o e-mail não saiu ({erro}). Passe para '
+              f'ele: entrar com {email} e a senha provisória {senha} — e trocar a senha '
+              'em Minha conta no primeiro acesso.', 'erro')
     else:
-        flash(
-            f'Contador {email} salvo. Ainda não existe conta de contador com esse '
-            'e-mail — assim que ela for criada, o acesso é liberado sozinho. '
-            'Enquanto isso, dá para enviar os documentos por e-mail aqui embaixo.',
-            'sucesso',
-        )
-    return redirect(url_for('contabilidade'))
+        flash(f'{email} já usava o sistema e agora vê os seus dados. O aviso por e-mail '
+              f'não saiu ({erro}), mas o acesso já está liberado.', 'sucesso')
+    return redirect(destino)
 
 
 @app.route('/contabilidade/enviar', methods=['POST'])
@@ -3625,14 +3681,15 @@ def contabilidade_enviar():
     if inicio > fim:
         inicio, fim = fim, inicio
 
-    destinatario = request.form.get('email_contador', '').strip()
-    if not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', destinatario):
-        flash('Informe um e-mail válido para o contador.', 'erro')
-        return redirect(url_for('contabilidade', inicio=inicio.isoformat(), fim=fim.isoformat()))
+    destinatario = (fiscal_sync.config_get('email_contador') or '').strip()
+    if not destinatario:
+        flash('Informe primeiro o e-mail do seu contador em Configurações.', 'erro')
+        return redirect(url_for('configuracoes') + '#contador')
 
-    if not _smtp_configurado():
-        flash('Configure o envio de e-mail na aba Configurações antes de enviar.', 'erro')
-        return redirect(url_for('configuracoes'))
+    if not avisos.configurado():
+        flash('O envio por e-mail ainda não está disponível (falta o administrador configurar '
+              'o e-mail do sistema). Use "Baixar tudo (.zip)" e mande o arquivo ao contador.', 'erro')
+        return redirect(url_for('contabilidade', inicio=inicio.isoformat(), fim=fim.isoformat()))
 
     anexos, total_lancamentos, total_notas = _anexos_contabilidade(inicio, fim)
     tamanho_mb = sum(len(conteudo) for _, conteudo in anexos) / (1024 * 1024)
@@ -3650,7 +3707,7 @@ def contabilidade_enviar():
     observacao = request.form.get('mensagem', '').strip()
 
     corpo = (
-        f'Seu cliente {empresa} enviou uma mensagem.\n\n'
+        f'Seu cliente {empresa} enviou os documentos do período.\n\n'
         f'Seguem os documentos do período de {periodo_texto}:\n\n'
         f'- {total_lancamentos} lançamento(s), em planilha (.xlsx) e em texto (.txt)\n'
         f'- {total_notas} nota(s) fiscal(is) em XML, no arquivo .zip separadas por tipo\n'
@@ -3659,18 +3716,23 @@ def contabilidade_enviar():
         corpo += f'\nObservação do cliente:\n{observacao}\n'
     corpo += '\n—\nEnviado automaticamente pelo sistema de Gestão Financeira.\n'
 
-    try:
-        _enviar_email(
-            destinatario,
-            f'Documentos contábeis {periodo_texto} — {empresa}',
-            corpo,
-            anexos,
-        )
-    except envio_email.ErroEnvio as exc:
-        flash(str(exc), 'erro')
+    # Sai pela conta do sistema, com o nome da empresa no "De" e a resposta
+    # do contador indo direto para quem enviou.
+    ok, erro = avisos.enviar(
+        destinatario,
+        f'Documentos contábeis {periodo_texto} — {empresa}',
+        corpo,
+        data_path('.chave_secreta'),
+        anexos=anexos,
+        responder_para=auth.usuario_logado().email,
+        # Sem parênteses: ao quebrar a linha do cabeçalho, eles ganhavam um espaço
+        # a mais ("Gestão Financeira )") no programa de e-mail do contador.
+        remetente_nome=f'{auth.empresa_atual().nome} via {avisos.NOME_DO_SERVICO}',
+    )
+    if not ok:
+        flash(f'O e-mail não saiu: {erro}', 'erro')
         return redirect(url_for('contabilidade', inicio=inicio.isoformat(), fim=fim.isoformat()))
 
-    fiscal_sync.config_set('email_contador', destinatario)
     fiscal_sync.config_set('contabilidade_ultimo_envio', f'{datetime.now():%d/%m/%Y %H:%M} para {destinatario} ({periodo_texto})')
     flash(
         f'Enviado para {destinatario}: {total_lancamentos} lançamento(s) e {total_notas} nota(s) fiscal(is).',
@@ -4261,115 +4323,11 @@ def configuracoes():
         nfe_ultimo_nsu=fiscal_sync.config_get('nfe_ultimo_nsu', '000000000000000'),
         ufs=sorted(fiscal_certificado.UF_PARA_CODIGO.keys()),
         ambientes_nfse=fiscal_nfse.AMBIENTES_NFSE,
-        smtp=_config_smtp(),
-        provedores_smtp=envio_email.PROVEDORES_SMTP,
-        segurancas_smtp=envio_email.SEGURANCAS,
+        email_contador=fiscal_sync.config_get('email_contador'),
+        contador_com_acesso=_contador_com_acesso(fiscal_sync.config_get('email_contador')),
+        f_contador=form_anterior('contador'),
+        email_do_sistema_ok=avisos.configurado(),
     )
-
-
-def _config_smtp():
-    """Configuração de e-mail atual (a senha nunca sai daqui em claro)."""
-    return {
-        'provedor': fiscal_sync.config_get('smtp_provedor', 'gmail'),
-        'servidor': fiscal_sync.config_get('smtp_servidor'),
-        'porta': fiscal_sync.config_get('smtp_porta', '587'),
-        'seguranca': fiscal_sync.config_get('smtp_seguranca', 'tls'),
-        'usuario': fiscal_sync.config_get('smtp_usuario'),
-        'remetente': fiscal_sync.config_get('smtp_remetente'),
-        'remetente_nome': fiscal_sync.config_get('smtp_remetente_nome'),
-        'senha_salva': bool(fiscal_sync.config_get('smtp_senha_cripto')),
-    }
-
-
-def _smtp_configurado():
-    return bool(fiscal_sync.config_get('smtp_servidor') and fiscal_sync.config_get('smtp_remetente'))
-
-
-def _enviar_email(destinatario, assunto, corpo, anexos=()):
-    """Envia usando o SMTP configurado, decifrando a senha guardada."""
-    senha_cripto = fiscal_sync.config_get('smtp_senha_cripto')
-    senha = fiscal_certificado.descriptografar_senha(senha_cripto, data_path('.chave_secreta')) if senha_cripto else ''
-    return envio_email.enviar(
-        servidor=fiscal_sync.config_get('smtp_servidor'),
-        porta=fiscal_sync.config_get('smtp_porta', '587'),
-        seguranca=fiscal_sync.config_get('smtp_seguranca', 'tls'),
-        usuario=fiscal_sync.config_get('smtp_usuario'),
-        senha=senha,
-        remetente=fiscal_sync.config_get('smtp_remetente'),
-        remetente_nome=fiscal_sync.config_get('smtp_remetente_nome'),
-        destinatario=destinatario,
-        assunto=assunto,
-        corpo=corpo,
-        anexos=anexos,
-    )
-
-
-@app.route('/configuracoes/email', methods=['POST'])
-def configuracoes_email():
-    provedor = request.form.get('smtp_provedor', 'outro')
-    if provedor not in envio_email.PROVEDORES_SMTP:
-        provedor = 'outro'
-    preset = envio_email.PROVEDORES_SMTP[provedor]
-
-    # Escolhendo um provedor da lista, servidor/porta/segurança vêm prontos;
-    # em "Outro servidor" é o usuário quem informa.
-    if provedor == 'outro':
-        servidor = request.form.get('smtp_servidor', '').strip()
-        porta = request.form.get('smtp_porta', '587').strip()
-        seguranca = request.form.get('smtp_seguranca', 'tls')
-    else:
-        servidor, porta, seguranca = preset['servidor'], str(preset['porta']), preset['seguranca']
-
-    if seguranca not in dict(envio_email.SEGURANCAS):
-        seguranca = 'tls'
-    if not porta.isdigit():
-        flash('Porta do servidor inválida.', 'erro')
-        return redirect(url_for('configuracoes'))
-
-    remetente = request.form.get('smtp_remetente', '').strip()
-    if remetente and not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', remetente):
-        flash('E-mail remetente inválido.', 'erro')
-        return redirect(url_for('configuracoes'))
-
-    fiscal_sync.config_set('smtp_provedor', provedor)
-    fiscal_sync.config_set('smtp_servidor', servidor)
-    fiscal_sync.config_set('smtp_porta', porta)
-    fiscal_sync.config_set('smtp_seguranca', seguranca)
-    fiscal_sync.config_set('smtp_usuario', request.form.get('smtp_usuario', '').strip())
-    fiscal_sync.config_set('smtp_remetente', remetente)
-    fiscal_sync.config_set('smtp_remetente_nome', request.form.get('smtp_remetente_nome', '').strip())
-
-    senha = request.form.get('smtp_senha', '')
-    if senha:
-        fiscal_sync.config_set(
-            'smtp_senha_cripto',
-            fiscal_certificado.criptografar_senha(senha, data_path('.chave_secreta')),
-        )
-
-    flash('Configurações de e-mail salvas.', 'sucesso')
-    return redirect(url_for('configuracoes'))
-
-
-@app.route('/configuracoes/email/testar', methods=['POST'])
-def configuracoes_email_testar():
-    destino = request.form.get('destino', '').strip() or fiscal_sync.config_get('smtp_remetente')
-    if not destino:
-        flash('Informe um e-mail para receber o teste.', 'erro')
-        return redirect(url_for('configuracoes'))
-
-    try:
-        _enviar_email(
-            destino,
-            'Teste de envio — Gestão Financeira',
-            'Se você recebeu esta mensagem, o envio de e-mail do sistema está funcionando.\n\n'
-            'Pode responder ignorando: é só um teste de configuração.',
-        )
-    except envio_email.ErroEnvio as exc:
-        flash(str(exc), 'erro')
-        return redirect(url_for('configuracoes'))
-
-    flash(f'E-mail de teste enviado para {destino}. Confira a caixa de entrada (e o spam).', 'sucesso')
-    return redirect(url_for('configuracoes'))
 
 
 @app.route('/admin/backup', methods=['POST'])

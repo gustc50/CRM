@@ -192,7 +192,7 @@ checar('Mercado Central' not in corpo, 'nem o relatório de vendas')
 # 7) Contador enxerga os relatórios (é leitura)
 # --------------------------------------------------------------- #
 print('\n--- contador ---')
-c.post('/contabilidade/contador', data={'email_contador': 'contador@teste.com.br'},
+c.post('/configuracoes/contador', data={'email_contador': 'contador@teste.com.br'},
        follow_redirects=True)
 t = appmod.app.test_client()
 t.post('/login', data={'email': 'contador@teste.com.br', 'senha': 'contador-teste-123'},

@@ -235,7 +235,7 @@ checar(all(g in corpo for g in ('Financeiro', 'Vendas', 'Análise', 'Ajustes')),
 checar('class="menu-subitem' in corpo and 'Recorrentes' in corpo, 'Recorrentes virou sub-aba de Lançamentos')
 checar('id="botao-menu"' in corpo, 'e tem o botão de abrir o menu no celular')
 
-c.post('/contabilidade/contador', data={'email_contador': 'contador@teste.com.br'})
+c.post('/configuracoes/contador', data={'email_contador': 'contador@teste.com.br'})
 k = entrar('contador@teste.com.br', 'contador-teste-123')
 k.get(f'/contador/abrir/{eid}')
 corpo = texto(k.get('/lancamentos'))

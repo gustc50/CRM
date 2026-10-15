@@ -5,9 +5,11 @@
 // escrito dentro de um `onsubmit="return confirm('...')"`: um nome com
 // apóstrofo ("Conta d'água") quebrava o script, a pergunta não aparecia e a
 // exclusão acontecia direto — mesmo para quem clicaria em Cancelar.
+// Vale para o formulário inteiro ou só para um dos botões dele.
 document.addEventListener('submit', function (evento) {
     var form = evento.target;
-    var pergunta = form.getAttribute('data-confirmar');
+    var botao = evento.submitter;
+    var pergunta = (botao && botao.getAttribute('data-confirmar')) || form.getAttribute('data-confirmar');
     if (pergunta && !window.confirm(pergunta)) {
         evento.preventDefault();
     }

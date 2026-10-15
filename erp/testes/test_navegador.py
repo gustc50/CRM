@@ -26,7 +26,7 @@ except ImportError:
 from werkzeug.serving import WSGIRequestHandler, make_server  # noqa: E402
 
 import app as appmod  # noqa: E402
-from models import Fornecedor, Transacao, db  # noqa: E402
+from models import Fornecedor, Transacao, Usuario, db  # noqa: E402
 
 falhas = []
 
@@ -132,6 +132,26 @@ with sync_playwright() as p:
     with appmod.app.app_context():
         checar(Transacao.query.filter_by(descricao="Conta d'água").count() == 0, 'OK exclui')
     checar(not erros_js, f'nenhum erro de script nas telas {erros_js[:1]}')
+
+    print('\n--- marketplace: clicar no nome conecta ---')
+    pg.goto(B + '/marketplace')
+    pg.click('a.cabecalho-link:has-text("Mercado Livre")')
+    pg.wait_for_load_state()
+    checar('/marketplace' in pg.url and 'ainda não foi ativada' in flashes(pg),
+           'clicar no nome do marketplace tenta conectar (e, sem ativação, explica o que falta)')
+
+    print('\n--- contador: tirar o acesso pergunta antes ---')
+    pg.goto(B + '/configuracoes')
+    respostas.clear()
+    responder['cancelar'] = True
+    pg.click('button:has-text("Tirar o acesso")')
+    pg.wait_for_timeout(300)
+    with appmod.app.app_context():
+        eid = Usuario.query.filter_by(email='cliente1@teste.com.br').first().empresa_id
+        ainda = appmod.fiscal_sync.config_get('email_contador', empresa_id=eid)
+    checar(len(respostas) == 1 and 'Tirar o acesso' in respostas[0] and ainda,
+           'a pergunta aparece e Cancelar mantém o contador')
+    responder['cancelar'] = False
 
     print('\n--- erro do servidor devolve o que foi digitado ---')
     pg.goto(B + '/login')

@@ -11,6 +11,7 @@ from __future__ import annotations
 import mimetypes
 import smtplib
 import ssl
+from email.headerregistry import Address
 from email.message import EmailMessage
 
 # Provedores com plano gratuito e o que cada um exige. O "aviso" aparece na
@@ -71,11 +72,20 @@ class ErroEnvio(Exception):
     pass
 
 
-def montar_mensagem(remetente, remetente_nome, destinatario, assunto, corpo, anexos=()):
-    """Monta a mensagem. `anexos` são tuplas (nome_do_arquivo, conteudo_bytes)."""
+def montar_mensagem(remetente, remetente_nome, destinatario, assunto, corpo, anexos=(),
+                    responder_para=None):
+    """Monta a mensagem. `anexos` são tuplas (nome_do_arquivo, conteudo_bytes).
+
+    `responder_para` vira o Reply-To: a mensagem sai da conta do sistema, mas
+    a resposta vai para quem de fato escreveu (o cliente, no envio ao contador).
+    """
     msg = EmailMessage()
-    msg['From'] = f'{remetente_nome} <{remetente}>' if remetente_nome else remetente
+    # Address cuida das aspas: montado à mão, um nome com parênteses ou
+    # vírgula vira comentário ou outro endereço e some do "De".
+    msg['From'] = Address(display_name=remetente_nome, addr_spec=remetente) if remetente_nome else remetente
     msg['To'] = destinatario
+    if responder_para:
+        msg['Reply-To'] = responder_para
     msg['Subject'] = assunto
     msg.set_content(corpo)
 
@@ -88,12 +98,13 @@ def montar_mensagem(remetente, remetente_nome, destinatario, assunto, corpo, ane
 
 
 def enviar(servidor, porta, seguranca, usuario, senha, remetente, remetente_nome,
-           destinatario, assunto, corpo, anexos=()):
+           destinatario, assunto, corpo, anexos=(), responder_para=None):
     """Envia a mensagem, traduzindo as falhas mais comuns para português."""
     if not servidor or not remetente:
-        raise ErroEnvio('Configure o servidor SMTP e o e-mail remetente na aba Configurações.')
+        raise ErroEnvio('O e-mail do sistema ainda não foi configurado pelo administrador.')
 
-    mensagem = montar_mensagem(remetente, remetente_nome, destinatario, assunto, corpo, anexos)
+    mensagem = montar_mensagem(remetente, remetente_nome, destinatario, assunto, corpo, anexos,
+                               responder_para)
 
     try:
         if seguranca == 'ssl':

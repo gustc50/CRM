@@ -87,77 +87,38 @@
     </form>
 </div>
 
-<h3 class="titulo-secao">E-mail (envio para o contador)</h3>
+<h3 class="titulo-secao" id="contador">Seu contador</h3>
 <p class="aviso-cadastro">
-    É por esta conta que o sistema manda os documentos para o seu contador.
-    Use o e-mail da própria empresa (Gmail, Outlook e outros servem): a
-    mensagem chega com o seu endereço como remetente, e o contador sabe de
-    quem veio.
-    <br><br>
-    <strong>Atenção:</strong> Gmail, Outlook e Zoho não aceitam a senha normal
-    da conta — é preciso gerar uma <strong>senha de aplicativo</strong>.
+    Informe só o e-mail do seu contador. O sistema cria o acesso dele (e-mail e
+    senha) e manda para ele, junto com os dados da sua empresa. A partir daí
+    ele vê seus lançamentos, notas e relatórios direto no sistema,
+    <strong>somente leitura</strong>, e os documentos que você mandar pela aba
+    Contabilidade chegam nesse mesmo e-mail.
 </p>
 
-<form action="{{ url_for('configuracoes_email') }}" method="POST" class="form-coluna form-config">
-    <label>
-        Provedor
-        <select name="smtp_provedor" id="smtp-provedor">
-            {% for chave, p in provedores_smtp.items() %}
-            <option value="{{ chave }}" {{ 'selected' if smtp.provedor == chave else '' }}
-                    data-aviso="{{ p.aviso }}">{{ p.nome }}{% if p.servidor %} — {{ p.servidor }}:{{ p.porta }}{% endif %}</option>
-            {% endfor %}
-        </select>
-    </label>
-    <p class="aviso-cadastro" id="smtp-aviso">{{ provedores_smtp[smtp.provedor].aviso }}</p>
+{% if contador_com_acesso %}
+<p class="aviso-cadastro">
+    ✅ <strong>{{ contador_com_acesso.email }}</strong> está com acesso de leitura aos seus dados.
+</p>
+{% endif %}
 
-    <div id="smtp-manual" class="{{ '' if smtp.provedor == 'outro' else 'campo-oculto' }}">
-        <label>
-            Servidor SMTP
-            <input type="text" name="smtp_servidor" value="{{ smtp.servidor }}" maxlength="120" placeholder="smtp.seuprovedor.com">
-        </label>
-        <label>
-            Porta
-            <input type="number" name="smtp_porta" value="{{ smtp.porta }}" min="1" max="65535">
-        </label>
-        <label>
-            Segurança
-            <select name="smtp_seguranca">
-                {% for valor, rotulo in segurancas_smtp %}
-                <option value="{{ valor }}" {{ 'selected' if smtp.seguranca == valor else '' }}>{{ rotulo }}</option>
-                {% endfor %}
-            </select>
-        </label>
-    </div>
-
+{% if not somente_leitura() %}
+<form action="{{ url_for('configuracoes_contador') }}" method="POST" class="form-coluna form-config"
+      id="form-contador">
     <label>
-        E-mail remetente (de onde a mensagem sai)
-        <input type="email" name="smtp_remetente" value="{{ smtp.remetente }}" maxlength="150" placeholder="financeiro@suaempresa.com.br">
+        E-mail do contador
+        <input type="email" name="email_contador" value="{{ f_contador.email_contador if f_contador else email_contador }}"
+               maxlength="150" placeholder="contador@escritorio.com.br" autocomplete="off">
     </label>
-    <label>
-        Nome que aparece no remetente (opcional)
-        <input type="text" name="smtp_remetente_nome" value="{{ smtp.remetente_nome }}" maxlength="120" placeholder="Minha Empresa Ltda">
-    </label>
-    <label>
-        Usuário do SMTP (normalmente o próprio e-mail)
-        <input type="text" name="smtp_usuario" value="{{ smtp.usuario }}" maxlength="150">
-    </label>
-    <label>
-        Senha {% if smtp.senha_salva %}<small>(já salva — preencha só para trocar)</small>{% endif %}
-        <input type="password" name="smtp_senha" autocomplete="new-password" placeholder="{{ '••••••••' if smtp.senha_salva else 'senha de aplicativo' }}">
-    </label>
-
     <div class="form-acoes">
-        <button type="submit">Salvar E-mail</button>
+        <button type="submit">{{ 'Salvar' if email_contador else 'Liberar acesso ao contador' }}</button>
+        {% if email_contador %}
+        <button type="submit" name="acao" value="remover" class="btn-secundario" formnovalidate
+                data-confirmar="Tirar o acesso de {{ email_contador }} aos seus dados?">Tirar o acesso</button>
+        {% endif %}
     </div>
 </form>
-
-<form action="{{ url_for('configuracoes_email_testar') }}" method="POST" class="form-inline-bloco">
-    <label>
-        Enviar teste para
-        <input type="email" name="destino" placeholder="{{ smtp.remetente or 'seu@email.com' }}">
-    </label>
-    <button type="submit">Enviar e-mail de teste</button>
-</form>
+{% endif %}
 
 <h3 class="titulo-secao">Cópia de segurança</h3>
 <p class="aviso-cadastro">

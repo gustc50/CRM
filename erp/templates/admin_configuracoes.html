@@ -23,11 +23,14 @@
 
 <h3 class="titulo-secao">E-mail do sistema (SMTP)</h3>
 <p class="aviso-cadastro">
-    É por esta conta que o sistema fala com os clientes: boas-vindas,
-    confirmação de pagamento, aviso de vencimento em {{ dias_aviso }} dias e
-    aviso de bloqueio. É <strong>separada</strong> do e-mail que cada cliente
-    configura para mandar documentos ao contador dele. Enquanto estiver vazia,
-    nenhum aviso sai — o resto do sistema funciona igual.
+    É por esta conta que <strong>todo</strong> e-mail do sistema sai:
+    boas-vindas, confirmação de pagamento, aviso de vencimento em
+    {{ dias_aviso }} dias, aviso de bloqueio, o acesso que o contador recebe
+    quando um cliente informa o e-mail dele e os documentos que os clientes
+    mandam ao contador (com o nome da empresa no remetente e a resposta indo
+    para o cliente). Os clientes não configuram e-mail nenhum. Enquanto esta
+    conta estiver vazia, nada disso sai — o resto do sistema funciona igual, e
+    a senha provisória do contador aparece na tela para o cliente repassar.
 </p>
 
 <p class="aviso-cadastro" id="aviso-provedor">{{ aviso_provedor }}</p>

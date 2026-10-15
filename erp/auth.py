@@ -304,5 +304,14 @@ def criar_usuario(email, senha, nome, papel=PAPEL_USUARIO, empresa=None, cargo=N
     return usuario
 
 
+# Sem letras que se confundem (l/1, O/0) — a senha provisória vai por e-mail
+# e muitas vezes é digitada olhando para outra tela.
+_ALFABETO_SENHA = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+
+
+def gerar_senha_provisoria(tamanho=10):
+    return ''.join(secrets.choice(_ALFABETO_SENHA) for _ in range(tamanho))
+
+
 def email_disponivel(email):
     return Usuario.query.filter_by(email=(email or '').strip().lower()).first() is None

@@ -3,12 +3,6 @@
 {% block content %}
 <h2>Enviar documentos ao contador</h2>
 
-{% if not smtp_ok %}
-<p class="aviso-cadastro">
-    Para enviar, configure primeiro o e-mail na aba
-    <a href="{{ url_for('configuracoes') }}">⚙ Configurações</a>.
-</p>
-{% endif %}
 
 <p class="aviso-cadastro">
     Escolha o período e o sistema monta o pacote: os lançamentos em planilha
@@ -18,27 +12,19 @@
 </p>
 
 <h3 class="titulo-secao">Seu contador</h3>
-<p class="aviso-cadastro">
-    Informando o e-mail do seu contador, ele passa a acessar seus dados direto
-    no sistema, <strong>somente leitura</strong> e sem você precisar gerar nem
-    enviar arquivo nenhum. Para tirar o acesso, é só apagar o e-mail e salvar.
-</p>
-
 {% if contador_com_acesso %}
 <p class="aviso-cadastro">
-    ✅ <strong>{{ contador_com_acesso.nome }}</strong> ({{ contador_com_acesso.email }})
-    está com acesso de leitura aos seus dados.
+    ✅ <strong>{{ contador_com_acesso.email }}</strong> está com acesso de leitura aos seus dados
+    e recebe os envios desta tela.
+    {% if not somente_leitura() %}<a href="{{ url_for('configuracoes') }}#contador">Trocar em Configurações</a>{% endif %}
+</p>
+{% elif not somente_leitura() %}
+<p class="aviso-cadastro">
+    Você ainda não informou o seu contador.
+    <a href="{{ url_for('configuracoes') }}#contador">Informe o e-mail dele em Configurações</a>:
+    o sistema cria o acesso e manda para ele.
 </p>
 {% endif %}
-
-<form action="{{ url_for('contabilidade_contador') }}" method="POST" class="form-inline-bloco">
-    <label>
-        E-mail do contador
-        <input type="email" name="email_contador" value="{{ email_contador }}" maxlength="150"
-               placeholder="contador@escritorio.com.br">
-    </label>
-    <button type="submit">Salvar contador</button>
-</form>
 
 <h3 class="titulo-secao">Enviar por e-mail</h3>
 <form action="{{ url_for('contabilidade') }}" method="GET" class="form-filtro">
@@ -103,16 +89,19 @@
 </p>
 {% else %}
 <h3 class="titulo-secao">Envio</h3>
+{% if not smtp_ok %}
+<p class="aviso-cadastro">
+    O envio por e-mail ainda não está disponível no sistema. Enquanto isso, use
+    <strong>Baixar tudo (.zip)</strong> acima e mande o arquivo ao seu contador.
+</p>
+{% endif %}
+{% if email_contador %}
 <form action="{{ url_for('contabilidade_enviar') }}" method="POST" class="form-coluna form-config"
-      data-confirmar="Enviar os documentos de {{ inicio.strftime('%d/%m/%Y') }} a {{ fim.strftime('%d/%m/%Y') }} por e-mail?">
+      data-confirmar="Enviar os documentos de {{ inicio.strftime('%d/%m/%Y') }} a {{ fim.strftime('%d/%m/%Y') }} para {{ email_contador }}?">
     <input type="hidden" name="inicio" value="{{ inicio.isoformat() }}">
     <input type="hidden" name="fim" value="{{ fim.isoformat() }}">
 
-    <label>
-        E-mail do contador
-        <input type="email" name="email_contador" value="{{ email_contador }}" maxlength="150" required
-               placeholder="contador@escritorio.com.br">
-    </label>
+    <p class="nota-grafico">Vai para <strong>{{ email_contador }}</strong>. Se ele responder, a resposta chega no seu e-mail.</p>
     <label>
         Observação (opcional, entra no corpo da mensagem)
         <textarea name="mensagem" rows="3" maxlength="600" placeholder="Ex: as notas da filial vão no próximo envio."></textarea>
@@ -122,5 +111,6 @@
         <button type="submit" {{ 'disabled' if not smtp_ok else '' }}>Enviar ao contador</button>
     </div>
 </form>
+{% endif %}
 {% endif %}
 {% endblock %}

@@ -37,10 +37,11 @@ A navegação fica em um menu lateral, com estas seções:
   "A Pagar", com o lançamento gerado sozinho e manifestação do destinatário
   nas compras.
 - **Contabilidade**: envia ao contador, por e-mail, os lançamentos e os XMLs
-  das notas de um período escolhido.
+  das notas de um período escolhido (pela conta de e-mail do sistema).
 - **Configurações**: certificado digital, ambientes, busca de notas antigas
-  e o e-mail que manda os documentos ao contador. (O backup do banco fica nas
-  Configurações do administrador.)
+  e o **e-mail do contador** — informado ele, o sistema cria o acesso do
+  contador e manda para ele. (O e-mail do sistema e o backup do banco ficam
+  nas Configurações do administrador.)
 
 ## Como colocar no ar (servidor hospedado)
 
@@ -1331,6 +1332,89 @@ corrigidos.
   fica no login, o menu no celular e nenhuma tela mais larga que o celular.
 - As quatro suítes anteriores continuam passando (200 conferências).
 
+## Vigésima rodada: conectar marketplace pelo nome e contador só com o e-mail
+
+### Marketplace: clicar no nome conecta
+
+Antes, enquanto o administrador não cadastrava o aplicativo do marketplace,
+o cartão mostrava só "Não ativado" — não havia nada para clicar. Agora:
+
+- O **cabeçalho do cartão** (a marca e o nome do marketplace) é o botão de
+  conectar, com o aviso "Clique para conectar sua loja". O botão
+  **Conectar** continua embaixo, para quem não percebe que o nome é
+  clicável.
+- Os dois aparecem **sempre**, mesmo antes de o administrador ativar. Nesse
+  caso o clique explica o que falta (o aplicativo em *Configurações do
+  sistema › Marketplaces*), e o cartão oferece **Pedir a ativação ao
+  suporte**, que abre o WhatsApp do suporte com a mensagem pronta ("Quero
+  conectar minha loja do Mercado Livre"). Sem WhatsApp cadastrado, esse
+  botão não aparece.
+- Loja conectada ganha uma faixa verde e deixa de mostrar o Conectar. O
+  contador vê os cartões sem Conectar, Sincronizar nem Desconectar.
+
+> Para a conexão funcionar de verdade, o administrador continua precisando
+> registrar o aplicativo em cada marketplace e colar as credenciais em
+> *Configurações do sistema › Marketplaces* (ver a décima oitava rodada). É
+> isso que tira o cartão do "Não ativado".
+
+### Contador: o cliente informa só o e-mail
+
+O e-mail deixou de ser configurado por cada cliente. Em **Configurações**,
+o cliente vê só o campo **E-mail do contador**, e o resto é com o sistema:
+
+| O e-mail informado é de… | O que acontece |
+|---|---|
+| ninguém ainda | O sistema **cria a conta de contador** com uma senha provisória e manda para ele o acesso junto com os **dados do cliente** (empresa, CNPJ, responsável e contato). |
+| um contador que já usa o sistema | Liga a empresa à conta dele e manda um aviso, **sem** senha nova. A empresa aparece em "Meus clientes". |
+| um cliente, alguém de uma equipe ou o admin | Recusa: essa conta não pode virar contador de ninguém. |
+| (em branco / botão **Tirar o acesso**) | O contador deixa de ver a empresa. |
+
+Trocar o e-mail tira o acesso do contador anterior. Liberar e tirar o acesso
+ficam no histórico da equipe.
+
+**Tudo sai pela conta do sistema** (a do administrador): o acesso do contador
+e também os documentos da aba **Contabilidade**. Nesses, o remetente aparece
+como "*Padaria Pão Quente Ltda via Gestão Financeira*" e a resposta do
+contador vai direto para o e-mail do cliente (Reply-To). O envio vai sempre
+para o contador cadastrado — não há mais campo para digitar outro endereço.
+
+Se o administrador ainda não configurou o e-mail do sistema (ou o envio
+falha), a conta do contador é criada mesmo assim e a **senha provisória
+aparece na tela** para o cliente repassar; a aba Contabilidade explica que o
+envio ainda não está disponível e sugere o **Baixar tudo (.zip)**.
+
+Saíram do cliente a configuração de SMTP, o "enviar e-mail de teste" e as
+rotas `/configuracoes/email`. As configurações antigas de SMTP de cada
+empresa ficam no banco, sem uso.
+
+### Correção que apareceu no teste
+
+O nome no remetente era montado à mão (`f'{nome} <{email}>'`). Com
+parênteses — "Padaria (via Gestão Financeira)" — o trecho entre parênteses
+era lido como comentário e **sumia do "De"**. Agora o cabeçalho é montado com
+`email.headerregistry.Address`, que põe as aspas certas, e o nome usa "via"
+sem parênteses (com eles, a quebra de linha do cabeçalho ainda deixava um
+espaço a mais no programa de e-mail).
+
+### Como foi testado
+
+- `testes/test_contador.py` — 39 conferências, com um **servidor SMTP de
+  mentira** em localhost recebendo as mensagens de verdade: conta criada como
+  contador, senha na tela quando o e-mail não sai, e-mail com login, senha e
+  dados do cliente quando sai, Reply-To, contador existente sem senha nova,
+  troca de contador tirando o acesso do anterior, e-mail de cliente e de
+  admin recusados, contador sem poder mexer, envio dos documentos só para o
+  contador cadastrado (um endereço enfiado no formulário é ignorado), com o
+  nome da empresa no remetente e a planilha anexada, e o histórico.
+- `test_marketplace.py` ganhou as conferências do nome clicável, do pedido de
+  ativação ao suporte e do contador sem botões (81 no total);
+  `test_navegador.py` clica no nome do marketplace e confere que "Tirar o
+  acesso" pergunta antes (18).
+- Para provar que os testes pegam defeitos, estraguei de propósito: aceitar
+  e-mail de cliente como contador, voltar a usar o e-mail digitado no envio,
+  tirar o Reply-To, tirar os dados do cliente do e-mail e tirar o link do
+  nome do marketplace — cada um fez o teste falhar no ponto certo.
+
 ## Limitações conhecidas (fora do escopo desta revisão)
 
 - Banco de dados SQLite, com um worker só. Aguenta bem dezenas de empresas;
@@ -1342,7 +1426,10 @@ corrigidos.
   foram recriadas depois da perda do ambiente. Estão versionadas
   `test_relatorios.py`, `test_liberacao.py` (esta cobre o que a antiga de
   pagamento cobria, e mais), `test_vendas.py`, `test_marketplace.py`,
-  `test_usabilidade.py` e `test_navegador.py`.
+  `test_usabilidade.py`, `test_navegador.py` e `test_contador.py`.
+- A senha provisória do contador vai por e-mail (ou aparece na tela, quando
+  o e-mail do sistema não está configurado). O sistema recomenda trocá-la em
+  Minha conta, mas não obriga a troca no primeiro acesso.
 - O campo de data usa o calendário do próprio navegador: em navegador em
   português aparece dd/mm/aaaa; num navegador em inglês, mm/dd/yyyy. O valor
   gravado é o mesmo nos dois casos.

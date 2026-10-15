@@ -11,24 +11,36 @@
 <p class="aviso-cadastro">
     Conecte suas lojas e o sistema traz os pedidos sozinho todo dia: cada venda
     paga vira lançamento, com a comissão do marketplace separada, e o comprador
-    vira cliente quando o CPF/CNPJ vem junto. Conectar abre a página do próprio
-    marketplace para você autorizar — sua senha de lá nunca passa por aqui.
+    vira cliente quando o CPF/CNPJ vem junto. Para conectar, clique no nome do
+    marketplace: abre a página dele para você autorizar — sua senha de lá
+    nunca passa por aqui.
 </p>
 
+{% set siglas = {'mercadolivre': 'ML', 'shopee': 'S', 'amazon': 'a'} %}
 <div class="cartoes-marketplace">
     {% for loja in lojas %}
     {% set c = loja.conexao %}
-    <section class="painel cartao-mkt">
+    <section class="painel cartao-mkt {{ 'mkt-conectado' if c else '' }}">
+        {% if c or somente_leitura() %}
         <div class="cabecalho-mkt">
+            <span class="marca-mkt marca-{{ loja.chave }}" aria-hidden="true">{{ siglas[loja.chave] }}</span>
             <h3>{{ loja.nome }}</h3>
-            {% if c %}
-            <span class="badge-baixado">Conectado</span>
-            {% elif loja.disponivel %}
-            <span class="badge-pendente">Desconectado</span>
-            {% else %}
-            <span class="badge-cancelada">Não ativado</span>
-            {% endif %}
+            {% if c %}<span class="badge-baixado">Conectado</span>
+            {% else %}<span class="badge-pendente">Desconectado</span>{% endif %}
         </div>
+        {% else %}
+        {# Desconectado: o cabeçalho inteiro (marca e nome) já é o "Conectar" #}
+        <a href="{{ url_for('marketplace_conectar', chave=loja.chave) }}" class="cabecalho-mkt cabecalho-link"
+           title="Conectar a sua loja do {{ loja.nome }}">
+            <span class="marca-mkt marca-{{ loja.chave }}" aria-hidden="true">{{ siglas[loja.chave] }}</span>
+            <span class="nome-mkt">
+                <h3>{{ loja.nome }}</h3>
+                <small>Clique para conectar sua loja</small>
+            </span>
+            {% if loja.disponivel %}<span class="badge-pendente">Desconectado</span>
+            {% else %}<span class="badge-cancelada">Não ativado</span>{% endif %}
+        </a>
+        {% endif %}
 
         {% if c %}
         <p class="nota-grafico">
@@ -41,6 +53,7 @@
             {% endif %}
         </p>
 
+        {% if not somente_leitura() %}
         <form action="{{ url_for('marketplace_modo', chave=loja.chave) }}" method="POST" class="form-coluna form-mkt">
             <label>
                 Como lançar as vendas
@@ -77,13 +90,32 @@
               data-confirmar="{{ ('Desconectar ' ~ loja.nome ~ '? Os pedidos e lançamentos já trazidos continuam.') }}">
             <button type="submit" class="btn-secundario">Desconectar</button>
         </form>
+        {% endif %}
 
-        {% elif loja.disponivel %}
-        <p class="nota-grafico">Autorize o acesso à sua loja para o sistema trazer os pedidos.</p>
+        {% elif somente_leitura() %}
+        <p class="nota-grafico">O cliente ainda não conectou esta loja.</p>
+
+        {% else %}
+        {% if loja.disponivel %}
+        <p class="nota-grafico">
+            Você vai para o site do {{ loja.nome }}, entra com a sua conta de
+            vendedor e autoriza. Na volta, o sistema já traz os pedidos.
+        </p>
+        {% else %}
+        <p class="nota-grafico">
+            A conexão com o {{ loja.nome }} ainda não foi liberada no sistema.
+            Assim que o administrador ativar, é só clicar aqui.
+        </p>
+        {% endif %}
         <a href="{{ url_for('marketplace_conectar', chave=loja.chave) }}" class="btn-acao btn-editar btn-grande">
             Conectar {{ loja.nome }}
         </a>
-        {% if loja.chave == 'amazon' %}
+        {% if not loja.disponivel and suporte.get(loja.chave) %}
+        <a href="{{ suporte[loja.chave] }}" class="btn-acao btn-whatsapp btn-grande" target="_blank" rel="noopener">
+            Pedir a ativação ao suporte
+        </a>
+        {% endif %}
+        {% if loja.chave == 'amazon' and loja.disponivel %}
         <details class="detalhe-mkt">
             <summary>Já tenho um refresh token (aplicativo privado)</summary>
             <form action="{{ url_for('marketplace_amazon_token') }}" method="POST" class="form-coluna form-mkt">
@@ -99,12 +131,6 @@
             </form>
         </details>
         {% endif %}
-
-        {% else %}
-        <p class="nota-grafico">
-            A integração com {{ loja.nome }} ainda não foi ativada pelo
-            administrador do sistema.
-        </p>
         {% endif %}
     </section>
     {% endfor %}

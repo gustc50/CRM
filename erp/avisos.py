@@ -1,9 +1,10 @@
-"""E-mails que o sistema manda por conta própria para os clientes.
+"""E-mails que o sistema manda.
 
-São diferentes dos e-mails da aba Contabilidade: aqueles saem da conta SMTP
-de *cada cliente* para o contador dele. Estes saem de uma conta do **sistema**,
-configurada pelo administrador, e falam com os clientes em nome do serviço:
-boas-vindas, pagamento confirmado, assinatura vencendo e assinatura vencida.
+Saem todos de uma conta só, a do **sistema**, configurada pelo administrador:
+boas-vindas, pagamento confirmado, assinatura vencendo e vencida, o acesso
+do contador e os documentos que o cliente manda ao contador. Antes cada
+cliente configurava o próprio SMTP para falar com o contador; agora ninguém
+além do admin mexe nisso.
 
 Nada aqui pode derrubar o que está acontecendo em volta: se o SMTP do sistema
 não estiver configurado, ou o envio falhar, a função devolve False e a vida
@@ -41,8 +42,11 @@ def configurado():
     return bool(sistema_get('sistema_smtp_servidor') and sistema_get('sistema_smtp_remetente'))
 
 
-def enviar(destinatario, assunto, corpo, caminho_chave):
-    """Manda um aviso. Devolve (ok, erro) — nunca levanta exceção."""
+def enviar(destinatario, assunto, corpo, caminho_chave, anexos=(), responder_para=None,
+           remetente_nome=None):
+    """Manda um e-mail pela conta do sistema. Devolve (ok, erro) — nunca
+    levanta exceção. `remetente_nome` troca o nome que aparece no "De"
+    (o endereço continua sendo o do sistema)."""
     from fiscal_certificado import descriptografar_senha
     from fiscal_sync import sistema_get
 
@@ -65,10 +69,12 @@ def enviar(destinatario, assunto, corpo, caminho_chave):
             usuario=sistema_get('sistema_smtp_usuario'),
             senha=senha,
             remetente=sistema_get('sistema_smtp_remetente'),
-            remetente_nome=sistema_get('sistema_smtp_nome', NOME_DO_SERVICO),
+            remetente_nome=remetente_nome or sistema_get('sistema_smtp_nome', NOME_DO_SERVICO),
             destinatario=destinatario,
             assunto=assunto,
             corpo=corpo,
+            anexos=anexos,
+            responder_para=responder_para,
         )
         return True, None
     except Exception as exc:
@@ -153,3 +159,46 @@ def dias_para_vencer(empresa, hoje=None):
     if empresa.assinatura_ate is None:
         return None
     return (empresa.assinatura_ate - (hoje or dt.date.today())).days
+
+
+def acesso_contador(empresa, cliente, email_contador, senha_provisoria=None, endereco=''):
+    """Avisa o contador de que um cliente liberou os dados para ele.
+
+    Com `senha_provisoria`, a conta dele acabou de ser criada e a mensagem
+    traz o login; sem ela, ele já tinha conta e só ganhou mais um cliente.
+    """
+    dados = [f'Empresa: {empresa.nome}']
+    if empresa.cnpj:
+        dados.append(f'CNPJ: {_cnpj(empresa.cnpj)}')
+    dados.append(f'Responsável: {cliente.nome} ({cliente.email})')
+    if getattr(cliente, 'telefone', None):
+        dados.append(f'Telefone: {cliente.telefone}')
+
+    corpo = (
+        'Olá!\n\n'
+        f'{cliente.nome}, da {empresa.nome}, informou este e-mail como o do contador '
+        f'da empresa no {NOME_DO_SERVICO}. Com isso você passa a ver os lançamentos, '
+        'as notas fiscais e os relatórios dela direto no sistema (somente leitura), '
+        'e pode baixar o pacote do mês na aba Contabilidade.\n\n'
+        + '\n'.join(dados) + '\n'
+    )
+    if senha_provisoria:
+        corpo += (
+            '\nCriamos uma conta de contador para você:\n\n'
+            f'  E-mail: {email_contador}\n'
+            f'  Senha provisória: {senha_provisoria}\n\n'
+            'No primeiro acesso, troque a senha em "Minha conta". Se outros clientes '
+            'seus usarem o sistema, eles aparecem todos nesta mesma conta.\n'
+        )
+        assunto = f'{empresa.nome} liberou os dados para você — seu acesso ao {NOME_DO_SERVICO}'
+    else:
+        corpo += '\nEntre com a sua conta de sempre: a empresa já aparece em "Meus clientes".\n'
+        assunto = f'{empresa.nome} liberou os dados para você no {NOME_DO_SERVICO}'
+    return assunto, corpo + _assinatura(endereco)
+
+
+def _cnpj(digitos):
+    d = ''.join(ch for ch in str(digitos) if ch.isdigit())
+    if len(d) == 14:
+        return f'{d[:2]}.{d[2:5]}.{d[5:8]}/{d[8:12]}-{d[12:]}'
+    return digitos
