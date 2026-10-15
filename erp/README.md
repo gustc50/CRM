@@ -1079,8 +1079,8 @@ Asaas ou cortesia), quem clicou e, quando houver, a cobrança do Asaas.
   clique ("Liberar a partir de hoje (14/10) até 13/11?").
 - O campo de quantidade de dias saiu: liberar é sempre um período de 30 dias,
   como o pagamento. Dias de cortesia continuam na criação do cliente.
-  *(Voltou na vigésima segunda rodada, numa janela com dias, motivo e a data
-  final antes de confirmar.)*
+  *(Voltou na vigésima segunda rodada, numa janela com os dias, observação e
+  a data final antes de confirmar.)*
 
 A tela **Assinaturas** ganhou o **Histórico de liberações**, antes da lista
 de pagamentos.
@@ -1551,49 +1551,66 @@ contador da empresa configura…".
 > variações, mas vale mandar um arquivo de verdade de cada sistema para
 > conferir antes de usar com clientes.
 
-## Vigésima segunda rodada: liberar escolhendo os dias (degustação)
+## Vigésima segunda rodada: liberar escolhendo os dias
 
 Na tela **Clientes** do administrador, **Liberar** (ou **Renovar**) abre uma
 janela em vez de liberar direto os 30 dias:
 
 - **Quantos dias** — 30 (o mesmo de um pagamento) vem preenchido, com atalhos
-  de 7, 15, 30 e 60, e aceita de 1 a 365;
-- **Motivo** — *Pagamento recebido* (o cliente pagou por fora do Asaas) ou
-  *Degustação (cortesia)*. Quem nunca pagou nem foi liberado na mão já vem
-  marcado como degustação;
-- **Observação** opcional (ex.: "degustação da feira de outubro");
+  de 3, 7, 15 e 30, e aceita de 1 a 365;
+- **Observação** opcional (ex.: "disse que pagou por Pix, aguardando
+  confirmação");
 - a **data final** aparece e muda na hora, conforme os dias: "Fica liberado de
-  hoje (15/10/2026) até 30/10/2026 (15 dias)" ou, para quem está em dia,
+  hoje (15/10/2026) até 20/10/2026 (5 dias)" ou, para quem está em dia,
   "o acesso passa de … para …".
 
-A regra continua a mesma de sempre (`Empresa.liberar`): vencido, a contagem
-começa hoje; em dia, os dias somam ao fim do período atual.
+É sempre **liberação do admin** (a decisão é dele). A regra continua a de
+sempre (`Empresa.liberar`): vencido, a contagem começa hoje; em dia, os dias
+somam ao fim do período atual. A coluna **Última liberação** mostra quantos
+dias foram e a observação.
 
-**Por que degustação é "cortesia" e não "liberado pelo admin":** a consulta
-ao Asaas entende uma liberação manual feita no dia do pagamento (ou depois)
-como a mesma coisa que o pagamento — é o que impede o mesmo pagamento de
-render duas vezes quando o admin libera antes de a consulta passar. Se a
-degustação entrasse como manual, um cliente que pagasse durante ela teria o
-pagamento "engolido" e ficaria só com os dias de graça. Como cortesia, o
-pagamento soma os 30 dias dele ao fim da degustação.
+> A primeira versão desta rodada tinha um motivo "degustação (cortesia)".
+> Saiu: liberar é decisão do admin, e "cortesia" continua sendo só os dias
+> dados na criação do cliente.
 
-A coluna **Última liberação** passou a mostrar quantos dias foram, a origem
-(*Cortesia / degustação*, *Liberado pelo admin*, *Pagamento no Asaas*) e a
-observação.
+### O pagamento completa o mês
+
+O caso de uso: o cliente diz que pagou, o pagamento ainda não apareceu, e o
+admin libera alguns dias para ele seguir usando. Antes, quando o pagamento
+aparecia no Asaas, a liberação manual feita a partir do dia do pagamento era
+tratada como "já liberado por este pagamento" e o pagamento não somava nada —
+certo quando o admin liberava sempre 30 dias, mas com 5 dias o cliente
+ficaria só com os 5.
+
+Agora a consulta ao Asaas (`asaas._liberacoes_manuais_que_cobrem`) junta as
+liberações manuais feitas do dia do pagamento em diante, em ordem, **até
+somarem um mês**, amarra todas ao pagamento e **completa a diferença**:
+
+| O admin liberou na mão | O pagamento aparece e… |
+|---|---|
+| 5 dias | soma 25 — o cliente fica com os 30 que pagou |
+| 3 + 4 dias (duas vezes) | soma 23 |
+| 30 dias | não soma nada (como antes: não paga duas vezes o mesmo mês) |
+| 30 + 30 (dois cliques, dois pagamentos) | cada pagamento responde por um clique: 60 dias, sem mês a mais |
+
+A observação do admin fica guardada e ganha uma nota do que aconteceu
+("pagamento de 15/10/2026 confirmado; completou mais 25 dia(s)"); a
+diferença entra no histórico como *Pagamento no Asaas*, e o resumo da
+consulta diz quantos pagamentos completaram liberações manuais.
 
 ### Como foi testado
 
-- `test_liberacao.py` ganhou a seção 14 (60 conferências no total): 7 dias de
-  degustação com observação e quem liberou, o padrão do motivo para quem
-  nunca pagou e para quem já pagou, **um pagamento no Asaas durante a
-  degustação somando 30 dias ao fim dela**, dias inválidos (0, 400, letras,
-  negativo) recusados sem mexer em nada e renovação de 15 dias somando ao fim.
-- `test_navegador.py` abre a janela, clica em "7 dias", digita 45 e confere a
-  data final mudando na hora, e confirma.
-- Estraguei de propósito o registro da degustação como manual e os dias
-  escolhidos sendo ignorados: os dois fizeram o teste falhar — no primeiro,
-  exatamente com o pagamento engolido (acesso até o fim da degustação, em vez
-  de 30 dias depois).
+- `test_liberacao.py` reescreveu a seção 14 (64 conferências no total): 5 dias
+  com observação e quem liberou; o pagamento do mesmo dia completando 25;
+  consultar de novo sem somar nada; duas liberações curtas (3 + 4) com o
+  pagamento de dois dias antes completando 23; dois cliques de 30 com dois
+  pagamentos dando 60; dias inválidos recusados; renovação de 15 dias. A seção
+  10 (clique de 30 dias absorvendo o pagamento) continua passando.
+- `test_navegador.py` abre a janela, clica em "7 dias", digita 45, confere a
+  data final mudando na hora e confirma.
+- Estraguei de propósito: o pagamento não completar o mês (o cliente ficava
+  só com os 5 dias), só a primeira liberação curta contar, e um pagamento
+  engolir todas as liberações — cada um fez o teste falhar no ponto certo.
 
 ## Limitações conhecidas (fora do escopo desta revisão)
 
@@ -1646,8 +1663,8 @@ observação.
   quando o repasse cai na conta. O sistema não lê os extratos de repasse.
 - Liberação manual feita **antes** do pagamento (adiantando o acesso) não é
   reconhecida como "a mesma" do pagamento que vem depois: o pagamento soma
-  seus 30 dias normalmente. A absorção só vale para liberações feitas no dia
-  do pagamento ou depois dele.
+  seus 30 dias normalmente. O vínculo (e a complementação até um mês) só
+  vale para liberações feitas no dia do pagamento ou depois dele.
 - O histórico da equipe guarda tudo, sem limpeza automática; num uso muito
   intenso convém apagar os registros antigos de tempos em tempos.
 - A rotina diária roda no mesmo processo do servidor. Com o worker único que

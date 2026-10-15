@@ -81,7 +81,7 @@ threading.Thread(target=servidor.serve_forever, daemon=True).start()
 os.environ['ERP_ASAAS_URL'] = f'http://127.0.0.1:{servidor.server_address[1]}'
 
 import app as appmod  # noqa: E402
-from models import (ORIGEM_ASAAS, ORIGEM_CORTESIA, ORIGEM_MANUAL, Empresa, Liberacao,  # noqa: E402
+from models import (ORIGEM_ASAAS, ORIGEM_MANUAL, Empresa, Liberacao,  # noqa: E402
                     Pagamento, Usuario, db)
 
 # E-mails: em vez de mandar, anota quem seria avisado
@@ -325,44 +325,75 @@ with appmod.app.app_context():
            'cliente comum não consegue liberar nada')
 
 # =============================================================== #
-print('\n--- 14) liberar escolhendo os dias: degustação ---')
+print('\n--- 14) liberar alguns dias enquanto o pagamento não aparece ---')
 import re  # noqa: E402
-eid_d, _ = empresa_nova('Degusta', cnpj='88999000000111', vencida_ha=3)
+eid_d, _ = empresa_nova('Disse Que Pagou', cnpj='88999000000111', vencida_ha=3)
 corpo = adm.get('/admin/clientes').get_data(as_text=True)
 janela = corpo[corpo.find(f'id="dialogo-liberar-{eid_d}"'):]
 janela = janela[:janela.find('</dialog>')]
 checar('name="dias"' in janela and f'value="{appmod.DIAS_POR_PAGAMENTO}"' in janela,
        'Liberar abre a janela com a quantidade de dias (30 já preenchido)')
-checar(re.search(r'value="degustacao" checked', janela) is not None,
-       'quem nunca pagou já vem marcado como degustação')
-janela_paga = corpo[corpo.find(f'id="dialogo-liberar-{eid}"'):]
-janela_paga = janela_paga[:janela_paga.find('</dialog>')]
-checar(re.search(r'value="pagamento" checked', janela_paga) is not None,
-       'quem já foi liberado antes vem marcado como pagamento')
+checar('name="motivo"' not in janela and 'name="observacao"' in janela,
+       'sem escolher motivo: é sempre liberação do admin, com observação opcional')
 
 r = adm.post(f'/admin/clientes/{eid_d}/assinatura',
-             data={'acao': 'liberar', 'dias': '7', 'motivo': 'degustacao', 'observacao': 'feira de outubro'},
+             data={'acao': 'liberar', 'dias': '5', 'observacao': 'disse que pagou por Pix'},
              follow_redirects=True)
-checar('liberado por 7 dia(s) de degustação' in r.get_data(as_text=True), 'libera 7 dias de degustação')
+checar('liberado por 5 dia(s): de hoje' in r.get_data(as_text=True), 'o admin libera 5 dias')
 with appmod.app.app_context():
     e = empresa(eid_d)
     l = e.ultima_liberacao
-    checar(e.assinatura_ate == HOJE + dt.timedelta(days=7), f'até hoje + 7 ({e.assinatura_ate:%d/%m/%Y})')
-    checar(l.origem == ORIGEM_CORTESIA and l.dias == 7 and l.observacao == 'feira de outubro'
-           and l.usuario_id == id_admin, 'registrada como cortesia, com os dias, a observação e quem liberou')
+    checar(e.assinatura_ate == HOJE + dt.timedelta(days=5), f'até hoje + 5 ({e.assinatura_ate:%d/%m/%Y})')
+    checar(l.origem == ORIGEM_MANUAL and l.dias == 5 and l.observacao == 'disse que pagou por Pix'
+           and l.usuario_id == id_admin, 'registrada como liberação do admin, com os dias, a observação e quem liberou')
 corpo = adm.get('/admin/clientes').get_data(as_text=True)
-checar('Cortesia / degustação · 7 dia(s)' in corpo and 'feira de outubro' in corpo,
-       'a coluna "Última liberação" mostra que foi degustação, de quantos dias')
+checar('Liberado pelo admin · 5 dia(s)' in corpo and 'disse que pagou por Pix' in corpo,
+       'a coluna "Última liberação" mostra os dias e a observação')
 
-clientes_asaas['cus_DEG'] = {'id': 'cus_DEG', 'cpfCnpj': '88999000000111', 'name': 'Degusta'}
-cobranca_paga('pay_DEG', 'cus_DEG', dias_atras=0)
-adm.post('/admin/asaas/verificar', follow_redirects=True)
+clientes_asaas['cus_DQP'] = {'id': 'cus_DQP', 'cpfCnpj': '88999000000111', 'name': 'Disse que pagou'}
+cobranca_paga('pay_DQP', 'cus_DQP', dias_atras=0)
+r = adm.post('/admin/asaas/verificar', follow_redirects=True)
 with appmod.app.app_context():
     e = empresa(eid_d)
-    checar(e.assinatura_ate == HOJE + dt.timedelta(days=7 + 30),
-           f'pagou durante a degustação: os 30 dias somam ao fim dela ({e.assinatura_ate:%d/%m/%Y})')
-    checar(e.ultima_liberacao.origem == ORIGEM_ASAAS and e.ultima_liberacao.asaas_id == 'pay_DEG',
-           'e o pagamento não é engolido pela degustação')
+    checar(e.assinatura_ate == HOJE + dt.timedelta(days=30),
+           f'o pagamento aparece e completa o mês: 5 + 25 = 30 dias ({e.assinatura_ate:%d/%m/%Y})')
+    complemento = e.ultima_liberacao
+    checar(complemento.origem == ORIGEM_ASAAS and complemento.dias == 25 and complemento.asaas_id == 'pay_DQP',
+           'a diferença (25 dias) entra como pagamento do Asaas')
+    manual = [l for l in e.liberacoes if l.origem == ORIGEM_MANUAL][0]
+    checar(manual.asaas_id == 'pay_DQP' and manual.observacao.startswith('disse que pagou por Pix'),
+           'a liberação do admin fica amarrada ao pagamento, sem perder a observação dele')
+checar('completou(aram) os dias liberados na mão' in r.get_data(as_text=True), 'e o resumo da consulta explica')
+
+adm.post('/admin/asaas/verificar', follow_redirects=True)
+with appmod.app.app_context():
+    checar(empresa(eid_d).assinatura_ate == HOJE + dt.timedelta(days=30),
+           'consultar de novo não soma nada (o pagamento rende uma vez só)')
+
+# Pagou anteontem, o admin liberou hoje 3 + 4 dias, e só agora o Asaas confirmou
+eid_p, _ = empresa_nova('Pagou Antes', cnpj='99000111000122', vencida_ha=10)
+adm.post(f'/admin/clientes/{eid_p}/assinatura', data={'acao': 'liberar', 'dias': '3'})
+adm.post(f'/admin/clientes/{eid_p}/assinatura', data={'acao': 'liberar', 'dias': '4'})
+clientes_asaas['cus_PA'] = {'id': 'cus_PA', 'cpfCnpj': '99000111000122', 'name': 'Pagou antes'}
+cobranca_paga('pay_PA', 'cus_PA', dias_atras=2)
+adm.post('/admin/asaas/verificar', follow_redirects=True)
+with appmod.app.app_context():
+    e = empresa(eid_p)
+    checar(e.assinatura_ate == HOJE + dt.timedelta(days=30),
+           f'duas liberações curtas (3 + 4) e o pagamento de anteontem: completa com 23, até hoje + 30 '
+           f'({e.assinatura_ate:%d/%m/%Y})')
+
+# Dois pagamentos, dois cliques de 30 dias: cada pagamento responde por um mês só
+eid_2x, _ = empresa_nova('Dois Meses', cnpj='11000222000133', vencida_ha=5)
+adm.post(f'/admin/clientes/{eid_2x}/assinatura', data={'acao': 'liberar'})
+adm.post(f'/admin/clientes/{eid_2x}/assinatura', data={'acao': 'liberar'})
+clientes_asaas['cus_2X'] = {'id': 'cus_2X', 'cpfCnpj': '11000222000133', 'name': 'Dois meses'}
+cobranca_paga('pay_2X_a', 'cus_2X', dias_atras=0)
+cobranca_paga('pay_2X_b', 'cus_2X', dias_atras=0)
+adm.post('/admin/asaas/verificar', follow_redirects=True)
+with appmod.app.app_context():
+    checar(empresa(eid_2x).assinatura_ate == HOJE + dt.timedelta(days=60),
+           'dois cliques de 30 e dois pagamentos: 60 dias, sem mês a mais')
 
 for ruim in ('0', '400', 'abc', '-5'):
     r = adm.post(f'/admin/clientes/{eid_d}/assinatura', data={'acao': 'liberar', 'dias': ruim},
@@ -371,16 +402,15 @@ for ruim in ('0', '400', 'abc', '-5'):
         break
 with appmod.app.app_context():
     checar('Informe de 1 a 365 dias' in r.get_data(as_text=True)
-           and empresa(eid_d).assinatura_ate == HOJE + dt.timedelta(days=37),
+           and empresa(eid_d).assinatura_ate == HOJE + dt.timedelta(days=30),
            'dias fora de 1 a 365 (0, 400, letras, negativo) são recusados sem mexer em nada')
 
-r = adm.post(f'/admin/clientes/{eid_d}/assinatura', data={'acao': 'liberar', 'dias': '15', 'motivo': 'pagamento'},
+r = adm.post(f'/admin/clientes/{eid_d}/assinatura', data={'acao': 'liberar', 'dias': '15'},
              follow_redirects=True)
 with appmod.app.app_context():
     e = empresa(eid_d)
-    checar(e.assinatura_ate == HOJE + dt.timedelta(days=37 + 15) and e.ultima_liberacao.renovacao
-           and e.ultima_liberacao.origem == ORIGEM_MANUAL,
-           'renovar quem está em dia com 15 dias soma ao fim, como pagamento manual')
+    checar(e.assinatura_ate == HOJE + dt.timedelta(days=45) and e.ultima_liberacao.renovacao,
+           'renovar quem está em dia com 15 dias soma ao fim')
 checar('mais 15 dia(s) somados ao fim' in r.get_data(as_text=True), 'e a mensagem diz isso')
 
 print()

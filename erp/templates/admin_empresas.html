@@ -42,12 +42,14 @@
 <h3 class="titulo-secao">Situação dos clientes</h3>
 <p class="aviso-cadastro">
     <strong>Liberar</strong> registra a data de hoje e abre quantos dias você
-    escolher ({{ dias_periodo }}, o mesmo de um pagamento, já vem preenchido —
-    7 ou 15 servem para uma degustação). A cada entrada no sistema essa data é
-    confrontada com a de hoje: passou do prazo, o acesso é bloqueado sozinho, e
-    o próximo clique começa um período novo. Se o cliente ainda estiver em dia,
-    os dias somam ao fim do período atual — ninguém perde dias. O pagamento
-    confirmado no Asaas segue a mesma regra.
+    escolher ({{ dias_periodo }}, o mesmo de um pagamento, já vem preenchido).
+    Serve, por exemplo, para o cliente que diz ter pago e o pagamento ainda não
+    apareceu: libere alguns dias para ele seguir usando. Quando o pagamento for
+    confirmado no Asaas, ele <strong>completa o mês</strong> — o cliente fica
+    com os {{ dias_periodo }} dias que pagou, sem somar em dobro. A cada entrada
+    no sistema a data é confrontada com a de hoje: passou do prazo, o acesso é
+    bloqueado sozinho. Se o cliente ainda estiver em dia, os dias somam ao fim
+    do período atual.
 </p>
 
 <div class="table-scroll">
@@ -87,7 +89,7 @@
                 <small>
                     {{ ultima.rotulo_origem }} · {{ ultima.dias }} dia(s){% if ultima.usuario %} · {{ ultima.usuario.nome }}{% endif %}
                     {% if ultima.renovacao %} · renovação{% endif %}
-                    {% if ultima.observacao and ultima.observacao != 'Degustação' %}<br>“{{ ultima.observacao }}”{% endif %}
+                    {% if ultima.observacao %}<br>“{{ ultima.observacao }}”{% endif %}
                 </small>
                 {% else %}
                 <small>—</small>
@@ -103,8 +105,6 @@
             <td class="acoes">
                 {% set inicio = inicio_da_liberacao(e) %}
                 {% set novo_fim = vencimento_apos_liberar(e) %}
-                {# Quem nunca pagou nem foi liberado na mão: o mais provável é degustação #}
-                {% set ja_pagou = e.liberacoes|selectattr('origem', 'in', ['asaas', 'manual'])|list %}
                 <button type="button" class="btn-acao btn-concluir"
                         onclick="document.getElementById('dialogo-liberar-{{ e.id }}').showModal()">
                     {{ 'Renovar' if e.assinatura_em_dia else 'Liberar' }}
@@ -121,29 +121,13 @@
                                    inputmode="numeric" required>
                         </label>
                         <div class="atalhos-dias" role="group" aria-label="Atalhos de dias">
-                            {% for d in (7, 15, 30, 60) %}
+                            {% for d in (3, 7, 15, 30) %}
                             <button type="button" class="atalho" data-dias="{{ d }}">{{ d }} dias</button>
                             {% endfor %}
                         </div>
-                        <div class="escolha-cartoes">
-                            <label class="cartao-escolha">
-                                <input type="radio" name="motivo" value="pagamento" {{ 'checked' if ja_pagou else '' }}>
-                                <span class="cartao-corpo">
-                                    <strong>Pagamento recebido</strong>
-                                    <small>O cliente pagou por fora do Asaas (Pix, dinheiro, plano maior).</small>
-                                </span>
-                            </label>
-                            <label class="cartao-escolha">
-                                <input type="radio" name="motivo" value="degustacao" {{ '' if ja_pagou else 'checked' }}>
-                                <span class="cartao-corpo">
-                                    <strong>Degustação (cortesia)</strong>
-                                    <small>Dias de graça para testar. Se o cliente pagar no meio, o pagamento soma os dias dele.</small>
-                                </span>
-                            </label>
-                        </div>
                         <label>
                             <span>Observação <small>(opcional)</small></span>
-                            <input type="text" name="observacao" maxlength="200" placeholder="ex.: degustação da feira de outubro">
+                            <input type="text" name="observacao" maxlength="200" placeholder="ex.: disse que pagou por Pix, aguardando confirmação">
                         </label>
                         <p class="resultado-liberacao" aria-live="polite">
                             {% if e.assinatura_em_dia %}Ainda em dia: o acesso passa de {{ inicio.strftime('%d/%m/%Y') }}

@@ -267,7 +267,7 @@ def verificar_empresa(empresa, caminho_chave, url_base=None):
     if not cobrancas:
         return 0
     r = aplicar_pagamentos(cobrancas, caminho_chave=caminho_chave, url_base=url_base)
-    return r['creditados'] + r['absorvidos']
+    return r['creditados'] + r['absorvidos'] + r['complementados']
 
 
 def _data(valor):
@@ -346,29 +346,44 @@ def _identificar_empresa(cliente_id, caminho_chave, url_base, cache):
     return None, 'sem_dono', documento
 
 
-def _liberacao_manual_que_cobre(empresa, pago_em):
-    """Liberação manual feita logo depois deste pagamento, ainda sem cobrança.
+def _liberacoes_manuais_que_cobrem(empresa, pago_em):
+    """Liberações feitas na mão por conta deste pagamento, ainda sem cobrança.
 
-    É o caso de o admin ver o pagamento no Asaas e clicar em Liberar antes de
-    a consulta automática passar. Sem esta checagem, o mesmo pagamento
-    renderia duas vezes: o clique e a consulta.
+    Dois casos do dia a dia:
+
+    - o admin viu o pagamento no Asaas e clicou em Liberar (30 dias) antes de
+      a consulta automática passar;
+    - o cliente disse que pagou, o pagamento ainda não apareceu, e o admin
+      liberou alguns dias para ele continuar usando enquanto isso.
+
+    São as liberações manuais do dia do pagamento em diante (até 30 dias),
+    em ordem, até somarem um mês: um pagamento responde por no máximo 30 dias
+    dados na mão — o que passar disso foi decisão do admin, e um segundo
+    pagamento continua achando a liberação dele.
     """
     if pago_em is None:
-        return None
+        return []
     limite = pago_em + dt.timedelta(days=DIAS_POR_PAGAMENTO)
-    candidatas = [
-        l for l in empresa.liberacoes
-        if l.origem == ORIGEM_MANUAL and not l.asaas_id
-        and pago_em <= l.liberado_em.date() <= limite
-    ]
-    return min(candidatas, key=lambda l: l.liberado_em) if candidatas else None
+    candidatas = sorted(
+        (l for l in empresa.liberacoes
+         if l.origem == ORIGEM_MANUAL and not l.asaas_id
+         and pago_em <= l.liberado_em.date() <= limite),
+        key=lambda l: (l.liberado_em, l.id))
+    usadas, soma = [], 0
+    for liberacao in candidatas:
+        if soma >= DIAS_POR_PAGAMENTO:
+            break
+        usadas.append(liberacao)
+        soma += liberacao.dias or 0
+    return usadas
 
 
 def aplicar_pagamentos(cobrancas, caminho_chave=None, url_base=None):
     """Libera quem pagou, pela mesma regra do clique do admin.
 
     Retorna um dicionário com o que aconteceu, para o resumo:
-    creditados, por_documento, absorvidos, ignorados, ambiguos e sem_dono.
+    creditados, por_documento, absorvidos, complementados, ignorados, ambiguos e
+    sem_dono.
 
     - A cobrança é casada primeiro pelo id do cliente no Asaas e, se não
       houver vínculo, pelo **CPF/CNPJ** dele — e o vínculo fica gravado.
@@ -377,7 +392,7 @@ def aplicar_pagamentos(cobrancas, caminho_chave=None, url_base=None):
     - As cobranças são aplicadas em ordem de data de pagamento, para o
       resultado não depender da ordem em que o Asaas as devolve.
     """
-    resultado = {'creditados': 0, 'por_documento': 0, 'absorvidos': 0,
+    resultado = {'creditados': 0, 'por_documento': 0, 'absorvidos': 0, 'complementados': 0,
                  'ignorados': 0, 'ambiguos': 0, 'sem_dono': 0, 'liberadas': []}
     cache_documentos = {}
 
@@ -399,13 +414,30 @@ def aplicar_pagamentos(cobrancas, caminho_chave=None, url_base=None):
 
         pago_em = _data(cobranca.get('paymentDate') or cobranca.get('confirmedDate'))
 
-        manual = _liberacao_manual_que_cobre(empresa, pago_em)
-        if manual is not None:
-            # O admin já liberou por este pagamento: só amarra um ao outro.
-            manual.asaas_id = asaas_id
-            manual.observacao = (f'pagamento de {pago_em:%d/%m/%Y} já liberado na mão; '
-                                 f'não somou dias de novo')
-            resultado['absorvidos'] += 1
+        manuais = _liberacoes_manuais_que_cobrem(empresa, pago_em)
+        if manuais:
+            # O admin já liberou por conta deste pagamento: amarra um ao outro.
+            # Se o que ele deu na mão não chega a um mês (alguns dias para o
+            # cliente seguir usando enquanto o pagamento não aparecia), o
+            # pagamento completa o mês — o cliente fica com os 30 dias que pagou.
+            dados_na_mao = sum(l.dias or 0 for l in manuais)
+            faltam = DIAS_POR_PAGAMENTO - dados_na_mao
+            for liberacao in manuais:
+                liberacao.asaas_id = asaas_id
+                nota = (f'pagamento de {pago_em:%d/%m/%Y} confirmado'
+                        + (f'; completou mais {faltam} dia(s)' if faltam > 0 else '; não somou dias de novo'))
+                # Mantém a observação do admin e acrescenta o que aconteceu
+                liberacao.observacao = (f'{liberacao.observacao} — {nota}' if liberacao.observacao
+                                        else nota)[:200]
+            if faltam > 0:
+                empresa.liberar(ORIGEM_ASAAS, data_referencia=pago_em, dias=faltam, asaas_id=asaas_id,
+                                observacao=f'completa os {dados_na_mao} dia(s) liberados na mão '
+                                           f'até um mês ({DIAS_POR_PAGAMENTO} dias)')
+                resultado['complementados'] += 1
+                if empresa not in resultado['liberadas']:
+                    resultado['liberadas'].append(empresa)
+            else:
+                resultado['absorvidos'] += 1
         else:
             if como == 'documento':
                 observacao = f'casado pelo CPF/CNPJ {documento}'
@@ -455,6 +487,8 @@ def verificar(caminho_chave, desde=None, url_base=None, ao_liberar=None):
         partes.append(f"{r['por_documento']} delas reconhecida(s) pelo CPF/CNPJ")
     if r['absorvidos']:
         partes.append(f"{r['absorvidos']} já tinha(m) sido liberada(s) na mão")
+    if r['complementados']:
+        partes.append(f"{r['complementados']} completou(aram) os dias liberados na mão até um mês")
     if r['ignorados']:
         partes.append(f"{r['ignorados']} já creditada(s) antes")
     if r['ambiguos']:

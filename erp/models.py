@@ -138,11 +138,11 @@ class Empresa(db.Model):
 # De onde veio cada liberação
 ORIGEM_MANUAL = 'manual'      # clique do administrador
 ORIGEM_ASAAS = 'asaas'        # pagamento confirmado no Asaas
-ORIGEM_CORTESIA = 'cortesia'  # dias de graça: na criação da empresa ou numa degustação
+ORIGEM_CORTESIA = 'cortesia'  # dias dados na criação da empresa
 ORIGENS = {
     ORIGEM_MANUAL: 'Liberado pelo admin',
     ORIGEM_ASAAS: 'Pagamento no Asaas',
-    ORIGEM_CORTESIA: 'Cortesia / degustação',
+    ORIGEM_CORTESIA: 'Cortesia',
 }
 
 

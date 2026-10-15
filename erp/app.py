@@ -38,7 +38,6 @@ import formatos
 import marketplaces
 import ofx_parser
 from models import (
-    ORIGEM_CORTESIA,
     MAP_BANCO, MAP_CAIXA, MAP_CATEGORIA, MAP_DESPESA, MAP_RECEITA, MAP_TEXTO, SISTEMAS_CONTABEIS,
     ContaContabil, MapeamentoContabil,
     CARGO_FUNCIONARIO,
@@ -4851,8 +4850,9 @@ def admin_empresa_assinatura(id):
     acao = request.form.get('acao', '')
 
     if acao == 'liberar':
-        # Quantos dias: 30 (um pagamento) vem preenchido, mas dá para dar
-        # 7 ou 15 de degustação, ou 90 para quem pagou um trimestre.
+        # Quantos dias: 30 (um pagamento) vem preenchido, mas o admin decide —
+        # por exemplo, alguns dias para o cliente seguir usando enquanto o
+        # pagamento que ele diz ter feito não aparece no Asaas.
         bruto = request.form.get('dias', '').strip()
         if not bruto:
             dias = DIAS_POR_PAGAMENTO
@@ -4862,29 +4862,22 @@ def admin_empresa_assinatura(id):
             flash(f'Informe de 1 a {DIAS_MAXIMOS_LIBERACAO} dias para liberar.', 'erro')
             return redirect(url_for('admin_empresas'))
 
-        # Degustação entra como cortesia, não como "liberado pelo admin": a
-        # consulta ao Asaas trata liberação manual como a de um pagamento já
-        # recebido. Se a degustação fosse manual, um pagamento feito durante
-        # ela seria absorvido e o cliente perderia os 30 dias que pagou.
-        degustacao = request.form.get('motivo') == 'degustacao'
-        origem = ORIGEM_CORTESIA if degustacao else ORIGEM_MANUAL
+        # É sempre liberação do admin. Se o pagamento aparecer depois no
+        # Asaas, ele completa o mês: quem ganhou 5 dias esperando fica com os
+        # 30 que pagou (ver asaas._liberacoes_manuais_que_cobrem).
         observacao = re.sub(r'\s+', ' ', request.form.get('observacao', '')).strip()[:200]
-        if degustacao and not observacao:
-            observacao = 'Degustação'
-
-        liberacao = empresa.liberar(origem, dias=dias, usuario_id=auth.usuario_logado().id,
+        liberacao = empresa.liberar(ORIGEM_MANUAL, dias=dias, usuario_id=auth.usuario_logado().id,
                                     observacao=observacao or None)
         db.session.commit()
-        tipo = ' de degustação' if degustacao else ''
         if liberacao.renovacao:
-            flash(f'"{empresa.nome}" ainda estava em dia: mais {dias} dia(s){tipo} somados ao fim, '
+            flash(f'"{empresa.nome}" ainda estava em dia: mais {dias} dia(s) somados ao fim, '
                   f'o acesso vai até {empresa.assinatura_ate:%d/%m/%Y}.', 'sucesso')
         else:
-            flash(f'"{empresa.nome}" liberado por {dias} dia(s){tipo}: de hoje '
+            flash(f'"{empresa.nome}" liberado por {dias} dia(s): de hoje '
                   f'({liberacao.inicio:%d/%m/%Y}) até {empresa.assinatura_ate:%d/%m/%Y}.', 'sucesso')
         registrar_acao('acesso_liberado',
-                       f'{empresa.nome}: {dias} dia(s){" de degustação" if degustacao else ""}, '
-                       f'até {empresa.assinatura_ate:%d/%m/%Y}',
+                       f'{empresa.nome}: {dias} dia(s), até {empresa.assinatura_ate:%d/%m/%Y}'
+                       + (f' — {observacao}' if observacao else ''),
                        empresa_id=empresa.id)
 
     elif acao == 'encerrar':

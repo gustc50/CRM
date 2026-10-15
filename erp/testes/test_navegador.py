@@ -213,8 +213,7 @@ with sync_playwright() as p:
     janela.locator('input[name=dias]').fill('7')
     janela.locator('button:has-text("Confirmar")').click()
     a.wait_for_load_state()
-    checar('liberado por 7 dia(s) de degustação' in flashes(a),
-           'confirmar libera 7 dias como degustação (o padrão de quem nunca pagou)')
+    checar('liberado por 7 dia(s): de hoje' in flashes(a), 'confirmar libera os 7 dias')
     checar(not erros_js, f'sem erro de script {erros_js[:1]}')
     adm_ctx.close()
 
