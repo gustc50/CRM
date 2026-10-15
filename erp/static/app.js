@@ -89,6 +89,41 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    // ---- Liberar cliente (admin): dias e data final ao vivo ----
+    // A conta é a mesma de Empresa.liberar: parte de hoje (bloqueado) ou do
+    // fim do período atual (ainda em dia) e soma os dias escolhidos.
+    document.querySelectorAll('form[data-liberar]').forEach(function (form) {
+        var campo = form.querySelector('input[name="dias"]');
+        var saida = form.querySelector('.resultado-liberacao');
+        var inicio = new Date(form.getAttribute('data-inicio') + 'T12:00:00');
+        var renovacao = form.getAttribute('data-renovacao') === '1';
+        var data = function (d) { return d.toLocaleDateString('pt-BR'); };
+
+        function atualizar() {
+            var dias = parseInt(campo.value, 10);
+            form.querySelectorAll('[data-dias]').forEach(function (b) {
+                b.classList.toggle('ativo', parseInt(b.getAttribute('data-dias'), 10) === dias);
+            });
+            if (!(dias >= 1 && dias <= parseInt(campo.max, 10))) {
+                saida.textContent = 'Informe de 1 a ' + campo.max + ' dias.';
+                return;
+            }
+            var fim = new Date(inicio.getTime());
+            fim.setDate(fim.getDate() + dias);
+            saida.textContent = renovacao
+                ? 'Ainda em dia: o acesso passa de ' + data(inicio) + ' para ' + data(fim) + ' (+' + dias + ' dias).'
+                : 'Fica liberado de hoje (' + data(inicio) + ') até ' + data(fim) + ' (' + dias + ' dias).';
+        }
+        form.querySelectorAll('[data-dias]').forEach(function (botao) {
+            botao.addEventListener('click', function () {
+                campo.value = botao.getAttribute('data-dias');
+                atualizar();
+            });
+        });
+        campo.addEventListener('input', atualizar);
+        atualizar();
+    });
+
     // ---- Blocos que começam fechados no celular ----
     // Ex.: o formulário de novo lançamento e os filtros. No computador ficam
     // abertos; no celular, a lista aparece primeiro. Se o bloco voltou com um

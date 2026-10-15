@@ -1411,3 +1411,13 @@ td.acoes { white-space: nowrap; }
     .linha-vinculo { flex-direction: column; align-items: stretch; }
     .linha-vinculo select { width: 100%; }
 }
+
+/* Janelas abertas de dentro da coluna de ações: o texto volta a quebrar
+   linha (a coluna é nowrap para os botões ficarem lado a lado). */
+td.acoes dialog { white-space: normal; text-align: left; }
+.dialogo-liberar { max-width: 420px; }
+.dialogo-liberar .atalhos-dias { display: flex; gap: 6px; flex-wrap: wrap; }
+.dialogo-liberar .atalho { font-size: 13px; padding: 5px 10px; cursor: pointer; }
+.resultado-liberacao { font-size: 14px; background: #f1f4f8; border-radius: 6px; padding: 8px 10px; margin: 0; }
+/* O rótulo genérico das janelas empilha; o cartão de escolha fica em linha */
+.dialogo-liberar .cartao-escolha { flex-direction: row; }

@@ -1079,6 +1079,8 @@ Asaas ou cortesia), quem clicou e, quando houver, a cobrança do Asaas.
   clique ("Liberar a partir de hoje (14/10) até 13/11?").
 - O campo de quantidade de dias saiu: liberar é sempre um período de 30 dias,
   como o pagamento. Dias de cortesia continuam na criação do cliente.
+  *(Voltou na vigésima segunda rodada, numa janela com dias, motivo e a data
+  final antes de confirmar.)*
 
 A tela **Assinaturas** ganhou o **Histórico de liberações**, antes da lista
 de pagamentos.
@@ -1548,6 +1550,50 @@ contador da empresa configura…".
 > cada sistema, não são exportações reais.** O leitor foi feito para tolerar
 > variações, mas vale mandar um arquivo de verdade de cada sistema para
 > conferir antes de usar com clientes.
+
+## Vigésima segunda rodada: liberar escolhendo os dias (degustação)
+
+Na tela **Clientes** do administrador, **Liberar** (ou **Renovar**) abre uma
+janela em vez de liberar direto os 30 dias:
+
+- **Quantos dias** — 30 (o mesmo de um pagamento) vem preenchido, com atalhos
+  de 7, 15, 30 e 60, e aceita de 1 a 365;
+- **Motivo** — *Pagamento recebido* (o cliente pagou por fora do Asaas) ou
+  *Degustação (cortesia)*. Quem nunca pagou nem foi liberado na mão já vem
+  marcado como degustação;
+- **Observação** opcional (ex.: "degustação da feira de outubro");
+- a **data final** aparece e muda na hora, conforme os dias: "Fica liberado de
+  hoje (15/10/2026) até 30/10/2026 (15 dias)" ou, para quem está em dia,
+  "o acesso passa de … para …".
+
+A regra continua a mesma de sempre (`Empresa.liberar`): vencido, a contagem
+começa hoje; em dia, os dias somam ao fim do período atual.
+
+**Por que degustação é "cortesia" e não "liberado pelo admin":** a consulta
+ao Asaas entende uma liberação manual feita no dia do pagamento (ou depois)
+como a mesma coisa que o pagamento — é o que impede o mesmo pagamento de
+render duas vezes quando o admin libera antes de a consulta passar. Se a
+degustação entrasse como manual, um cliente que pagasse durante ela teria o
+pagamento "engolido" e ficaria só com os dias de graça. Como cortesia, o
+pagamento soma os 30 dias dele ao fim da degustação.
+
+A coluna **Última liberação** passou a mostrar quantos dias foram, a origem
+(*Cortesia / degustação*, *Liberado pelo admin*, *Pagamento no Asaas*) e a
+observação.
+
+### Como foi testado
+
+- `test_liberacao.py` ganhou a seção 14 (60 conferências no total): 7 dias de
+  degustação com observação e quem liberou, o padrão do motivo para quem
+  nunca pagou e para quem já pagou, **um pagamento no Asaas durante a
+  degustação somando 30 dias ao fim dela**, dias inválidos (0, 400, letras,
+  negativo) recusados sem mexer em nada e renovação de 15 dias somando ao fim.
+- `test_navegador.py` abre a janela, clica em "7 dias", digita 45 e confere a
+  data final mudando na hora, e confirma.
+- Estraguei de propósito o registro da degustação como manual e os dias
+  escolhidos sendo ignorados: os dois fizeram o teste falhar — no primeiro,
+  exatamente com o pagamento engolido (acesso até o fim da degustação, em vez
+  de 30 dias depois).
 
 ## Limitações conhecidas (fora do escopo desta revisão)
 

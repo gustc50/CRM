@@ -38,6 +38,7 @@ import formatos
 import marketplaces
 import ofx_parser
 from models import (
+    ORIGEM_CORTESIA,
     MAP_BANCO, MAP_CAIXA, MAP_CATEGORIA, MAP_DESPESA, MAP_RECEITA, MAP_TEXTO, SISTEMAS_CONTABEIS,
     ContaContabil, MapeamentoContabil,
     CARGO_FUNCIONARIO,
@@ -4771,17 +4772,27 @@ def admin_empresas():
         empresas=Empresa.query.order_by(Empresa.nome).all(),
         hoje=hoje,
         dias_periodo=DIAS_POR_PAGAMENTO,
+        dias_maximos=DIAS_MAXIMOS_LIBERACAO,
         vencimento_apos_liberar=_vencimento_apos_liberar,
+        inicio_da_liberacao=_inicio_da_liberacao,
     )
 
 
-def _vencimento_apos_liberar(empresa, referencia=None):
-    """Até quando ficaria liberado se clicassem agora — para o admin ver no
-    aviso de confirmação, antes de clicar, a mesma conta que `liberar` faz."""
+DIAS_MAXIMOS_LIBERACAO = 365
+
+
+def _inicio_da_liberacao(empresa, referencia=None):
+    """De onde a contagem partiria se liberassem agora — a mesma conta de
+    `Empresa.liberar`: em dia, soma ao fim do período; vencido, conta de hoje."""
     referencia = referencia or date.today()
     if empresa.assinatura_ate is not None and empresa.assinatura_ate >= referencia:
-        return empresa.assinatura_ate + timedelta(days=DIAS_POR_PAGAMENTO)
-    return referencia + timedelta(days=DIAS_POR_PAGAMENTO)
+        return empresa.assinatura_ate
+    return referencia
+
+
+def _vencimento_apos_liberar(empresa, referencia=None, dias=DIAS_POR_PAGAMENTO):
+    """Até quando ficaria liberado — para o admin ver antes de confirmar."""
+    return _inicio_da_liberacao(empresa, referencia) + timedelta(days=dias)
 
 
 @app.route('/admin/clientes/novo', methods=['POST'])
@@ -4840,17 +4851,40 @@ def admin_empresa_assinatura(id):
     acao = request.form.get('acao', '')
 
     if acao == 'liberar':
-        liberacao = empresa.liberar(ORIGEM_MANUAL, usuario_id=auth.usuario_logado().id)
-        db.session.commit()
-        if liberacao.renovacao:
-            flash(f'"{empresa.nome}" ainda estava em dia: o acesso foi estendido até '
-                  f'{empresa.assinatura_ate:%d/%m/%Y}, sem perder os dias que restavam.',
-                  'sucesso')
+        # Quantos dias: 30 (um pagamento) vem preenchido, mas dá para dar
+        # 7 ou 15 de degustação, ou 90 para quem pagou um trimestre.
+        bruto = request.form.get('dias', '').strip()
+        if not bruto:
+            dias = DIAS_POR_PAGAMENTO
+        elif bruto.isdigit() and 1 <= int(bruto) <= DIAS_MAXIMOS_LIBERACAO:
+            dias = int(bruto)
         else:
-            flash(f'"{empresa.nome}" liberado hoje ({liberacao.inicio:%d/%m/%Y}) até '
-                  f'{empresa.assinatura_ate:%d/%m/%Y}.', 'sucesso')
+            flash(f'Informe de 1 a {DIAS_MAXIMOS_LIBERACAO} dias para liberar.', 'erro')
+            return redirect(url_for('admin_empresas'))
+
+        # Degustação entra como cortesia, não como "liberado pelo admin": a
+        # consulta ao Asaas trata liberação manual como a de um pagamento já
+        # recebido. Se a degustação fosse manual, um pagamento feito durante
+        # ela seria absorvido e o cliente perderia os 30 dias que pagou.
+        degustacao = request.form.get('motivo') == 'degustacao'
+        origem = ORIGEM_CORTESIA if degustacao else ORIGEM_MANUAL
+        observacao = re.sub(r'\s+', ' ', request.form.get('observacao', '')).strip()[:200]
+        if degustacao and not observacao:
+            observacao = 'Degustação'
+
+        liberacao = empresa.liberar(origem, dias=dias, usuario_id=auth.usuario_logado().id,
+                                    observacao=observacao or None)
+        db.session.commit()
+        tipo = ' de degustação' if degustacao else ''
+        if liberacao.renovacao:
+            flash(f'"{empresa.nome}" ainda estava em dia: mais {dias} dia(s){tipo} somados ao fim, '
+                  f'o acesso vai até {empresa.assinatura_ate:%d/%m/%Y}.', 'sucesso')
+        else:
+            flash(f'"{empresa.nome}" liberado por {dias} dia(s){tipo}: de hoje '
+                  f'({liberacao.inicio:%d/%m/%Y}) até {empresa.assinatura_ate:%d/%m/%Y}.', 'sucesso')
         registrar_acao('acesso_liberado',
-                       f'{empresa.nome} até {empresa.assinatura_ate:%d/%m/%Y}',
+                       f'{empresa.nome}: {dias} dia(s){" de degustação" if degustacao else ""}, '
+                       f'até {empresa.assinatura_ate:%d/%m/%Y}',
                        empresa_id=empresa.id)
 
     elif acao == 'encerrar':

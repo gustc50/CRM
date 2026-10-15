@@ -190,6 +190,34 @@ with sync_playwright() as p:
             largas.append(url)
     checar(not largas, f'nenhuma tela passa da largura do celular {largas or ""}')
 
+    print('\n--- admin: liberar escolhendo os dias ---')
+    adm_ctx = b.new_context(viewport={'width': 1366, 'height': 900}, locale='pt-BR')
+    a = adm_ctx.new_page()
+    a.on('pageerror', lambda e: erros_js.append(str(e)))
+    entrar(a, 'admin@teste.com.br', 'admin-teste-123')
+    a.goto(B + '/admin/clientes')
+    linha = a.locator('tr', has_text='Oficina Roda Livre')
+    linha.locator('button:has-text("Liberar")').click()
+    janela = linha.locator('dialog')
+    checar(janela.is_visible() and janela.locator('input[name=dias]').input_value() == '30',
+           'Liberar abre a janela com 30 dias preenchidos')
+    janela.locator('button:has-text("7 dias")').click()
+    texto = janela.locator('.resultado-liberacao').inner_text()
+    import datetime as _dt
+    fim = (_dt.date.today() + _dt.timedelta(days=7)).strftime('%d/%m/%Y')
+    checar(f'até {fim} (7 dias)' in texto, f'o atalho "7 dias" atualiza a data final na hora ({texto.strip()})')
+    janela.locator('input[name=dias]').fill('45')
+    fim45 = (_dt.date.today() + _dt.timedelta(days=45)).strftime('%d/%m/%Y')
+    checar(f'até {fim45} (45 dias)' in janela.locator('.resultado-liberacao').inner_text(),
+           'digitar outro número também')
+    janela.locator('input[name=dias]').fill('7')
+    janela.locator('button:has-text("Confirmar")').click()
+    a.wait_for_load_state()
+    checar('liberado por 7 dia(s) de degustação' in flashes(a),
+           'confirmar libera 7 dias como degustação (o padrão de quem nunca pagou)')
+    checar(not erros_js, f'sem erro de script {erros_js[:1]}')
+    adm_ctx.close()
+
     b.close()
 
 servidor.shutdown()

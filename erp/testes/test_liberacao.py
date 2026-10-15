@@ -81,7 +81,7 @@ threading.Thread(target=servidor.serve_forever, daemon=True).start()
 os.environ['ERP_ASAAS_URL'] = f'http://127.0.0.1:{servidor.server_address[1]}'
 
 import app as appmod  # noqa: E402
-from models import (ORIGEM_ASAAS, ORIGEM_MANUAL, Empresa, Liberacao,  # noqa: E402
+from models import (ORIGEM_ASAAS, ORIGEM_CORTESIA, ORIGEM_MANUAL, Empresa, Liberacao,  # noqa: E402
                     Pagamento, Usuario, db)
 
 # E-mails: em vez de mandar, anota quem seria avisado
@@ -132,7 +132,8 @@ r = entrar(c, email, 'senha-boa-123')
 checar('Acesso bloqueado' in r.get_data(as_text=True), 'vencida há 10 dias: o sistema já está bloqueado')
 
 r = adm.post(f'/admin/clientes/{eid}/assinatura', data={'acao': 'liberar'}, follow_redirects=True)
-checar('liberado hoje' in r.get_data(as_text=True), 'admin clica em Liberar')
+checar('liberado por 30 dia(s): de hoje' in r.get_data(as_text=True),
+       'admin clica em Liberar (sem escolher os dias, valem 30)')
 with appmod.app.app_context():
     e = empresa(eid)
     l = e.ultima_liberacao
@@ -322,6 +323,65 @@ r = c2.post(f'/admin/clientes/{eid}/assinatura', data={'acao': 'liberar'}, follo
 with appmod.app.app_context():
     checar(Liberacao.query.filter_by(empresa_id=eid).count() == 4,
            'cliente comum não consegue liberar nada')
+
+# =============================================================== #
+print('\n--- 14) liberar escolhendo os dias: degustação ---')
+import re  # noqa: E402
+eid_d, _ = empresa_nova('Degusta', cnpj='88999000000111', vencida_ha=3)
+corpo = adm.get('/admin/clientes').get_data(as_text=True)
+janela = corpo[corpo.find(f'id="dialogo-liberar-{eid_d}"'):]
+janela = janela[:janela.find('</dialog>')]
+checar('name="dias"' in janela and f'value="{appmod.DIAS_POR_PAGAMENTO}"' in janela,
+       'Liberar abre a janela com a quantidade de dias (30 já preenchido)')
+checar(re.search(r'value="degustacao" checked', janela) is not None,
+       'quem nunca pagou já vem marcado como degustação')
+janela_paga = corpo[corpo.find(f'id="dialogo-liberar-{eid}"'):]
+janela_paga = janela_paga[:janela_paga.find('</dialog>')]
+checar(re.search(r'value="pagamento" checked', janela_paga) is not None,
+       'quem já foi liberado antes vem marcado como pagamento')
+
+r = adm.post(f'/admin/clientes/{eid_d}/assinatura',
+             data={'acao': 'liberar', 'dias': '7', 'motivo': 'degustacao', 'observacao': 'feira de outubro'},
+             follow_redirects=True)
+checar('liberado por 7 dia(s) de degustação' in r.get_data(as_text=True), 'libera 7 dias de degustação')
+with appmod.app.app_context():
+    e = empresa(eid_d)
+    l = e.ultima_liberacao
+    checar(e.assinatura_ate == HOJE + dt.timedelta(days=7), f'até hoje + 7 ({e.assinatura_ate:%d/%m/%Y})')
+    checar(l.origem == ORIGEM_CORTESIA and l.dias == 7 and l.observacao == 'feira de outubro'
+           and l.usuario_id == id_admin, 'registrada como cortesia, com os dias, a observação e quem liberou')
+corpo = adm.get('/admin/clientes').get_data(as_text=True)
+checar('Cortesia / degustação · 7 dia(s)' in corpo and 'feira de outubro' in corpo,
+       'a coluna "Última liberação" mostra que foi degustação, de quantos dias')
+
+clientes_asaas['cus_DEG'] = {'id': 'cus_DEG', 'cpfCnpj': '88999000000111', 'name': 'Degusta'}
+cobranca_paga('pay_DEG', 'cus_DEG', dias_atras=0)
+adm.post('/admin/asaas/verificar', follow_redirects=True)
+with appmod.app.app_context():
+    e = empresa(eid_d)
+    checar(e.assinatura_ate == HOJE + dt.timedelta(days=7 + 30),
+           f'pagou durante a degustação: os 30 dias somam ao fim dela ({e.assinatura_ate:%d/%m/%Y})')
+    checar(e.ultima_liberacao.origem == ORIGEM_ASAAS and e.ultima_liberacao.asaas_id == 'pay_DEG',
+           'e o pagamento não é engolido pela degustação')
+
+for ruim in ('0', '400', 'abc', '-5'):
+    r = adm.post(f'/admin/clientes/{eid_d}/assinatura', data={'acao': 'liberar', 'dias': ruim},
+                 follow_redirects=True)
+    if 'Informe de 1 a 365 dias' not in r.get_data(as_text=True):
+        break
+with appmod.app.app_context():
+    checar('Informe de 1 a 365 dias' in r.get_data(as_text=True)
+           and empresa(eid_d).assinatura_ate == HOJE + dt.timedelta(days=37),
+           'dias fora de 1 a 365 (0, 400, letras, negativo) são recusados sem mexer em nada')
+
+r = adm.post(f'/admin/clientes/{eid_d}/assinatura', data={'acao': 'liberar', 'dias': '15', 'motivo': 'pagamento'},
+             follow_redirects=True)
+with appmod.app.app_context():
+    e = empresa(eid_d)
+    checar(e.assinatura_ate == HOJE + dt.timedelta(days=37 + 15) and e.ultima_liberacao.renovacao
+           and e.ultima_liberacao.origem == ORIGEM_MANUAL,
+           'renovar quem está em dia com 15 dias soma ao fim, como pagamento manual')
+checar('mais 15 dia(s) somados ao fim' in r.get_data(as_text=True), 'e a mensagem diz isso')
 
 print()
 if falhas:
