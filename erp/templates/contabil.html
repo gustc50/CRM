@@ -1,0 +1,268 @@
+{% extends 'base.html' %}
+
+{# Seleção de conta analítica: o contador escolhe; o cliente só lê #}
+{% macro escolher_conta(nome, atual) %}
+{% if sou_contador %}
+<select name="{{ nome }}" aria-label="Conta contábil">
+    <option value="">— sem conta —</option>
+    {% for c in analiticas %}
+    <option value="{{ c.id }}" {{ 'selected' if atual and atual.conta_id == c.id else '' }}>{{ c.rotulo }}</option>
+    {% endfor %}
+</select>
+{% else %}
+<span>{{ atual.conta.rotulo if atual else '—' }}</span>
+{% endif %}
+{% if atual and atual.origem == 'sugestao' %}<span class="badge-pendente" title="Casado pelo nome logo depois da importação; o contador ainda não confirmou">sugerido</span>{% endif %}
+{% endmacro %}
+
+{% block content %}
+<h2>{{ 'Configurações contábeis' if sou_contador else 'Plano de contas e conciliação' }}
+    <span class="subtitulo">{{ empresa_atual().nome }}</span></h2>
+
+{% if sou_contador %}
+<p class="aviso-cadastro">
+    Importe o plano de contas desta empresa e ligue as categorias e os bancos às
+    contas: a partir daí cada lançamento ganha sozinho o seu débito e o seu
+    crédito. Só você mexe aqui; o cliente vê tudo o que você definir, nesta tela
+    e nos Lançamentos (débito e crédito logo abaixo da descrição).
+</p>
+{% else %}
+<p class="aviso-cadastro">
+    Esta parte é configurada pelo seu contador{% if email_contador %} ({{ email_contador }}){% endif %}.
+    Aqui você acompanha o plano de contas e como cada lançamento é classificado;
+    nos Lançamentos, cada um mostra o débito (D) e o crédito (C) logo abaixo da descrição.
+</p>
+{% endif %}
+
+{% if resumo %}
+<div class="dashboard">
+    <div class="card">
+        <h3>Plano de contas</h3>
+        <h2>{{ contas|length }} contas</h2>
+        <small>{{ analiticas|length }} analíticas</small>
+    </div>
+    <div class="card receber">
+        <h3>Lançamentos conciliados</h3>
+        <h2>{{ resumo.conciliados }} de {{ resumo.total }}</h2>
+        <small>{% if resumo.total %}{{ (resumo.conciliados * 100 // resumo.total) }}% com débito e crédito{% else %}nenhum lançamento ainda{% endif %}</small>
+    </div>
+    <div class="card {{ 'pagar' if resumo.pendentes else '' }}">
+        <h3>Pendentes</h3>
+        <h2>{{ resumo.pendentes }}</h2>
+        <small>{{ 'veja o que falta abaixo' if resumo.pendentes else 'tudo conciliado' }}</small>
+    </div>
+</div>
+
+{% if resumo.motivos %}
+<section class="painel">
+    <h3>O que falta para conciliar</h3>
+    <ul class="lista-motivos">
+        {% for motivo, qtde in resumo.motivos[:10] %}
+        <li><strong>{{ qtde }}</strong> lançamento(s): {{ motivo }}</li>
+        {% endfor %}
+    </ul>
+</section>
+{% endif %}
+{% endif %}
+
+{% if inativas %}
+<p class="aviso-certificado vencido">
+    ⚠ {{ inativas|length }} conta(s) saíram do plano na última importação mas
+    ainda estão em vínculos: {{ inativas|map(attribute='rotulo')|join(', ') }}.
+    {% if sou_contador %}Troque-as abaixo.{% endif %}
+</p>
+{% endif %}
+
+{# ---------------------------------------------------------------- #}
+<h3 class="titulo-secao" id="plano">Plano de contas</h3>
+{% if contas %}
+<p class="nota-grafico">
+    Importado{% if plano_info.sistema %} do <strong>{{ plano_info.sistema }}</strong>{% endif %}
+    {% if plano_info.importado_em %} em {{ plano_info.importado_em }}{% endif %}
+    {% if plano_info.importado_por %} por {{ plano_info.importado_por }}{% endif %}
+    {% if plano_info.arquivo %} — arquivo {{ plano_info.arquivo }}{% endif %}.
+</p>
+{% elif not sou_contador %}
+<p class="aviso-cadastro">Seu contador ainda não importou o plano de contas.</p>
+{% endif %}
+
+{% if sou_contador %}
+<form action="{{ url_for('contador_plano_importar') }}" method="POST" enctype="multipart/form-data"
+      class="form-coluna form-config">
+    <label>
+        Sistema contábil de onde o plano foi exportado
+        <select name="sistema" required>
+            <option value="">Escolha…</option>
+            {% for valor, rotulo in sistemas %}
+            <option value="{{ valor }}">{{ rotulo }}</option>
+            {% endfor %}
+        </select>
+    </label>
+    <label>
+        <span>Arquivo do plano de contas <small>(.csv, .txt ou .xlsx)</small></span>
+        <input type="file" name="arquivo" accept=".csv,.txt,.xlsx" required>
+    </label>
+    <label>
+        <span>Máscara da classificação <small>(opcional — só se o arquivo trouxer a classificação sem pontos, ex.: 9.9.9.99.999)</small></span>
+        <input type="text" name="mascara" maxlength="30" placeholder="9.9.9.99.999">
+    </label>
+    <small class="explica-modo">
+        Vale a exportação do plano de contas em texto ou planilha: o sistema acha
+        sozinho as colunas de classificação, código reduzido, descrição, tipo
+        (sintética/analítica) e natureza{% if contas %}. Importar de novo atualiza
+        as contas sem perder os vínculos{% endif %}.
+    </small>
+    <div class="form-acoes">
+        <button type="submit">{{ 'Importar de novo' if contas else 'Importar plano de contas' }}</button>
+    </div>
+</form>
+{% if contas %}
+<form action="{{ url_for('contador_plano_apagar') }}" method="POST" class="form-inline"
+      data-confirmar="Apagar o plano de contas e todos os vínculos da conciliação desta empresa?">
+    <button type="submit" class="btn-secundario">Apagar o plano</button>
+</form>
+{% endif %}
+{% endif %}
+
+{% if contas %}
+<details class="bloco-recolhivel">
+    <summary>Ver as {{ contas|length }} contas</summary>
+    <div class="table-scroll">
+    <table class="tabela-compacta tabela-plano">
+        <thead>
+            <tr><th>Classificação</th><th>Reduzido</th><th>Descrição</th><th>Tipo</th><th>Natureza</th></tr>
+        </thead>
+        <tbody>
+            {% for c in contas %}
+            <tr class="{{ 'conta-sintetica' if not c.analitica else '' }} {{ 'nota-cancelada' if not c.ativa else '' }}">
+                <td class="sem-quebra">{{ c.classificacao }}</td>
+                <td>{{ c.codigo or '—' }}</td>
+                <td style="padding-left: {{ 12 + (c.nivel - 1) * 14 }}px">{{ c.descricao }}</td>
+                <td>{{ 'Analítica' if c.analitica else 'Sintética' }}</td>
+                <td>{{ {'D': 'Devedora', 'C': 'Credora'}.get(c.natureza, '—') }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</details>
+
+{# ---------------------------------------------------------------- #}
+<h3 class="titulo-secao" id="conciliacao">Conciliação automática</h3>
+<p class="nota-grafico">
+    Conta a pagar: <strong>débito</strong> na conta da categoria (ou da regra) e
+    <strong>crédito</strong> na conta do banco. Conta a receber: débito no banco e
+    crédito na conta da categoria. Lançamento sem banco usa a conta Caixa.
+    {% if sugeridos %}<br>{{ sugeridos }} vínculo(s) marcado(s) como <span class="badge-pendente">sugerido</span>
+    foram casados pelo nome logo depois da importação{% if sou_contador %} — confira e salve{% endif %}.{% endif %}
+</p>
+
+{% if sou_contador %}<form action="{{ url_for('contador_vinculos_salvar') }}" method="POST" class="form-tabela">{% endif %}
+<div class="grade-vinculos">
+    <section class="painel">
+        <h4 class="subtitulo-form">Contas padrão</h4>
+        <div class="linha-vinculo"><span>Caixa <small>(lançamento sem banco)</small></span>
+            {{ escolher_conta('padrao_' ~ MAP_CAIXA, vinculo(MAP_CAIXA)) }}</div>
+        <div class="linha-vinculo"><span>Despesa sem classificação <small>(opcional)</small></span>
+            {{ escolher_conta('padrao_' ~ MAP_DESPESA, vinculo(MAP_DESPESA)) }}</div>
+        <div class="linha-vinculo"><span>Receita sem classificação <small>(opcional)</small></span>
+            {{ escolher_conta('padrao_' ~ MAP_RECEITA, vinculo(MAP_RECEITA)) }}</div>
+    </section>
+
+    <section class="painel">
+        <h4 class="subtitulo-form">Bancos</h4>
+        {% for b in bancos %}
+        <div class="linha-vinculo"><span>{{ b.nome }}</span>{{ escolher_conta('banco_' ~ b.id, vinculo(MAP_BANCO, b.id)) }}</div>
+        {% else %}
+        <p class="nota-grafico">O cliente ainda não cadastrou bancos.</p>
+        {% endfor %}
+    </section>
+
+    <section class="painel">
+        <h4 class="subtitulo-form">Categorias de despesa (contas a pagar)</h4>
+        {% for c in categorias_pagar %}
+        <div class="linha-vinculo"><span>{{ c.nome }}</span>{{ escolher_conta('categoria_' ~ c.id, vinculo(MAP_CATEGORIA, c.id)) }}</div>
+        {% else %}
+        <p class="nota-grafico">Nenhuma categoria de despesa.</p>
+        {% endfor %}
+    </section>
+
+    <section class="painel">
+        <h4 class="subtitulo-form">Categorias de receita (contas a receber)</h4>
+        {% for c in categorias_receber %}
+        <div class="linha-vinculo"><span>{{ c.nome }}</span>{{ escolher_conta('categoria_' ~ c.id, vinculo(MAP_CATEGORIA, c.id)) }}</div>
+        {% else %}
+        <p class="nota-grafico">Nenhuma categoria de receita.</p>
+        {% endfor %}
+    </section>
+</div>
+{% if sou_contador %}
+<div class="barra-selecao">
+    <span>As mudanças valem na hora para todos os lançamentos, inclusive os antigos.</span>
+    <button type="submit">Salvar conciliação</button>
+</div>
+</form>
+{% endif %}
+
+{# ---------------------------------------------------------------- #}
+<h3 class="titulo-secao" id="regras">Regras por palavra</h3>
+<p class="nota-grafico">
+    Têm prioridade sobre a categoria: se a descrição do lançamento (ou o nome do
+    fornecedor/cliente) tiver a palavra, ele vai para a conta da regra. Ex.:
+    "tarifa" → Despesas bancárias. A primeira regra que casar vale.
+</p>
+<div class="table-scroll">
+<table class="tabela-compacta">
+    <thead><tr><th>Quando tiver</th><th>Vale para</th><th>Vai para a conta</th>{% if sou_contador %}<th>Ação</th>{% endif %}</tr></thead>
+    <tbody>
+        {% for r in regras %}
+        <tr>
+            <td>"{{ r.texto }}"</td>
+            <td>{{ {'Pagar': 'Contas a pagar', 'Receber': 'Contas a receber'}.get(r.tipo_lancamento, 'Os dois') }}</td>
+            <td>{{ r.conta.rotulo }}</td>
+            {% if sou_contador %}
+            <td class="acoes">
+                <form action="{{ url_for('contador_regra_excluir', id=r.id) }}" method="POST" class="form-inline"
+                      data-confirmar="Apagar a regra '{{ r.texto }}'?">
+                    <button type="submit" class="btn-acao btn-excluir">Apagar</button>
+                </form>
+            </td>
+            {% endif %}
+        </tr>
+        {% else %}
+        <tr><td colspan="{{ 4 if sou_contador else 3 }}">Nenhuma regra por palavra.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
+{% if sou_contador %}
+<form action="{{ url_for('contador_regra_adicionar') }}" method="POST" class="form-grade">
+    <label>
+        Quando tiver a palavra
+        <input type="text" name="texto" value="{{ f.texto }}" maxlength="80" required placeholder="ex.: tarifa">
+    </label>
+    <label>
+        Vale para
+        <select name="tipo_lancamento">
+            <option value="" {{ 'selected' if not f.tipo_lancamento else '' }}>Os dois</option>
+            <option value="Pagar" {{ 'selected' if f.tipo_lancamento == 'Pagar' else '' }}>Contas a pagar</option>
+            <option value="Receber" {{ 'selected' if f.tipo_lancamento == 'Receber' else '' }}>Contas a receber</option>
+        </select>
+    </label>
+    <label class="campo-largo">
+        Vai para a conta
+        <select name="conta_id" required>
+            <option value="">Escolha…</option>
+            {% for c in analiticas %}
+            <option value="{{ c.id }}" {{ 'selected' if f.conta_id == c.id|string else '' }}>{{ c.rotulo }}</option>
+            {% endfor %}
+        </select>
+    </label>
+    <div class="form-acoes">
+        <button type="submit">Adicionar regra</button>
+    </div>
+</form>
+{% endif %}
+{% endif %}
+{% endblock %}

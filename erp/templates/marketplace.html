@@ -12,8 +12,8 @@
     Conecte suas lojas e o sistema traz os pedidos sozinho todo dia: cada venda
     paga vira lançamento, com a comissão do marketplace separada, e o comprador
     vira cliente quando o CPF/CNPJ vem junto. Para conectar, clique no nome do
-    marketplace: abre a página dele para você autorizar — sua senha de lá
-    nunca passa por aqui.
+    marketplace e informe a chave da API que ele te deu. Sua senha de lá nunca
+    passa por aqui, e as chaves ficam guardadas com criptografia.
 </p>
 
 {% set siglas = {'mercadolivre': 'ML', 'shopee': 'S', 'amazon': 'a'} %}
@@ -37,14 +37,14 @@
                 <h3>{{ loja.nome }}</h3>
                 <small>Clique para conectar sua loja</small>
             </span>
-            {% if loja.disponivel %}<span class="badge-pendente">Desconectado</span>
-            {% else %}<span class="badge-cancelada">Não ativado</span>{% endif %}
+            <span class="badge-pendente">Desconectado</span>
         </a>
         {% endif %}
 
         {% if c %}
         <p class="nota-grafico">
-            Loja: <strong>{{ c.conta_nome or c.conta_id }}</strong><br>
+            Loja: <strong>{{ c.conta_nome or c.conta_id }}</strong>
+            {% if c.app_proprio %}<small>(com as chaves do seu aplicativo)</small>{% endif %}<br>
             {% if c.ultima_sync %}
             Última sincronização: {{ c.ultima_sync.strftime('%d/%m/%Y %H:%M') }}<br>
             <small>{{ c.ultimo_resultado }}</small>
@@ -96,41 +96,13 @@
         <p class="nota-grafico">O cliente ainda não conectou esta loja.</p>
 
         {% else %}
-        {% if loja.disponivel %}
         <p class="nota-grafico">
-            Você vai para o site do {{ loja.nome }}, entra com a sua conta de
-            vendedor e autoriza. Na volta, o sistema já traz os pedidos.
+            Informe a chave da API que o {{ loja.nome }} te deu e salve — a loja
+            fica conectada e os pedidos começam a vir.
         </p>
-        {% else %}
-        <p class="nota-grafico">
-            A conexão com o {{ loja.nome }} ainda não foi liberada no sistema.
-            Assim que o administrador ativar, é só clicar aqui.
-        </p>
-        {% endif %}
         <a href="{{ url_for('marketplace_conectar', chave=loja.chave) }}" class="btn-acao btn-editar btn-grande">
             Conectar {{ loja.nome }}
         </a>
-        {% if not loja.disponivel and suporte.get(loja.chave) %}
-        <a href="{{ suporte[loja.chave] }}" class="btn-acao btn-whatsapp btn-grande" target="_blank" rel="noopener">
-            Pedir a ativação ao suporte
-        </a>
-        {% endif %}
-        {% if loja.chave == 'amazon' and loja.disponivel %}
-        <details class="detalhe-mkt">
-            <summary>Já tenho um refresh token (aplicativo privado)</summary>
-            <form action="{{ url_for('marketplace_amazon_token') }}" method="POST" class="form-coluna form-mkt">
-                <label>
-                    Refresh token <small>(começa com Atzr|)</small>
-                    <input type="password" name="refresh_token" autocomplete="off" required>
-                </label>
-                <label>
-                    ID do vendedor <small>(opcional)</small>
-                    <input type="text" name="seller_id" maxlength="40">
-                </label>
-                <button type="submit">Conectar com o token</button>
-            </form>
-        </details>
-        {% endif %}
         {% endif %}
     </section>
     {% endfor %}

@@ -159,6 +159,16 @@
                 {% else %}
                 <span class="badge-sem-categoria">sem categoria</span>
                 {% endif %}
+                {% set k = contabeis.get(t.id) %}
+                {% if k %}
+                {% if k.conciliado %}
+                {# &nbsp; dentro de cada lado: a linha só quebra entre o débito e o crédito #}
+                <span class="linha-contabil" title="Débito: {{ k.debito.rotulo }} — Crédito: {{ k.credito.rotulo }}">
+                    D&nbsp;{{ k.debito.classificacao }} · C&nbsp;{{ k.credito.classificacao }}</span>
+                {% else %}
+                <span class="linha-contabil pendente" title="{{ k.pendencias|join('; ') }}">⚠ contábil pendente: {{ k.pendencias|first }}</span>
+                {% endif %}
+                {% endif %}
             </td>
             <td data-rotulo="Tipo" class="{{ 'valor-bom' if t.tipo == 'Receber' else 'valor-ruim' }}">{{ 'A receber' if t.tipo == 'Receber' else 'A pagar' }}</td>
             <td data-rotulo="{{ 'Cliente' if t.tipo == 'Receber' else 'Fornecedor' }}">{{ nome_entidade(t) or '—' }}</td>

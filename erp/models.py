@@ -566,6 +566,9 @@ class ConexaoMarketplace(db.Model):
     expira_em = db.Column(db.DateTime, nullable=True)
 
     modo_lancamento = db.Column(db.String(20), nullable=False, default=MODO_RECEITA_E_TAXAS)
+    # True quando a loja foi conectada com as chaves do aplicativo da própria
+    # empresa; False, com o aplicativo do sistema (do administrador)
+    app_proprio = db.Column(db.Boolean, nullable=False, default=False)
     conectado_em = db.Column(db.DateTime, nullable=False, default=dt.datetime.now)
     ultima_sync = db.Column(db.DateTime, nullable=True)
     ultimo_resultado = db.Column(db.String(300), nullable=True)
@@ -610,3 +613,66 @@ class PedidoMarketplace(db.Model):
     @property
     def nome_marketplace(self):
         return MARKETPLACES.get(self.marketplace, self.marketplace)
+
+
+# ------------------------------------------------------------------ #
+# Plano de contas e conciliação contábil (configurados pelo contador)
+# ------------------------------------------------------------------ #
+
+SISTEMAS_CONTABEIS = (
+    ('dominio', 'Domínio (Thomson Reuters)'),
+    ('questor', 'Questor'),
+    ('alterdata', 'Alterdata'),
+    ('calima', 'Calima'),
+    ('outro', 'Outro sistema'),
+)
+
+# Tipos de vínculo do de-para: cada lançamento vira débito e crédito
+MAP_CATEGORIA = 'categoria'      # categoria do lançamento -> conta de resultado
+MAP_BANCO = 'banco'              # conta bancária -> conta do disponível
+MAP_TEXTO = 'texto'              # palavra na descrição/fornecedor/cliente -> conta
+MAP_CAIXA = 'caixa'              # lançamento sem banco -> conta Caixa
+MAP_DESPESA = 'despesa_padrao'   # conta a pagar que nada classificou
+MAP_RECEITA = 'receita_padrao'   # conta a receber que nada classificou
+MAP_PADROES = (MAP_CAIXA, MAP_DESPESA, MAP_RECEITA)
+
+
+class ContaContabil(db.Model):
+    """Conta do plano de contas que o contador importou para a empresa."""
+    id = db.Column(db.Integer, primary_key=True)
+    empresa_id = db.Column(db.Integer, db.ForeignKey('empresa.id'), nullable=False, index=True)
+    classificacao = db.Column(db.String(40), nullable=False)   # 1.1.1.02.001
+    codigo = db.Column(db.String(20), nullable=True)            # código reduzido
+    descricao = db.Column(db.String(150), nullable=False)
+    tipo = db.Column(db.String(1), nullable=False, default='A')  # A = analítica, S = sintética
+    natureza = db.Column(db.String(1), nullable=True)            # D / C, quando o arquivo traz
+    nivel = db.Column(db.Integer, nullable=False, default=1)
+    # Conta que saiu do plano numa reimportação mas ainda está num vínculo
+    ativa = db.Column(db.Boolean, nullable=False, default=True)
+
+    __table_args__ = (db.UniqueConstraint('empresa_id', 'classificacao'),)
+
+    @property
+    def analitica(self):
+        return self.tipo == 'A'
+
+    @property
+    def rotulo(self):
+        codigo = f' (cód. {self.codigo})' if self.codigo else ''
+        return f'{self.classificacao} — {self.descricao}{codigo}'
+
+
+class MapeamentoContabil(db.Model):
+    """Um vínculo do de-para da conciliação automática."""
+    id = db.Column(db.Integer, primary_key=True)
+    empresa_id = db.Column(db.Integer, db.ForeignKey('empresa.id'), nullable=False, index=True)
+    tipo = db.Column(db.String(20), nullable=False)          # MAP_*
+    referencia_id = db.Column(db.Integer, nullable=True)      # categoria ou conta bancária
+    texto = db.Column(db.String(80), nullable=True)           # MAP_TEXTO
+    tipo_lancamento = db.Column(db.String(10), nullable=True)  # MAP_TEXTO: Pagar, Receber ou ambos
+    conta_id = db.Column(db.Integer, db.ForeignKey('conta_contabil.id'), nullable=False)
+    conta = db.relationship('ContaContabil')
+    # 'sugestao' = o sistema casou pelo nome logo depois da importação;
+    # 'contador' = o contador escolheu ou confirmou
+    origem = db.Column(db.String(10), nullable=False, default='contador')
+    criado_em = db.Column(db.DateTime, nullable=False, default=dt.datetime.now)

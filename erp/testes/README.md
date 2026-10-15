@@ -21,10 +21,15 @@ O que cada um cobre:
 | `test_relatorios.py` | DRE e Faturamento: números conferidos na mão, os dois regimes, exportação, isolamento entre empresas e acesso do contador |
 | `test_liberacao.py` | Liberação manual (vencido, em dia, encerrado), bloqueio pelo prazo, Asaas casando CNPJ e CPF, documento ambíguo, pagamento repetido, liberação manual que já cobria o pagamento, ordem dos pagamentos e o "já paguei" sem vínculo |
 | `test_vendas.py` | Aba Vendas: NFS-e e NF-e emitidas, canceladas/denegadas/recebidas fora, período, XLSX só com as marcadas, isolamento entre empresas e o contador gerando o relatório |
-| `test_marketplace.py` | Mercado Livre, Shopee e Amazon contra um servidor de mentira: autorização, assinatura da Shopee, janela de 15 dias, renovação de token, paginação, os três modos de lançamento, cancelamento, sincronizar sem duplicar, cliente pelo CPF/CNPJ, credenciais criptografadas e o XLSX |
+| `test_marketplace.py` | Mercado Livre, Shopee e Amazon contra um servidor de mentira: chaves da API do próprio vendedor, autorização, assinatura da Shopee, janela de 15 dias, renovação de token, paginação, os três modos de lançamento, cancelamento, sincronizar sem duplicar, cliente pelo CPF/CNPJ, credenciais criptografadas e o XLSX |
 | `test_usabilidade.py` | Valor em reais ("150,50", "1.234,56"), formulário que volta preenchido depois de um erro, fornecedor/cliente opcional e cadastrado na hora, confirmação de exclusão com apóstrofo, "voltar" com os filtros, Lançamentos no mês atual com aviso das vencidas e paginação, menu, e Configurações do cliente sem caminho de certificado nem backup |
 | `test_navegador.py` | Num Chromium de verdade (precisa do Playwright): digitar "150,50", excluir "Conta d'água" e cancelar, cadastro na hora, clicar no nome do marketplace, "Tirar o acesso" do contador perguntando antes, menu e largura no celular. Sobe o próprio servidor numa porta livre |
 | `test_contador.py` | O cliente informa só o e-mail do contador: conta criada com senha provisória, e-mail com o acesso e os dados do cliente, contador existente, e-mails recusados, documentos enviados pela conta do sistema com Reply-To para o cliente. Usa um servidor SMTP de mentira em localhost |
+| `test_plano_contas.py` | Plano de contas: leitura dos arquivos de exemplo em `planos/` (Domínio, Questor, Calima, Alterdata), sugestões pelo nome, débito e crédito nos lançamentos, regras por palavra, reimportação mantendo vínculos, colunas na planilha do contador e permissões (só o contador altera) |
 
 > Estes testes viviam fora do repositório e se perderam quando o ambiente de
 > desenvolvimento foi recriado. Ficam aqui para sobreviver a isso.
+
+A pasta `planos/` tem arquivos de plano de contas **montados para o teste** a
+partir dos leiautes usuais de cada sistema contábil — não são exportações
+reais.

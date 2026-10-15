@@ -137,8 +137,12 @@ with sync_playwright() as p:
     pg.goto(B + '/marketplace')
     pg.click('a.cabecalho-link:has-text("Mercado Livre")')
     pg.wait_for_load_state()
-    checar('/marketplace' in pg.url and 'ainda não foi ativada' in flashes(pg),
-           'clicar no nome do marketplace tenta conectar (e, sem ativação, explica o que falta)')
+    checar(pg.url.endswith('/marketplace/mercadolivre/conectar')
+           and pg.locator('input[name=app_id]').is_visible()
+           and pg.locator('button:has-text("Salvar e conectar")').is_visible(),
+           'clicar no nome do marketplace abre a tela para colar a chave da API, com Salvar')
+    checar(pg.get_attribute('input[name=app_segredo]', 'type') == 'password',
+           'e a chave secreta fica escondida enquanto é digitada')
 
     print('\n--- contador: tirar o acesso pergunta antes ---')
     pg.goto(B + '/configuracoes')

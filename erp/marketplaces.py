@@ -133,10 +133,62 @@ def _situacao(status, pagos, cancelados):
 
 
 # ------------------------------------------------------------------ #
+# De quem são as chaves: do sistema ou da própria empresa
+# ------------------------------------------------------------------ #
+
+class _Conector:
+    """Base dos conectores.
+
+    Cada marketplace pode ser acessado por dois aplicativos:
+
+    - o **do sistema**, que o administrador registra uma vez e todos os
+      clientes autorizam (chaves em ConfiguracaoSistema);
+    - o **da própria empresa**: o vendedor cria o aplicativo dele no portal do
+      marketplace e cola as chaves na tela de conectar (chaves na
+      configuração da empresa, segredo criptografado).
+
+    `proprio` traz as chaves da empresa ({'id', 'segredo_cripto',
+    'ambiente'}); sem ele, valem as do sistema.
+    """
+    chave = ''
+    nome = ''
+    CHAVES = {}  # onde ficam as chaves do sistema: id, segredo e ambiente
+
+    def __init__(self, proprio=None):
+        self.proprio = proprio
+
+    @property
+    def app_proprio(self):
+        return self.proprio is not None
+
+    def _id(self):
+        if self.proprio:
+            return self.proprio.get('id') or ''
+        return _config(self.CHAVES['id'])
+
+    def _chave_secreta(self, caminho_chave):
+        if self.proprio:
+            return _decripto(self.proprio.get('segredo_cripto'), caminho_chave)
+        return _segredo(self.CHAVES['segredo'], caminho_chave)
+
+    def _ambiente(self):
+        if self.proprio:
+            return self.proprio.get('ambiente') or 'producao'
+        if self.CHAVES.get('ambiente'):
+            return _config(self.CHAVES['ambiente'], 'sandbox')
+        return 'producao'
+
+    def configurado(self):
+        if self.proprio:
+            return bool(self.proprio.get('id') and self.proprio.get('segredo_cripto'))
+        return bool(_config(self.CHAVES['id']) and _config(self.CHAVES['segredo']))
+
+
+# ------------------------------------------------------------------ #
 # Mercado Livre
 # ------------------------------------------------------------------ #
 
-class MercadoLivre:
+class MercadoLivre(_Conector):
     """API do Mercado Livre (OAuth 2.0 + /orders/search).
 
     O token de acesso vale 6 horas; o de renovação é de uso único — cada
@@ -144,6 +196,7 @@ class MercadoLivre:
     """
     chave = 'mercadolivre'
     nome = 'Mercado Livre'
+    CHAVES = {'id': 'mkt_mercadolivre_client_id', 'segredo': 'mkt_mercadolivre_secret_cripto'}
 
     PAGOS = {'paid', 'partially_refunded'}
     CANCELADOS = {'cancelled', 'invalid'}
@@ -156,21 +209,18 @@ class MercadoLivre:
     def auth(self):
         return os.environ.get('ERP_ML_AUTH', 'https://auth.mercadolivre.com.br').rstrip('/')
 
-    def configurado(self):
-        return bool(_config('mkt_mercadolivre_client_id') and _config('mkt_mercadolivre_secret_cripto'))
-
     def url_autorizacao(self, redirect_uri, state, caminho_chave):
         return (f'{self.auth}/authorization?' + urlencode({
             'response_type': 'code',
-            'client_id': _config('mkt_mercadolivre_client_id'),
+            'client_id': self._id(),
             'redirect_uri': redirect_uri,
             'state': state,
         }))
 
     def _token(self, dados, caminho_chave):
         dados.update({
-            'client_id': _config('mkt_mercadolivre_client_id'),
-            'client_secret': _segredo('mkt_mercadolivre_secret_cripto', caminho_chave),
+            'client_id': self._id(),
+            'client_secret': self._chave_secreta(caminho_chave),
         })
         r = _http('POST', f'{self.api}/oauth/token', data=dados,
                   headers={'Accept': 'application/json'})
@@ -198,6 +248,16 @@ class MercadoLivre:
     def renovar(self, refresh_token, conexao, caminho_chave):
         return self._token({'grant_type': 'refresh_token', 'refresh_token': refresh_token},
                            caminho_chave)
+
+    def conectar_com_refresh_token(self, refresh_token, caminho_chave):
+        """Para quem já tem o refresh token (TG-…) do próprio aplicativo:
+        troca por um token de acesso e descobre a conta, sem ir ao site."""
+        tokens = self.renovar(refresh_token, None, caminho_chave)
+        eu = _http('GET', f'{self.api}/users/me',
+                   headers={'Authorization': f"Bearer {tokens['access_token']}"})
+        tokens['conta_id'] = str(eu.get('id') or tokens['conta_id'])
+        tokens['conta_nome'] = eu.get('nickname') or eu.get('first_name') or tokens['conta_id']
+        return tokens
 
     def _documento(self, pedido, cabecalho):
         """CPF/CNPJ do comprador. Não vem no pedido: fica nos dados de faturamento."""
@@ -265,7 +325,7 @@ class MercadoLivre:
 # Shopee
 # ------------------------------------------------------------------ #
 
-class Shopee:
+class Shopee(_Conector):
     """Shopee Open Platform v2.
 
     Toda chamada é assinada: HMAC-SHA256, com a chave do parceiro, do texto
@@ -275,6 +335,8 @@ class Shopee:
     """
     chave = 'shopee'
     nome = 'Shopee'
+    CHAVES = {'id': 'mkt_shopee_partner_id', 'segredo': 'mkt_shopee_key_cripto',
+              'ambiente': 'mkt_shopee_ambiente'}
 
     HOSTS = {
         'producao': 'https://partner.shopeemobile.com',
@@ -287,17 +349,16 @@ class Shopee:
 
     @property
     def host(self):
-        sobrescrito = os.environ.get('ERP_SHOPEE_URL') or _config('mkt_shopee_host')
+        # O endereço alternativo do admin vale só para o aplicativo do sistema
+        sobrescrito = os.environ.get('ERP_SHOPEE_URL') or (
+            '' if self.proprio else _config('mkt_shopee_host'))
         if sobrescrito:
             return sobrescrito.rstrip('/')
-        return self.HOSTS.get(_config('mkt_shopee_ambiente', 'sandbox'), self.HOSTS['sandbox'])
+        return self.HOSTS.get(self._ambiente(), self.HOSTS['sandbox'])
 
     @property
     def partner_id(self):
-        return _config('mkt_shopee_partner_id')
-
-    def configurado(self):
-        return bool(self.partner_id and _config('mkt_shopee_key_cripto'))
+        return self._id()
 
     @staticmethod
     def assinar(partner_id, chave, caminho, timestamp, access_token='', shop_id=''):
@@ -306,7 +367,7 @@ class Shopee:
 
     def _parametros(self, caminho, caminho_chave, access_token='', shop_id=''):
         ts = int(time.time())
-        chave = _segredo('mkt_shopee_key_cripto', caminho_chave)
+        chave = self._chave_secreta(caminho_chave)
         parametros = {'partner_id': int(self.partner_id), 'timestamp': ts,
                       'sign': self.assinar(self.partner_id, chave, caminho, ts, access_token, shop_id)}
         if access_token:
@@ -343,19 +404,32 @@ class Shopee:
         tokens = self._token('/api/v2/auth/token/get',
                              {'code': codigo, 'shop_id': int(shop_id)}, caminho_chave)
         tokens['conta_id'] = str(shop_id)
-        try:
-            caminho = '/api/v2/shop/get_shop_info'
-            info = self._verificar(_http('GET', f'{self.host}{caminho}', params=self._parametros(
-                caminho, caminho_chave, tokens['access_token'], shop_id)))
-            tokens['conta_nome'] = info.get('shop_name') or f'Loja {shop_id}'
-        except ErroMarketplace:
-            tokens['conta_nome'] = f'Loja {shop_id}'
+        tokens['conta_nome'] = self._nome_da_loja(tokens['access_token'], shop_id, caminho_chave)
         return tokens
 
     def renovar(self, refresh_token, conexao, caminho_chave):
         return self._token('/api/v2/auth/access_token/get',
                            {'refresh_token': refresh_token, 'shop_id': int(conexao.conta_id)},
                            caminho_chave)
+
+    def conectar_com_refresh_token(self, refresh_token, shop_id, caminho_chave):
+        """Para quem já tem o refresh token da loja (e o shop_id)."""
+        if not str(shop_id or '').isdigit():
+            raise ErroMarketplace('Informe o ID da loja (shop_id), só números.')
+        tokens = self._token('/api/v2/auth/access_token/get',
+                             {'refresh_token': refresh_token, 'shop_id': int(shop_id)}, caminho_chave)
+        tokens['conta_id'] = str(shop_id)
+        tokens['conta_nome'] = self._nome_da_loja(tokens['access_token'], shop_id, caminho_chave)
+        return tokens
+
+    def _nome_da_loja(self, access_token, shop_id, caminho_chave):
+        try:
+            caminho = '/api/v2/shop/get_shop_info'
+            info = self._verificar(_http('GET', f'{self.host}{caminho}', params=self._parametros(
+                caminho, caminho_chave, access_token, shop_id)))
+            return info.get('shop_name') or f'Loja {shop_id}'
+        except ErroMarketplace:
+            return f'Loja {shop_id}'
 
     def _get(self, caminho, access_token, conexao, caminho_chave, **extra):
         parametros = self._parametros(caminho, caminho_chave, access_token, conexao.conta_id)
@@ -431,7 +505,7 @@ class Shopee:
 # Amazon
 # ------------------------------------------------------------------ #
 
-class Amazon:
+class Amazon(_Conector):
     """Amazon Selling Partner API (SP-API), região América do Norte, que é a
     do Brasil.
 
@@ -446,6 +520,8 @@ class Amazon:
     """
     chave = 'amazon'
     nome = 'Amazon'
+    CHAVES = {'id': 'mkt_amazon_client_id', 'segredo': 'mkt_amazon_secret_cripto',
+              'ambiente': 'mkt_amazon_ambiente'}
 
     HOSTS = {
         'producao': 'https://sellingpartnerapi-na.amazon.com',
@@ -458,15 +534,11 @@ class Amazon:
     @property
     def host(self):
         return (os.environ.get('ERP_AMAZON_URL')
-                or self.HOSTS.get(_config('mkt_amazon_ambiente', 'sandbox'), self.HOSTS['sandbox'])
-                ).rstrip('/')
+                or self.HOSTS.get(self._ambiente(), self.HOSTS['sandbox'])).rstrip('/')
 
     @property
     def lwa(self):
         return os.environ.get('ERP_LWA_URL', 'https://api.amazon.com').rstrip('/')
-
-    def configurado(self):
-        return bool(_config('mkt_amazon_client_id') and _config('mkt_amazon_secret_cripto'))
 
     def url_autorizacao(self, redirect_uri, state, caminho_chave):
         parametros = {'application_id': _config('mkt_amazon_app_id'), 'state': state,
@@ -476,8 +548,8 @@ class Amazon:
         return 'https://sellercentral.amazon.com.br/apps/authorize/consent?' + urlencode(parametros)
 
     def _token(self, dados, caminho_chave):
-        dados.update({'client_id': _config('mkt_amazon_client_id'),
-                      'client_secret': _segredo('mkt_amazon_secret_cripto', caminho_chave)})
+        dados.update({'client_id': self._id(),
+                      'client_secret': self._chave_secreta(caminho_chave)})
         r = _http('POST', f'{self.lwa}/auth/o2/token', data=dados)
         if not r.get('access_token'):
             raise ErroMarketplace(f"Amazon não devolveu o token: {r.get('error_description') or r}")
@@ -576,6 +648,53 @@ class Amazon:
 CONECTORES = {c.chave: c for c in (MercadoLivre(), Shopee(), Amazon())}
 
 
+def _config_empresa(chave, empresa_id):
+    from fiscal_sync import config_get
+    return config_get(chave, empresa_id=empresa_id)
+
+
+def app_proprio(empresa_id, chave):
+    """Chaves do aplicativo da própria empresa para este marketplace, ou None."""
+    ident = _config_empresa(f'mkt_{chave}_proprio_id', empresa_id)
+    segredo = _config_empresa(f'mkt_{chave}_proprio_segredo_cripto', empresa_id)
+    if not (ident and segredo):
+        return None
+    return {'id': ident, 'segredo_cripto': segredo,
+            'ambiente': _config_empresa(f'mkt_{chave}_proprio_ambiente', empresa_id) or 'producao'}
+
+
+def salvar_app_proprio(empresa_id, chave, ident, segredo, ambiente, caminho_chave):
+    """Guarda as chaves que o vendedor colou. Segredo em branco mantém o já salvo."""
+    from fiscal_sync import config_set
+    config_set(f'mkt_{chave}_proprio_id', ident, empresa_id=empresa_id)
+    if segredo:
+        config_set(f'mkt_{chave}_proprio_segredo_cripto', _cripto(segredo, caminho_chave),
+                   empresa_id=empresa_id)
+    config_set(f'mkt_{chave}_proprio_ambiente', ambiente, empresa_id=empresa_id)
+
+
+def apagar_app_proprio(empresa_id, chave):
+    from fiscal_sync import config_set
+    for campo in ('id', 'segredo_cripto', 'ambiente'):
+        config_set(f'mkt_{chave}_proprio_{campo}', '', empresa_id=empresa_id)
+
+
+def conector(chave, proprio=None):
+    """Conector do marketplace usando as chaves da empresa (`proprio`) ou as do sistema."""
+    return type(CONECTORES[chave])(proprio) if proprio else CONECTORES[chave]
+
+
+def conector_da_conexao(conexao):
+    """O conector com as mesmas chaves que autorizaram esta loja."""
+    if not conexao.app_proprio:
+        return CONECTORES[conexao.marketplace]
+    proprio = app_proprio(conexao.empresa_id, conexao.marketplace)
+    if proprio is None:
+        raise ErroMarketplace('As chaves do aplicativo desta loja não estão mais salvas: '
+                              'conecte de novo informando as chaves.')
+    return conector(conexao.marketplace, proprio)
+
+
 # ------------------------------------------------------------------ #
 # Tokens
 # ------------------------------------------------------------------ #
@@ -589,14 +708,14 @@ def salvar_tokens(conexao, tokens, caminho_chave):
 
 def token_valido(conexao, caminho_chave):
     """Access token em dia, renovando antes se estiver para vencer."""
-    conector = CONECTORES[conexao.marketplace]
+    conector_ = conector_da_conexao(conexao)
     if conexao.expira_em and conexao.expira_em - MARGEM_RENOVACAO > dt.datetime.now():
         return _decripto(conexao.access_token_cripto, caminho_chave)
 
     refresh = _decripto(conexao.refresh_token_cripto, caminho_chave)
     if not refresh:
         raise ErroMarketplace('A autorização venceu e não há como renová-la: conecte a loja de novo.')
-    tokens = conector.renovar(refresh, conexao, caminho_chave)
+    tokens = conector_.renovar(refresh, conexao, caminho_chave)
     salvar_tokens(conexao, tokens, caminho_chave)
     db.session.commit()
     return tokens['access_token']
@@ -708,9 +827,8 @@ def integrar(pedido, modo):
 
 def sincronizar(conexao, inicio, fim, caminho_chave):
     """Busca os pedidos do período e integra ao sistema. Retorna o resumo em texto."""
-    conector = CONECTORES[conexao.marketplace]
     token = token_valido(conexao, caminho_chave)
-    pedidos = conector.pedidos(token, conexao, inicio, fim, caminho_chave)
+    pedidos = conector_da_conexao(conexao).pedidos(token, conexao, inicio, fim, caminho_chave)
 
     contagem = {'novos': 0, 'atualizados': 0, 'receitas': 0, 'taxas': 0,
                 'clientes': 0, 'removidos': 0}

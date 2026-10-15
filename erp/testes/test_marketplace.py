@@ -46,6 +46,12 @@ def ts(data):
 # Estado das APIs de mentira
 # ================================================================ #
 
+# Aplicativos que as APIs de mentira aceitam: o do sistema e o "próprio" do vendedor
+APPS_ML = {'ML_APP_1': 'ML_SEGREDO', 'ML_PROPRIO': 'SEGREDO_PROPRIO'}
+APPS_SH = {'2001234': 'chave-parceiro-shopee', '3009999': 'chave-loja-propria'}
+APPS_AMZ = {'amzn1.application-oa2-client.TESTE': 'AMZ_SEGREDO',
+            'amzn1.application-oa2-client.PROPRIO': 'AMZ_PROPRIO'}
+VISTO = {'ml': None, 'sh': None, 'amz': None}  # último aplicativo que chamou cada API
 ML = {'client_id': 'ML_APP_1', 'secret': 'ML_SEGREDO',
       'refresh_valido': 'RT_ML_1', 'access_valido': 'AT_ML_1', 'versao': 1,
       'chamadas_billing': 0}
@@ -146,8 +152,9 @@ class Mock(BaseHTTPRequestHandler):
     def _ml(self, metodo, caminho, q):
         if caminho == '/oauth/token':
             f = {k: v[0] for k, v in parse_qs(self._corpo()).items()}
-            if f.get('client_id') != ML['client_id'] or f.get('client_secret') != ML['secret']:
+            if APPS_ML.get(f.get('client_id')) != f.get('client_secret'):
                 return self._json(400, {'error': 'invalid_client'})
+            VISTO['ml'] = f.get('client_id')
             if f['grant_type'] == 'authorization_code':
                 if f.get('code') != 'CODIGO_ML':
                     return self._json(400, {'error': 'invalid_grant'})
@@ -183,10 +190,13 @@ class Mock(BaseHTTPRequestHandler):
     def _shopee(self, metodo, caminho, q):
         token = q.get('access_token', '')
         loja = q.get('shop_id', '')
-        base = f"{SH['partner_id']}{caminho}{q.get('timestamp')}{token}{loja}"
-        esperado = hmac.new(SH['key'].encode(), base.encode(), hashlib.sha256).hexdigest()
-        if q.get('sign') != esperado or q.get('partner_id') != SH['partner_id']:
+        parceiro = q.get('partner_id', '')
+        chave_parceiro = APPS_SH.get(parceiro, '')
+        base = f"{parceiro}{caminho}{q.get('timestamp')}{token}{loja}"
+        esperado = hmac.new(chave_parceiro.encode(), base.encode(), hashlib.sha256).hexdigest()
+        if not chave_parceiro or q.get('sign') != esperado:
             return self._json(200, {'error': 'error_sign', 'message': 'Wrong sign.'})
+        VISTO['sh'] = parceiro
 
         if caminho == '/api/v2/auth/token/get':
             corpo = json.loads(self._corpo())
@@ -230,8 +240,9 @@ class Mock(BaseHTTPRequestHandler):
     # ---------------- Amazon ----------------
     def _lwa(self, q):
         f = {k: v[0] for k, v in parse_qs(self._corpo()).items()}
-        if f.get('client_id') != AMZ['client_id'] or f.get('client_secret') != AMZ['secret']:
+        if APPS_AMZ.get(f.get('client_id')) != f.get('client_secret'):
             return self._json(401, {'error': 'invalid_client'})
+        VISTO['amz'] = f.get('client_id')
         if f['grant_type'] == 'authorization_code':
             if f.get('code') != 'SPAPI_CODE':
                 return self._json(400, {'error': 'invalid_grant'})
@@ -280,7 +291,7 @@ def entrar(cliente, email, senha):
 
 def conectar(cliente, chave, **retorno):
     """Faz o vai e volta da autorização como o navegador faria."""
-    r = cliente.get(f'/marketplace/{chave}/conectar')
+    r = cliente.get(f'/marketplace/{chave}/autorizar')
     destino = r.headers.get('Location', '')
     q = {k: v[0] for k, v in parse_qs(urlparse(destino).query).items()}
     if chave == 'shopee':
@@ -308,21 +319,19 @@ with appmod.app.app_context():
 # ================================================================ #
 print('--- 0) antes de o admin ativar ---')
 corpo = c.get('/marketplace').get_data(as_text=True)
-checar(corpo.count('Não ativado') == 3, 'os três aparecem como "não ativado"')
+checar('Não ativado' not in corpo and corpo.count('Desconectado') == 3,
+       'os três aparecem como "desconectado" (dá para conectar com as chaves do vendedor)')
 checar(corpo.count('href="/marketplace/mercadolivre/conectar"') == 2,
-       'o nome do marketplace e o botão levam à conexão, mesmo antes de ativar')
+       'o nome do marketplace e o botão abrem a conexão')
 checar('Clique para conectar sua loja' in corpo, 'e o cabeçalho diz que é clicável')
-checar('Pedir a ativação ao suporte' not in corpo, 'sem WhatsApp do suporte cadastrado, não há botão de pedir')
-r = c.get('/marketplace/mercadolivre/conectar', follow_redirects=True)
-checar('ainda não foi ativada' in r.get_data(as_text=True) and 'Marketplaces' in r.get_data(as_text=True),
-       'e Conectar explica o que falta, em vez de quebrar')
-with appmod.app.app_context():
-    appmod.fiscal_sync.sistema_set('suporte_whatsapp', '11999998888')
-corpo = c.get('/marketplace').get_data(as_text=True)
-checar(corpo.count('Pedir a ativação ao suporte') == 3 and 'wa.me/5511999998888' in corpo,
-       'com o WhatsApp cadastrado, cada cartão oferece pedir a ativação')
-checar('conectar%20minha%20loja%20do%20Mercado%20Livre' in corpo,
-       'e a mensagem já diz qual loja a pessoa quer conectar')
+corpo = c.get('/marketplace/mercadolivre/conectar').get_data(as_text=True)
+checar('name="app_id"' in corpo and 'name="app_segredo"' in corpo and 'Salvar e conectar' in corpo,
+       'Conectar abre a tela para colar as chaves da API, com botão de salvar')
+checar('Conectar com um clique' not in corpo, 'sem o aplicativo do sistema, não oferece o "um clique"')
+checar('/marketplace/mercadolivre/retorno' in corpo, 'e mostra o endereço de retorno para o vendedor cadastrar')
+r = c.get('/marketplace/mercadolivre/autorizar', follow_redirects=True)
+checar('Use as chaves do seu aplicativo' in r.get_data(as_text=True),
+       '"um clique" sem o aplicativo do sistema explica e volta para as chaves')
 
 adm.post('/admin/marketplaces', data={
     'ml_client_id': ML['client_id'], 'ml_secret': ML['secret'],
@@ -360,7 +369,7 @@ with appmod.app.app_context():
     outra.creditar_dias(30)
     db.session.commit()
     id_outra = outra.id
-c2.get('/marketplace/mercadolivre/conectar')
+c2.get('/marketplace/mercadolivre/autorizar')
 r = c2.get('/marketplace/mercadolivre/retorno?code=CODIGO_ML&state=FORJADO', follow_redirects=True)
 checar('foi ignorada' in r.get_data(as_text=True), 'retorno com state forjado é recusado')
 with appmod.app.app_context():
@@ -516,11 +525,15 @@ with appmod.app.app_context():
     checar(p['701-0000001'].cliente_id is None, 'sem dado do comprador, não inventa cliente')
 
 c.post('/marketplace/amazon/desconectar', follow_redirects=True)
-r = c.post('/marketplace/amazon/token', data={'refresh_token': 'qualquer-coisa'}, follow_redirects=True)
+r = c.post('/marketplace/amazon/chaves', data={'refresh_token': 'qualquer-coisa'}, follow_redirects=True)
 checar('Atzr|' in r.get_data(as_text=True), 'refresh token em formato errado é recusado')
-r = c.post('/marketplace/amazon/token', data={'refresh_token': 'Atzr|COLADO', 'seller_id': 'A9'},
+r = c.post('/marketplace/amazon/chaves', data={'refresh_token': 'Atzr|COLADO', 'conta_id': 'A9'},
            follow_redirects=True)
-checar('Amazon conectada' in r.get_data(as_text=True), 'colar um refresh token válido conecta')
+checar('Amazon conectado: A9' in r.get_data(as_text=True),
+       'só o refresh token conecta, usando o aplicativo do sistema')
+with appmod.app.app_context():
+    checar(not ConexaoMarketplace.query.filter_by(empresa_id=eid, marketplace='amazon').first().app_proprio
+           and VISTO['amz'] == AMZ['client_id'], 'e fica marcado como aplicativo do sistema')
 
 # ================================================================ #
 print('\n--- 10) o resto do sistema enxerga ---')
@@ -587,6 +600,74 @@ with appmod.app.app_context():
     checar(depois == antes, 'sincronizar, trocar o modo e desconectar não fazem nada')
     checar(PedidoMarketplace.query.filter_by(empresa_id=eid).count() == qtde_antes,
            'e nenhum pedido novo entra')
+
+# ================================================================ #
+print('\n--- 12) chaves da API do próprio vendedor ---')
+from models import Configuracao  # noqa: E402
+corpo = c2.get('/marketplace/mercadolivre/conectar').get_data(as_text=True)
+checar('Conectar com um clique' in corpo and 'name="app_id"' in corpo,
+       'com o aplicativo do sistema ativo, a tela oferece as duas formas')
+
+r = c2.post('/marketplace/mercadolivre/chaves', data={'app_id': 'ML_PROPRIO'}, follow_redirects=True)
+checar('Informe a Chave secreta' in r.get_data(as_text=True), 'sem a chave secreta, recusa')
+checar('value="ML_PROPRIO"' in r.get_data(as_text=True), 'e volta com o App ID preenchido')
+
+r = c2.post('/marketplace/mercadolivre/chaves',
+            data={'app_id': 'ML_PROPRIO', 'app_segredo': 'SEGREDO_PROPRIO', 'refresh_token': ML['refresh_valido']},
+            follow_redirects=True)
+checar('Mercado Livre conectado: LOJA_TESTE' in r.get_data(as_text=True),
+       'App ID + chave secreta + refresh token: salvar já conecta')
+checar(VISTO['ml'] == 'ML_PROPRIO', 'usando o aplicativo do vendedor, não o do sistema')
+with appmod.app.app_context():
+    cx = ConexaoMarketplace.query.filter_by(empresa_id=id_outra, marketplace='mercadolivre').first()
+    checar(cx is not None and cx.app_proprio, 'a conexão fica marcada como aplicativo próprio')
+    valores = ' '.join(x.valor or '' for x in Configuracao.query.filter_by(empresa_id=id_outra))
+    checar('SEGREDO_PROPRIO' not in valores and 'ML_PROPRIO' in valores,
+           'a chave secreta fica guardada criptografada')
+    cx.expira_em = dt.datetime.now() - dt.timedelta(minutes=1)
+    db.session.commit()
+VISTO['ml'] = None
+r = sync(c2, 'mercadolivre')
+checar('pedido(s)' in r.get_data(as_text=True) and VISTO['ml'] == 'ML_PROPRIO',
+       'ao renovar o token na sincronização, usa as chaves do vendedor')
+checar('SEGREDO_PROPRIO' not in c2.get('/marketplace/mercadolivre/conectar').get_data(as_text=True),
+       'a chave secreta nunca volta para a tela')
+
+c2.post('/marketplace/mercadolivre/desconectar')
+with appmod.app.app_context():
+    checar(marketplaces.app_proprio(id_outra, 'mercadolivre') is None, 'desconectar apaga as chaves salvas')
+
+r = c2.post('/marketplace/mercadolivre/chaves', data={'app_id': 'ML_PROPRIO', 'app_segredo': 'SEGREDO_PROPRIO'})
+destino = r.headers.get('Location', '')
+q = {k: v[0] for k, v in parse_qs(urlparse(destino).query).items()}
+checar(destino.startswith(f'{BASE}/mlauth/authorization?') and q.get('client_id') == 'ML_PROPRIO',
+       'sem refresh token, salvar leva ao Mercado Livre com o App ID do vendedor')
+VISTO['ml'] = None
+r = c2.get('/marketplace/mercadolivre/retorno', query_string={'code': 'CODIGO_ML', 'state': q.get('state')},
+           follow_redirects=True)
+checar('LOJA_TESTE' in r.get_data(as_text=True) and VISTO['ml'] == 'ML_PROPRIO',
+       'e na volta troca o código com as chaves do vendedor')
+
+r = c2.post('/marketplace/shopee/chaves', data={'app_id': 'abc', 'app_segredo': 'x'}, follow_redirects=True)
+checar('só números' in r.get_data(as_text=True), 'Partner ID da Shopee com letras é recusado')
+r = c2.post('/marketplace/shopee/chaves', data={'app_id': '3009999', 'app_segredo': 'chave-ERRADA',
+                                                'ambiente': 'sandbox', 'conta_id': '555',
+                                                'refresh_token': SH['refresh']}, follow_redirects=True)
+checar('não aceitou' in r.get_data(as_text=True), 'Partner Key errada: avisa que a Shopee não aceitou')
+r = c2.post('/marketplace/shopee/chaves', data={'app_id': '3009999', 'app_segredo': 'chave-loja-propria',
+                                                'ambiente': 'sandbox', 'conta_id': '555',
+                                                'refresh_token': SH['refresh']}, follow_redirects=True)
+checar('Shopee conectado: Loja Shopee Teste' in r.get_data(as_text=True) and VISTO['sh'] == '3009999',
+       'Partner ID + Partner Key + loja + refresh token: conecta assinando com a chave do vendedor')
+
+r = c2.post('/marketplace/amazon/chaves', data={'refresh_token': 'Atzr|COLADO', 'conta_id': 'B7',
+                                                'app_id': 'amzn1.application-oa2-client.PROPRIO',
+                                                'app_segredo': 'AMZ_PROPRIO', 'ambiente': 'sandbox'},
+            follow_redirects=True)
+checar('Amazon conectado: B7' in r.get_data(as_text=True) and VISTO['amz'] == 'amzn1.application-oa2-client.PROPRIO',
+       'Amazon com o aplicativo privado do vendedor: refresh token e credenciais LWA, conecta na hora')
+corpo = c2.get('/marketplace').get_data(as_text=True)
+checar(corpo.count('com as chaves do seu aplicativo') == 3, 'o cartão diz que a loja usa as chaves do vendedor')
 
 print()
 if falhas:

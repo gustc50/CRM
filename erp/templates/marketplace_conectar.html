@@ -1,0 +1,159 @@
+{% extends 'base.html' %}
+
+{% set siglas = {'mercadolivre': 'ML', 'shopee': 'S', 'amazon': 'a'} %}
+{% set v_id = f.app_id if f else (salvo.id if salvo else '') %}
+{% set v_ambiente = f.ambiente if f else (salvo.ambiente if salvo else 'producao') %}
+
+{% block content %}
+<h2 class="titulo-conectar">
+    <span class="marca-mkt marca-{{ chave }}" aria-hidden="true">{{ siglas[chave] }}</span>
+    Conectar {{ nome }}
+</h2>
+
+{% if conexao %}
+<p class="aviso-cadastro">
+    Esta loja já está conectada (<strong>{{ conexao.conta_nome or conexao.conta_id }}</strong>).
+    Salvar chaves novas aqui conecta de novo, no lugar da atual.
+</p>
+{% endif %}
+
+{% if sistema_ok %}
+<section class="painel">
+    <h3>Jeito mais rápido: sem chave nenhuma</h3>
+    <p class="nota-grafico">
+        Você vai para o site do {{ nome }}, entra com a sua conta de vendedor e
+        autoriza. Na volta, a loja já está conectada.
+    </p>
+    <a href="{{ url_for('marketplace_autorizar', chave=chave) }}" class="btn-acao btn-editar btn-grande">
+        Conectar com um clique
+    </a>
+</section>
+<h3 class="titulo-secao">Ou use as chaves da API do seu aplicativo</h3>
+{% endif %}
+
+<form action="{{ url_for('marketplace_chaves', chave=chave) }}" method="POST" class="form-coluna form-config" autocomplete="off">
+
+    {% if chave == 'mercadolivre' %}
+    <label>
+        App ID
+        <input type="text" name="app_id" value="{{ v_id }}" maxlength="120" required inputmode="numeric">
+    </label>
+    <label>
+        <span>Chave secreta (Secret Key)
+            {% if salvo %}<small>(já salva — preencha só para trocar)</small>{% endif %}</span>
+        <input type="password" name="app_segredo" maxlength="300" {{ '' if salvo else 'required' }}
+               placeholder="{{ '••••••••' if salvo else '' }}" autocomplete="new-password">
+    </label>
+    <label>
+        <span>Refresh token <small>(opcional — começa com TG-)</small></span>
+        <input type="password" name="refresh_token" maxlength="2000" autocomplete="off">
+        <small>Com ele, a loja conecta na hora. Sem ele, ao salvar você vai uma vez ao
+            Mercado Livre para confirmar o acesso — é a regra deles — e volta conectado.</small>
+    </label>
+    <input type="hidden" name="ambiente" value="producao">
+
+    {% elif chave == 'shopee' %}
+    <div class="linha-campos">
+        <label>
+            Partner ID
+            <input type="text" name="app_id" value="{{ v_id }}" maxlength="30" required inputmode="numeric">
+        </label>
+        <label>
+            Ambiente
+            <select name="ambiente">
+                <option value="producao" {{ 'selected' if v_ambiente == 'producao' else '' }}>Produção (Live)</option>
+                <option value="sandbox" {{ 'selected' if v_ambiente == 'sandbox' else '' }}>Teste (Test)</option>
+            </select>
+        </label>
+    </div>
+    <label>
+        <span>Partner Key {% if salvo %}<small>(já salva — preencha só para trocar)</small>{% endif %}</span>
+        <input type="password" name="app_segredo" maxlength="300" {{ '' if salvo else 'required' }}
+               placeholder="{{ '••••••••' if salvo else '' }}" autocomplete="new-password">
+    </label>
+    <div class="linha-campos">
+        <label>
+            <span>ID da loja <small>(shop_id, opcional)</small></span>
+            <input type="text" name="conta_id" value="{{ f.conta_id }}" maxlength="30" inputmode="numeric">
+        </label>
+        <label>
+            <span>Refresh token <small>(opcional)</small></span>
+            <input type="password" name="refresh_token" maxlength="2000" autocomplete="off">
+        </label>
+    </div>
+    <small class="explica-modo">Com o ID da loja e o refresh token, a loja conecta na hora. Sem eles,
+        ao salvar você vai uma vez à Shopee para confirmar o acesso e volta conectado.</small>
+
+    {% else %}
+    <label>
+        <span>Refresh token <small>(começa com Atzr|)</small></span>
+        <input type="password" name="refresh_token" maxlength="2000" required autocomplete="off">
+    </label>
+    <label>
+        <span>ID do vendedor <small>(Merchant Token, opcional)</small></span>
+        <input type="text" name="conta_id" value="{{ f.conta_id }}" maxlength="60">
+    </label>
+    <label>
+        <span>LWA Client ID
+            {% if sistema_ok %}<small>(opcional: em branco, usa o aplicativo do sistema)</small>{% endif %}</span>
+        <input type="text" name="app_id" value="{{ v_id }}" maxlength="120" {{ '' if sistema_ok else 'required' }}
+               placeholder="amzn1.application-oa2-client…">
+    </label>
+    <label>
+        <span>LWA Client Secret {% if salvo %}<small>(já salvo — preencha só para trocar)</small>{% endif %}</span>
+        <input type="password" name="app_segredo" maxlength="300" placeholder="{{ '••••••••' if salvo else '' }}"
+               autocomplete="new-password">
+    </label>
+    <label>
+        Ambiente
+        <select name="ambiente">
+            <option value="producao" {{ 'selected' if v_ambiente == 'producao' else '' }}>Produção</option>
+            <option value="sandbox" {{ 'selected' if v_ambiente == 'sandbox' else '' }}>Teste (sandbox)</option>
+        </select>
+    </label>
+    {% endif %}
+
+    <div class="form-acoes">
+        <button type="submit">Salvar e conectar</button>
+        <a href="{{ url_for('marketplace') }}" class="btn-secundario btn-link">Cancelar</a>
+    </div>
+</form>
+
+<details class="bloco-recolhivel ajuda-chaves" open>
+    <summary>Onde encontro essas chaves?</summary>
+    <div class="conteudo-ajuda">
+        {% if chave == 'mercadolivre' %}
+        <ol>
+            <li>Entre em <strong>developers.mercadolivre.com.br</strong> com a sua conta de vendedor e
+                vá em <strong>Minhas aplicações › Criar uma aplicação</strong>.</li>
+            <li>No campo <strong>URI de redirect</strong>, coloque exatamente:<br><code>{{ retorno }}</code></li>
+            <li>Marque as permissões de <strong>vendas/pedidos</strong> e salve.</li>
+            <li>A aplicação mostra o <strong>App ID</strong> e a <strong>Chave secreta</strong>: copie os
+                dois para cá.</li>
+        </ol>
+        {% elif chave == 'shopee' %}
+        <ol>
+            <li>Entre em <strong>open.shopee.com</strong> › <strong>Console</strong> e crie um aplicativo do tipo
+                <strong>Seller In House System</strong> (para a sua própria loja).</li>
+            <li>Em <strong>Redirect URL Domain</strong>, informe:<br><code>{{ retorno }}</code></li>
+            <li>Na lista de aplicativos ficam o <strong>Partner ID</strong> e a <strong>Partner Key</strong>
+                — a de teste (Test) e a de produção (Live). Escolha o ambiente de acordo.</li>
+        </ol>
+        {% else %}
+        <ol>
+            <li>No <strong>Seller Central</strong>, vá em <strong>Apps e serviços › Desenvolver apps</strong>
+                e crie um <strong>aplicativo privado</strong> (só para a sua conta).</li>
+            <li>Em <strong>Credenciais LWA</strong> ficam o <strong>Client ID</strong> e o
+                <strong>Client Secret</strong>.</li>
+            <li>Clique em <strong>Autorizar</strong> no aplicativo: a Amazon gera o
+                <strong>refresh token</strong> (começa com <code>Atzr|</code>). Cole aqui.</li>
+        </ol>
+        {% endif %}
+        <p class="nota-grafico">
+            As chaves ficam guardadas com criptografia e só servem para ler os seus
+            pedidos. Desconectar a loja apaga as chaves daqui.
+            {% if suporte %}Ficou com dúvida? <a href="{{ suporte }}" target="_blank" rel="noopener">Falar com o suporte</a>.{% endif %}
+        </p>
+    </div>
+</details>
+{% endblock %}

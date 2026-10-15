@@ -37,7 +37,8 @@ A navegação fica em um menu lateral, com estas seções:
   "A Pagar", com o lançamento gerado sozinho e manifestação do destinatário
   nas compras.
 - **Contabilidade**: envia ao contador, por e-mail, os lançamentos e os XMLs
-  das notas de um período escolhido (pela conta de e-mail do sistema).
+  das notas de um período escolhido (pela conta de e-mail do sistema), e mostra
+  o **plano de contas** e a conciliação contábil que o contador configurou.
 - **Configurações**: certificado digital, ambientes, busca de notas antigas
   e o **e-mail do contador** — informado ele, o sistema cria o acesso do
   contador e manda para ele. (O e-mail do sistema e o backup do banco ficam
@@ -1415,6 +1416,139 @@ espaço a mais no programa de e-mail).
   tirar o Reply-To, tirar os dados do cliente do e-mail e tirar o link do
   nome do marketplace — cada um fez o teste falhar no ponto certo.
 
+## Vigésima primeira rodada: chave da API do marketplace e plano de contas do contador
+
+### Marketplace: a chave da API do vendedor
+
+Clicar no nome do marketplace (ou em **Conectar**) agora abre a tela
+**Conectar Mercado Livre / Shopee / Amazon**, com os campos das chaves que o
+marketplace entrega ao vendedor e o botão **Salvar e conectar**:
+
+| Marketplace | O que o vendedor cola | Ao salvar |
+|---|---|---|
+| Amazon | refresh token (`Atzr|…`) do aplicativo privado + LWA Client ID e Secret | **conecta na hora** |
+| Mercado Livre | App ID e Chave secreta (Secret Key) do aplicativo dele; refresh token (`TG-…`) opcional | com o refresh token, conecta na hora; sem ele, vai uma vez ao Mercado Livre para o vendedor confirmar e volta conectado |
+| Shopee | Partner ID e Partner Key (aplicativo *Seller In House System*), ambiente; ID da loja e refresh token opcionais | com loja + refresh token, conecta na hora; sem eles, vai uma vez à Shopee confirmar |
+
+A tela explica onde achar cada chave e mostra o endereço de retorno que o
+vendedor cadastra no aplicativo dele. Se o administrador também cadastrou o
+aplicativo do sistema, a mesma tela oferece **Conectar com um clique** (sem
+chave nenhuma) — os dois jeitos convivem.
+
+- As chaves ficam na configuração da empresa, com o segredo **criptografado**,
+  e nunca voltam para a tela. **Desconectar apaga as chaves.**
+- A conexão guarda com quais chaves foi feita (`ConexaoMarketplace.app_proprio`):
+  renovar o token e sincronizar usam sempre as mesmas — as do vendedor ou as
+  do sistema. Os conectores deixaram de ler as chaves direto da configuração
+  do sistema e passaram a receber as credenciais que devem usar.
+- O cartão da loja conectada diz "com as chaves do seu aplicativo".
+
+> **Sobre "a chave da API":** Mercado Livre e Shopee não entregam ao vendedor
+> uma chave permanente que sozinha dê acesso aos pedidos — entregam as chaves
+> do aplicativo e, a partir delas, tokens que vencem em horas. Por isso, sem o
+> refresh token, eles exigem uma confirmação no site deles na primeira vez.
+> Depois disso, o sistema renova os tokens sozinho com as chaves salvas.
+
+### Contador: plano de contas e conciliação automática
+
+Ao abrir um cliente, o contador tem o item **Configurações** (para o cliente,
+a mesma tela é **Contabilidade › Plano de contas**, somente leitura).
+
+**1. Importar o plano de contas.** O contador escolhe o sistema de origem
+(**Domínio, Questor, Alterdata, Calima** ou outro) e envia o arquivo
+exportado — `.csv`, `.txt` ou `.xlsx`. O leitor (`contabil.ler_plano`) não
+depende de posição fixa:
+
+- acha o separador (`;`, tabulação, `|`, vírgula) ou lê relatório em texto
+  com colunas alinhadas por espaço;
+- acha as colunas pelo nome do cabeçalho (classificação, código reduzido,
+  descrição, tipo, natureza — com os nomes que cada sistema usa) e, sem
+  cabeçalho, pelo conteúdo: `1.1.1.01.001` é a classificação, número curto é
+  o reduzido, texto é a descrição, S/A é o tipo, D/C é a natureza;
+- corrige o caso em que o cabeçalho diz "Código" mas a coluna tem a
+  classificação;
+- classificação sem pontos (`11101001`) vira `1.1.1.01.001` com a **máscara**
+  informada (`9.9.9.99.999`);
+- sem coluna de tipo, quem tem conta filha é sintética;
+- pula título de página, linhas de total e em branco; lê UTF-8 e Windows-1252.
+
+**Reimportar** atualiza as contas pela classificação, **sem perder os
+vínculos**; conta que saiu do arquivo mas está num vínculo fica inativa, com
+aviso, em vez de sumir.
+
+**2. Conciliação automática.** Cada lançamento ganha débito e crédito:
+
+| Lançamento | Débito | Crédito |
+|---|---|---|
+| Conta a pagar | conta da regra por palavra, senão da categoria, senão a "despesa sem classificação" | conta do banco (sem banco: Caixa) |
+| Conta a receber | conta do banco (sem banco: Caixa) | conta da regra, senão da categoria, senão a "receita sem classificação" |
+
+O contador monta o de-para numa tela só: **contas padrão** (Caixa, despesa e
+receita sem classificação), **bancos**, **categorias de despesa** e **de
+receita**, e **regras por palavra** (ex.: "tarifa" → Despesas bancárias,
+procurando na descrição e no nome do fornecedor/cliente; têm prioridade
+sobre a categoria).
+
+**Logo depois da importação a conciliação já começa sozinha:** o sistema liga
+pelo nome as categorias e os bancos às contas (Aluguel → ALUGUÉIS E
+CONDOMÍNIOS; banco 001 → BANCO DO BRASIL S/A; Caixa → CAIXA GERAL),
+desconfiando de contas redutoras (Vendas não vai para DEVOLUÇÃO DE VENDAS).
+Esses vínculos aparecem como **sugerido** até o contador conferir e salvar.
+
+A classificação é **calculada na hora** a partir dos vínculos — não fica
+gravada no lançamento. Mudou um vínculo, todos os lançamentos, inclusive os
+antigos, já aparecem com a conta nova.
+
+**3. O que o cliente vê.** Tudo o que o contador define aparece para o cliente:
+
+- nos **Lançamentos**, embaixo da descrição: `D 4.1.1.01.001 · C 1.1.1.02.001`
+  (passando o mouse, os nomes das contas), ou "contábil pendente" com o
+  motivo;
+- na tela **Plano de contas**: o plano, os vínculos e o resumo (quantos
+  lançamentos estão conciliados e o que falta, agrupado por motivo), sem
+  poder alterar;
+- no **histórico da equipe**: importou o plano, configurou a conciliação.
+
+A planilha e o texto do pacote da aba Contabilidade ganham as colunas de
+débito e crédito (reduzido, classificação e nome) e a situação da
+conciliação.
+
+**Só o contador altera.** As rotas de gravação começam com `contador_` (as
+únicas que o modo somente leitura do contador deixa passar) e conferem que
+quem pede é o contador daquele cliente; o cliente que tentar recebe "Só o
+contador da empresa configura…".
+
+> **Como interpretei "conciliação":** a classificação contábil de cada
+> lançamento (débito e crédito no plano de contas). A conciliação bancária
+> com o extrato OFX continua em *Bancos › Movimentações*.
+
+### Como foi testado
+
+- `testes/test_plano_contas.py` — 51 conferências: os cinco arquivos de
+  exemplo em `testes/planos/` (Domínio em CSV e em relatório de texto com
+  máscara, Questor, Calima sem cabeçalho, Alterdata em .xlsx), arquivo que não
+  é plano, permissões (cliente não importa, não troca vínculo, não cria regra,
+  não apaga), as sugestões pelo nome, o débito e o crédito nos Lançamentos,
+  regra por palavra, mudança de vínculo valendo para lançamento antigo,
+  reimportação mantendo vínculos, colunas na planilha do contador, histórico
+  e apagar.
+- `test_marketplace.py` ganhou a seção das chaves do vendedor (99 no total):
+  as APIs de mentira passaram a aceitar dois aplicativos e registram qual
+  chamou, para provar que conexão, renovação do token e assinatura da Shopee
+  usam as chaves do vendedor.
+- `test_navegador.py` clica no nome do marketplace e confere a tela das chaves
+  (19 no total).
+- Para provar que os testes pegam defeitos, estraguei de propósito: o
+  conector ignorar as chaves do vendedor, qualquer um mexer no plano, a
+  sugestão sem desconfiar de "devolução", débito e crédito trocados na
+  receita, reimportação apagando conta em uso e a máscara ignorada — cada um
+  fez o teste falhar no ponto certo.
+
+> **Os arquivos de exemplo foram montados a partir dos leiautes usuais de
+> cada sistema, não são exportações reais.** O leitor foi feito para tolerar
+> variações, mas vale mandar um arquivo de verdade de cada sistema para
+> conferir antes de usar com clientes.
+
 ## Limitações conhecidas (fora do escopo desta revisão)
 
 - Banco de dados SQLite, com um worker só. Aguenta bem dezenas de empresas;
@@ -1426,7 +1560,18 @@ espaço a mais no programa de e-mail).
   foram recriadas depois da perda do ambiente. Estão versionadas
   `test_relatorios.py`, `test_liberacao.py` (esta cobre o que a antiga de
   pagamento cobria, e mais), `test_vendas.py`, `test_marketplace.py`,
-  `test_usabilidade.py`, `test_navegador.py` e `test_contador.py`.
+  `test_usabilidade.py`, `test_navegador.py`, `test_contador.py` e
+  `test_plano_contas.py`.
+- A conciliação contábil classifica pelo regime de caixa (despesa contra
+  banco, banco contra receita). Não faz a provisão em fornecedores e clientes
+  (regime de competência) nem tem ajuste manual de um lançamento específico:
+  para um caso isolado, o caminho é uma regra por palavra.
+- Ainda não há exportação no leiaute de importação de lançamentos do Domínio,
+  Questor, Alterdata ou Calima: o contador leva a planilha com débito e
+  crédito do pacote da aba Contabilidade.
+- As telas de conectar marketplace foram testadas contra APIs de mentira; o
+  primeiro uso com chaves reais pode pedir ajustes (ver a décima oitava
+  rodada).
 - A senha provisória do contador vai por e-mail (ou aparece na tela, quando
   o e-mail do sistema não está configurado). O sistema recomenda trocá-la em
   Minha conta, mas não obriga a troca no primeiro acesso.

@@ -27,6 +27,7 @@ from werkzeug.utils import secure_filename
 import asaas
 import auth
 import avisos
+import contabil
 import envio_email
 import fiscal_certificado
 import fiscal_manifestacao
@@ -37,6 +38,8 @@ import formatos
 import marketplaces
 import ofx_parser
 from models import (
+    MAP_BANCO, MAP_CAIXA, MAP_CATEGORIA, MAP_DESPESA, MAP_RECEITA, MAP_TEXTO, SISTEMAS_CONTABEIS,
+    ContaContabil, MapeamentoContabil,
     CARGO_FUNCIONARIO,
     CARGO_SOCIO,
     CARGOS,
@@ -521,6 +524,13 @@ def migrar_schema():
             with db.engine.begin() as conn:
                 conn.execute(db.text('ALTER TABLE conta_movimentacao ADD COLUMN transacao_id INTEGER'))
 
+    if 'conexao_marketplace' in tabelas:
+        colunas_mkt = {c['name'] for c in inspector.get_columns('conexao_marketplace')}
+        if 'app_proprio' not in colunas_mkt:
+            with db.engine.begin() as conn:
+                conn.execute(db.text(
+                    'ALTER TABLE conexao_marketplace ADD COLUMN app_proprio BOOLEAN NOT NULL DEFAULT 0'))
+
     _normalizar_cnpj_cpf_existentes()
 
 
@@ -723,7 +733,8 @@ def guardar_formulario(chave):
     """
     session['formulario'] = {
         'chave': chave,
-        'dados': {k: v for k, v in request.form.items() if 'senha' not in k},
+        'dados': {k: v for k, v in request.form.items()
+                  if not any(s in k for s in ('senha', 'segredo', 'secret', 'token'))},
     }
 
 
@@ -864,7 +875,12 @@ MENU_LATERAL = [
           'ativo_em': ('relatorio_vendas',)},
      ]},
     {'grupo': 'Análise', 'icone': '📨', 'rotulo': 'Contabilidade', 'endpoint': 'contabilidade',
-     'ativo_em': ('contabilidade',)},
+     'ativo_em': ('contabilidade', 'contabil_tela'),
+     'filhos': [
+         {'rotulo': 'Enviar ao contador', 'endpoint': 'contabilidade', 'ativo_em': ('contabilidade',)},
+         # Configurado pelo contador; o cliente acompanha (somente leitura)
+         {'rotulo': 'Plano de contas', 'endpoint': 'contabil_tela', 'ativo_em': ('contabil_tela',)},
+     ]},
 
     {'grupo': 'Ajustes', 'icone': '👥', 'rotulo': 'Cadastros', 'endpoint': 'fornecedores_listar',
      'ativo_em': ('fornecedores_listar', 'fornecedores_editar', 'clientes_listar',
@@ -900,7 +916,12 @@ MENU_ADMIN = [
      'ativo_em': ('admin_configuracoes',)},
 ]
 
-SUBABAS_SEM_CONTADOR = ('recorrentes_listar', 'recorrentes_editar')
+# O contador chega ao plano de contas pelo item Configurações dele (abaixo)
+SUBABAS_SEM_CONTADOR = ('recorrentes_listar', 'recorrentes_editar', 'contabil_tela')
+
+ITEM_CONFIGURACOES_DO_CONTADOR = {
+    'grupo': 'Ajustes', 'icone': '⚙️', 'rotulo': 'Configurações', 'endpoint': 'contabil_tela',
+    'ativo_em': ('contabil_tela',)}
 
 MENU_CONTADOR = [
     {'icone': '🏢', 'rotulo': 'Meus clientes', 'endpoint': 'contador_clientes',
@@ -935,7 +956,7 @@ def menu_do_usuario():
             item['filhos'] = filhos if len(filhos) > 1 else []
             item['ativo_em'] = tuple(e for e in item['ativo_em'] if e not in SUBABAS_SEM_CONTADOR)
             itens.append(item)
-        return MENU_CONTADOR + itens + [ITEM_MINHA_CONTA]
+        return MENU_CONTADOR + itens + [ITEM_CONFIGURACOES_DO_CONTADOR, ITEM_MINHA_CONTA]
     return MENU_LATERAL + [ITEM_MINHA_CONTA]
 
 
@@ -1852,6 +1873,9 @@ def equipe():
 ROTULOS_AUDITORIA = {
     'login': 'Entrou no sistema',
     'contador_liberado': 'Liberou o acesso do contador',
+    'plano_importado': 'Importou o plano de contas',
+    'plano_apagado': 'Apagou o plano de contas',
+    'conciliacao_configurada': 'Configurou a conciliação contábil',
     'contador_removido': 'Tirou o acesso do contador',
     'lancamento_excluido': 'Excluiu um lançamento',
     'baixa_dada': 'Deu baixa',
@@ -2418,6 +2442,10 @@ def lancamentos():
                   .offset((pagina - 1) * LANCAMENTOS_POR_PAGINA)
                   .limit(LANCAMENTOS_POR_PAGINA).all())
 
+    # Débito e crédito de cada lançamento, pelo de-para que o contador montou
+    conciliador = contabil.Conciliador(auth.empresa_atual_id())
+    contabeis = {t.id: conciliador.classificar(t) for t in transacoes} if conciliador.tem_plano else {}
+
     # Contas vencidas que ficaram fora do período escolhido: o mês atual
     # esconderia as atrasadas do mês passado, então a tela avisa.
     vencidas_fora = None
@@ -2499,6 +2527,7 @@ def lancamentos():
         pagina_seguinte=com(pagina=pagina + 1) if pagina < paginas else None,
         f=form_anterior('lancamento'),
         voltar=request.full_path.rstrip('?'),
+        contabeis=contabeis,
     )
 
 
@@ -3105,23 +3134,15 @@ def marketplace():
                .order_by(PedidoMarketplace.data, PedidoMarketplace.id).all())
     pagos = [p for p in pedidos if p.situacao == PEDIDO_PAGO]
 
-    lojas, suporte = [], {}
+    lojas = []
     for chave, conector in marketplaces.CONECTORES.items():
-        lojas.append({'chave': chave, 'nome': conector.nome,
-                      'disponivel': conector.configurado(),
-                      'conexao': _conexao(chave)})
-        if not conector.configurado():
-            # Marketplace ainda não ativado: em vez de um beco sem saída, o
-            # cliente pede a ativação ao suporte com um clique.
-            suporte[chave] = link_do_suporte(
-                auth.usuario_logado(), assunto=f'Quero conectar minha loja do {conector.nome} ao sistema.')
+        lojas.append({'chave': chave, 'nome': conector.nome, 'conexao': _conexao(chave)})
 
     tem_nfe_emitida = da_empresa(NotaEletronica).filter_by(papel='emitida').first() is not None
     return render_template(
         'marketplace.html',
         lojas=lojas, pedidos=pedidos, inicio=inicio, fim=fim,
         modos=MODOS_LANCAMENTO, rotulo_modo={m[0]: m[1] for m in MODOS_LANCAMENTO},
-        suporte={k: v for k, v in suporte.items() if v},
         total_bruto=sum(p.valor_bruto for p in pagos),
         total_taxas=sum(p.taxas for p in pagos),
         total_liquido=sum(p.valor_liquido for p in pagos),
@@ -3132,6 +3153,34 @@ def marketplace():
 
 @app.route('/marketplace/<chave>/conectar')
 def marketplace_conectar(chave):
+    """Tela de conectar: as chaves que o marketplace entregou ao vendedor.
+
+    Quando o administrador também cadastrou o aplicativo do sistema, a mesma
+    tela oferece a autorização com um clique, sem chave nenhuma.
+    """
+    if chave not in marketplaces.CONECTORES:
+        abort(404)
+    bloqueio = _somente_cliente()
+    if bloqueio:
+        return bloqueio
+    sistema = marketplaces.CONECTORES[chave]
+    return render_template(
+        'marketplace_conectar.html',
+        chave=chave,
+        nome=sistema.nome,
+        sistema_ok=sistema.configurado(),
+        salvo=marketplaces.app_proprio(auth.empresa_atual_id(), chave),
+        conexao=_conexao(chave),
+        retorno=_redirect_marketplace(chave),
+        f=form_anterior(f'mkt-{chave}'),
+        suporte=link_do_suporte(auth.usuario_logado(),
+                                assunto=f'Preciso de ajuda para conectar minha loja do {sistema.nome}.'),
+    )
+
+
+@app.route('/marketplace/<chave>/autorizar')
+def marketplace_autorizar(chave):
+    """Autorização com o aplicativo do sistema (o do administrador)."""
     if chave not in marketplaces.CONECTORES:
         abort(404)
     bloqueio = _somente_cliente()
@@ -3139,17 +3188,100 @@ def marketplace_conectar(chave):
         return bloqueio
     conector = marketplaces.CONECTORES[chave]
     if not conector.configurado():
-        flash(f'A conexão com o {conector.nome} ainda não foi ativada no sistema: o administrador '
-              f'precisa cadastrar o aplicativo do {conector.nome} em Configurações do sistema › '
-              f'Marketplaces. Peça a ativação ao suporte; depois disso, é só clicar de novo.', 'erro')
-        return redirect(url_for('marketplace'))
+        flash(f'A conexão com um clique ainda não está disponível para o {conector.nome}. '
+              f'Use as chaves do seu aplicativo, nesta mesma tela.', 'erro')
+        return redirect(url_for('marketplace_conectar', chave=chave))
+    return _ir_autorizar(conector, chave, proprio=False)
 
+
+def _ir_autorizar(conector, chave, proprio):
     # O "state" amarra a volta do marketplace a esta sessão: sem ele, alguém
     # poderia mandar um link de retorno forjado e ligar a loja dele à sua conta.
     state = secrets.token_urlsafe(24)
-    session['marketplace_state'] = {'chave': chave, 'state': state}
+    session['marketplace_state'] = {'chave': chave, 'state': state, 'proprio': proprio}
     return redirect(conector.url_autorizacao(_redirect_marketplace(chave), state,
                                              data_path('.chave_secreta')))
+
+
+ROTULOS_CHAVES = {
+    'mercadolivre': ('App ID', 'Chave secreta (Secret Key)'),
+    'shopee': ('Partner ID', 'Partner Key'),
+    'amazon': ('LWA Client ID', 'LWA Client Secret'),
+}
+
+
+@app.route('/marketplace/<chave>/chaves', methods=['POST'])
+def marketplace_chaves(chave):
+    """Salva as chaves do aplicativo do vendedor e conecta a loja.
+
+    - Amazon: o refresh token (Atzr|…) já basta — conecta na hora.
+    - Mercado Livre e Shopee: com o refresh token preenchido, conecta na hora;
+      sem ele, vai uma vez ao site do marketplace para o vendedor confirmar
+      (é a regra deles) e volta conectado.
+    """
+    if chave not in marketplaces.CONECTORES:
+        abort(404)
+    bloqueio = _somente_cliente()
+    if bloqueio:
+        return bloqueio
+    nome = marketplaces.CONECTORES[chave].nome
+    rotulo_id, rotulo_segredo = ROTULOS_CHAVES[chave]
+
+    def erro(mensagem):
+        flash(mensagem, 'erro')
+        guardar_formulario(f'mkt-{chave}')
+        return redirect(url_for('marketplace_conectar', chave=chave))
+
+    empresa_id = auth.empresa_atual_id()
+    ident = request.form.get('app_id', '').strip()
+    segredo = request.form.get('app_segredo', '').strip()
+    refresh = request.form.get('refresh_token', '').strip()
+    conta = request.form.get('conta_id', '').strip()
+    ambiente = request.form.get('ambiente', 'producao')
+    if ambiente not in ('producao', 'sandbox'):
+        ambiente = 'producao'
+    salvo = marketplaces.app_proprio(empresa_id, chave)
+
+    # Na Amazon, com o aplicativo do sistema cadastrado, o refresh token sozinho basta
+    usar_sistema = chave == 'amazon' and not ident and marketplaces.CONECTORES['amazon'].configurado()
+    if not usar_sistema:
+        if not ident:
+            return erro(f'Informe o {rotulo_id} do seu aplicativo no {nome}.')
+        if not segredo and not (salvo and salvo['id'] == ident):
+            return erro(f'Informe a {rotulo_segredo}.')
+        if chave == 'shopee' and not ident.isdigit():
+            return erro('O Partner ID da Shopee tem só números.')
+        if len(ident) > 120 or len(segredo) > 300:
+            return erro('Essa chave é mais longa do que as do marketplace. Confira se colou só ela.')
+    if chave == 'amazon' and not refresh.startswith('Atzr|'):
+        return erro('Cole o refresh token da Amazon: ele começa com "Atzr|" e é gerado em '
+                    'Seller Central › Apps e serviços › Desenvolver apps › Autorizar.')
+    if chave == 'shopee' and refresh and not conta.isdigit():
+        return erro('Para usar o refresh token da Shopee, informe também o ID da loja (shop_id).')
+    if len(refresh) > 2000 or len(conta) > 60:
+        return erro('O refresh token ou o ID da conta estão longos demais.')
+
+    caminho_chave = data_path('.chave_secreta')
+    if usar_sistema:
+        conector = marketplaces.CONECTORES['amazon']
+    else:
+        marketplaces.salvar_app_proprio(empresa_id, chave, ident, segredo, ambiente, caminho_chave)
+        conector = marketplaces.conector(chave, marketplaces.app_proprio(empresa_id, chave))
+
+    if not refresh:
+        return _ir_autorizar(conector, chave, proprio=True)
+
+    try:
+        if chave == 'mercadolivre':
+            tokens = conector.conectar_com_refresh_token(refresh, caminho_chave)
+        else:
+            tokens = conector.conectar_com_refresh_token(refresh, conta, caminho_chave)
+    except marketplaces.ErroMarketplace as exc:
+        return erro(f'As chaves foram salvas, mas o {nome} não aceitou a conexão: {exc}')
+    _salvar_conexao(chave, tokens, app_proprio=not usar_sistema)
+    flash(f"{nome} conectado: {tokens.get('conta_nome') or tokens.get('conta_id')}. "
+          f"Clique em Sincronizar para trazer os pedidos.", 'sucesso')
+    return redirect(url_for('marketplace'))
 
 
 @app.route('/marketplace/<chave>/retorno')
@@ -3167,7 +3299,15 @@ def marketplace_retorno(chave):
               'erro')
         return redirect(url_for('marketplace'))
 
-    conector = marketplaces.CONECTORES[chave]
+    proprio = bool(esperado.get('proprio'))
+    if proprio:
+        chaves = marketplaces.app_proprio(auth.empresa_atual_id(), chave)
+        if chaves is None:
+            flash('As chaves do seu aplicativo não estão mais salvas. Informe de novo.', 'erro')
+            return redirect(url_for('marketplace_conectar', chave=chave))
+        conector = marketplaces.conector(chave, chaves)
+    else:
+        conector = marketplaces.CONECTORES[chave]
     try:
         tokens = conector.concluir_autorizacao(request.args, _redirect_marketplace(chave),
                                                data_path('.chave_secreta'))
@@ -3175,14 +3315,15 @@ def marketplace_retorno(chave):
         flash(str(exc), 'erro')
         return redirect(url_for('marketplace'))
 
-    _salvar_conexao(chave, tokens)
+    _salvar_conexao(chave, tokens, app_proprio=proprio)
     flash(f"{conector.nome} conectado: {tokens.get('conta_nome') or tokens.get('conta_id')}. "
           f"Clique em Sincronizar para trazer os pedidos.", 'sucesso')
     return redirect(url_for('marketplace'))
 
 
-def _salvar_conexao(chave, tokens):
+def _salvar_conexao(chave, tokens, app_proprio=False):
     conexao = _conexao(chave) or novo_registro(ConexaoMarketplace, marketplace=chave)
+    conexao.app_proprio = app_proprio
     conexao.conta_id = tokens.get('conta_id') or conexao.conta_id
     conexao.conta_nome = (tokens.get('conta_nome') or conexao.conta_nome or '')[:150]
     conexao.conectado_em = datetime.now()
@@ -3192,28 +3333,6 @@ def _salvar_conexao(chave, tokens):
     registrar_acao('marketplace_conectado',
                    f"{marketplaces.CONECTORES[chave].nome}: {conexao.conta_nome}")
     return conexao
-
-
-@app.route('/marketplace/amazon/token', methods=['POST'])
-def marketplace_amazon_token():
-    """Autoautorização da Amazon: o vendedor cola o refresh token gerado no
-    Seller Central, em vez de passar pela tela de consentimento."""
-    bloqueio = _somente_cliente()
-    if bloqueio:
-        return bloqueio
-    refresh = request.form.get('refresh_token', '').strip()
-    if not refresh.startswith('Atzr|'):
-        flash('Esse não parece um refresh token da Amazon (eles começam com "Atzr|").', 'erro')
-        return redirect(url_for('marketplace'))
-    try:
-        tokens = marketplaces.CONECTORES['amazon'].conectar_com_refresh_token(
-            refresh, request.form.get('seller_id', '').strip(), data_path('.chave_secreta'))
-    except marketplaces.ErroMarketplace as exc:
-        flash(str(exc), 'erro')
-        return redirect(url_for('marketplace'))
-    _salvar_conexao('amazon', tokens)
-    flash('Amazon conectada. Clique em Sincronizar para trazer os pedidos.', 'sucesso')
-    return redirect(url_for('marketplace'))
 
 
 @app.route('/marketplace/<chave>/sincronizar', methods=['POST'])
@@ -3270,8 +3389,10 @@ def marketplace_desconectar(chave):
     nome = conexao.nome_marketplace
     db.session.delete(conexao)
     db.session.commit()
+    # As chaves do aplicativo do vendedor saem junto: desconectar é desligar
+    marketplaces.apagar_app_proprio(auth.empresa_atual_id(), chave)
     registrar_acao('marketplace_desconectado', nome)
-    flash(f'{nome} desconectado. Os pedidos já trazidos e os lançamentos continuam aqui; '
+    flash(f'{nome} desconectado e chaves apagadas. Os pedidos já trazidos e os lançamentos continuam aqui; '
           f'para cortar o acesso também do lado de lá, revogue o aplicativo na sua conta {nome}.',
           'sucesso')
     return redirect(url_for('marketplace'))
@@ -3489,13 +3610,24 @@ def _anexos_contabilidade(inicio, fim):
 
     cabecalho_planilha = list(CABECALHO_LANCAMENTOS)
     cabecalho_planilha[8] = 'Valor (R$)'
+    cabecalho_texto = list(CABECALHO_LANCAMENTOS)
+    linhas_planilha = linhas_lancamentos(transacoes, valor_numerico=True)
+    linhas_texto = linhas_lancamentos(transacoes)
+    # Com plano de contas, cada lançamento leva junto o débito e o crédito
+    contabeis = _colunas_contabeis(transacoes)
+    if contabeis:
+        extra_cab, extra_linhas = contabeis
+        cabecalho_planilha += extra_cab
+        cabecalho_texto += extra_cab
+        linhas_planilha = [a + b for a, b in zip(linhas_planilha, extra_linhas)]
+        linhas_texto = [a + b for a, b in zip(linhas_texto, extra_linhas)]
     anexos.append((
         f'lancamentos_{periodo}.xlsx',
-        _planilha_bytes(cabecalho_planilha, linhas_lancamentos(transacoes, valor_numerico=True), 'Lançamentos'),
+        _planilha_bytes(cabecalho_planilha, linhas_planilha, 'Lançamentos'),
     ))
     anexos.append((
         f'lancamentos_{periodo}.txt',
-        _texto_delimitado(CABECALHO_LANCAMENTOS, linhas_lancamentos(transacoes)).encode('utf-8'),
+        _texto_delimitado(cabecalho_texto, linhas_texto).encode('utf-8'),
     ))
 
     notas_servico, notas_eletronicas = _notas_do_periodo(inicio, fim)
@@ -3739,6 +3871,246 @@ def contabilidade_enviar():
         'sucesso',
     )
     return redirect(url_for('contabilidade', inicio=inicio.isoformat(), fim=fim.isoformat()))
+
+
+# ------------------------------------------------------------------ #
+# Plano de contas e conciliação contábil (configurados pelo contador)
+# ------------------------------------------------------------------ #
+
+LIMITE_PLANO_MB = 5
+
+
+def _so_o_contador():
+    """Só o contador, dentro de um cliente que ele atende, mexe no plano e
+    nos vínculos. O cliente vê tudo, mas não altera."""
+    usuario = auth.usuario_logado()
+    if usuario is None or usuario.papel != PAPEL_CONTADOR or auth.empresa_atual() is None:
+        flash('Só o contador da empresa configura o plano de contas e a conciliação.', 'erro')
+        return redirect(url_for('contabil_tela') if auth.empresa_atual() else url_for('inicio'))
+    return None
+
+
+def _ordem_classificacao(conta):
+    return [int(p) for p in conta.classificacao.split('.') if p.isdigit()]
+
+
+def _bancos_para_sugestao():
+    return [(b.id, b.nome, nome_banco(b.banco) if b.banco else '') for b in da_empresa(ContaBancaria)]
+
+
+@app.route('/contabil')
+def contabil_tela():
+    empresa_id = auth.empresa_atual_id()
+    contas = sorted(da_empresa(ContaContabil).all(), key=_ordem_classificacao)
+    analiticas = [c for c in contas if c.analitica and c.ativa]
+    vinculos = da_empresa(MapeamentoContabil).all()
+    por_tipo = {}
+    for m in vinculos:
+        por_tipo[(m.tipo, m.referencia_id)] = m
+    conciliador = contabil.Conciliador(empresa_id)
+    resumo = conciliador.resumo(da_empresa(Transacao).all()) if conciliador.tem_plano else None
+    return render_template(
+        'contabil.html',
+        contas=contas,
+        analiticas=analiticas,
+        inativas=[c for c in contas if not c.ativa],
+        vinculo=lambda tipo, ref=None: por_tipo.get((tipo, ref)),
+        regras=[m for m in vinculos if m.tipo == MAP_TEXTO],
+        sugeridos=sum(1 for m in vinculos if m.origem == 'sugestao'),
+        categorias_pagar=da_empresa(Categoria).filter_by(tipo='Pagar').order_by(Categoria.nome).all(),
+        categorias_receber=da_empresa(Categoria).filter_by(tipo='Receber').order_by(Categoria.nome).all(),
+        bancos=da_empresa(ContaBancaria).order_by(ContaBancaria.nome).all(),
+        resumo=resumo,
+        sistemas=SISTEMAS_CONTABEIS,
+        plano_info={chave: fiscal_sync.config_get(f'plano_{chave}')
+                    for chave in ('sistema', 'importado_em', 'importado_por', 'arquivo')},
+        sou_contador=auth.usuario_logado().papel == PAPEL_CONTADOR,
+        email_contador=fiscal_sync.config_get('email_contador'),
+        MAP_CATEGORIA=MAP_CATEGORIA, MAP_BANCO=MAP_BANCO, MAP_CAIXA=MAP_CAIXA,
+        MAP_DESPESA=MAP_DESPESA, MAP_RECEITA=MAP_RECEITA,
+        f=form_anterior('regra_contabil'),
+    )
+
+
+@app.route('/contabil/plano', methods=['POST'])
+def contador_plano_importar():
+    bloqueio = _so_o_contador()
+    if bloqueio:
+        return bloqueio
+    sistemas = dict(SISTEMAS_CONTABEIS)
+    sistema = request.form.get('sistema', '')
+    arquivo = request.files.get('arquivo')
+    mascara = request.form.get('mascara', '').strip()[:30]
+    if sistema not in sistemas:
+        flash('Escolha de qual sistema contábil o plano foi exportado.', 'erro')
+        return redirect(url_for('contabil_tela'))
+    if not arquivo or not arquivo.filename:
+        flash('Escolha o arquivo do plano de contas.', 'erro')
+        return redirect(url_for('contabil_tela'))
+    conteudo = arquivo.read(LIMITE_PLANO_MB * 1024 * 1024 + 1)
+    if len(conteudo) > LIMITE_PLANO_MB * 1024 * 1024:
+        flash(f'O arquivo passa de {LIMITE_PLANO_MB} MB — um plano de contas costuma ter bem menos.', 'erro')
+        return redirect(url_for('contabil_tela'))
+
+    try:
+        contas, resumo = contabil.ler_plano(conteudo, arquivo.filename, mascara)
+    except contabil.ErroPlano as exc:
+        flash(f'Não deu para importar: {exc}', 'erro')
+        return redirect(url_for('contabil_tela'))
+
+    empresa_id = auth.empresa_atual_id()
+    gravado = contabil.gravar_plano(empresa_id, contas)
+    sugeridos = contabil.sugerir_vinculos(
+        empresa_id, da_empresa(Categoria).all(), _bancos_para_sugestao())
+    contador = auth.usuario_logado()
+    for chave, valor in (('sistema', sistemas[sistema]), ('importado_em', f'{datetime.now():%d/%m/%Y %H:%M}'),
+                         ('importado_por', contador.email), ('arquivo', secure_filename(arquivo.filename))):
+        fiscal_sync.config_set(f'plano_{chave}', valor)
+    registrar_acao('plano_importado', f"{sistemas[sistema]}: {resumo['contas']} contas "
+                                      f"({resumo['analiticas']} analíticas)")
+
+    mensagem = (f"Plano importado do {sistemas[sistema]}: {resumo['contas']} contas, "
+                f"{resumo['analiticas']} analíticas.")
+    if gravado['atualizadas']:
+        mensagem += f" {gravado['atualizadas']} já existiam e foram atualizadas, sem perder os vínculos."
+    if resumo['ignoradas']:
+        mensagem += f" {resumo['ignoradas']} linha(s) do arquivo não eram contas e foram puladas."
+    if sugeridos:
+        mensagem += (f' {sugeridos} vínculo(s) sugerido(s) pelo nome já estão conciliando os '
+                     'lançamentos — confira abaixo.')
+    flash(mensagem, 'sucesso')
+    if gravado['inativas']:
+        flash(f"{gravado['inativas']} conta(s) saíram do plano mas ainda estão em vínculos: "
+              'troque-as na conciliação.', 'erro')
+    return redirect(url_for('contabil_tela'))
+
+
+@app.route('/contabil/plano/apagar', methods=['POST'])
+def contador_plano_apagar():
+    bloqueio = _so_o_contador()
+    if bloqueio:
+        return bloqueio
+    da_empresa(MapeamentoContabil).delete(synchronize_session=False)
+    da_empresa(ContaContabil).delete(synchronize_session=False)
+    db.session.commit()
+    for chave in ('sistema', 'importado_em', 'importado_por', 'arquivo'):
+        fiscal_sync.config_set(f'plano_{chave}', '')
+    registrar_acao('plano_apagado', 'plano de contas e vínculos da conciliação')
+    flash('Plano de contas e vínculos apagados.', 'sucesso')
+    return redirect(url_for('contabil_tela'))
+
+
+def _conta_analitica(valor):
+    """Conta do plano desta empresa, analítica e ativa — ou None."""
+    if not str(valor or '').isdigit():
+        return None
+    conta = buscar(ContaContabil, int(valor))
+    return conta if conta is not None and conta.analitica and conta.ativa else None
+
+
+@app.route('/contabil/vinculos', methods=['POST'])
+def contador_vinculos_salvar():
+    """Grava o de-para de categorias, bancos e contas padrão de uma vez."""
+    bloqueio = _so_o_contador()
+    if bloqueio:
+        return bloqueio
+    existentes = {(m.tipo, m.referencia_id): m for m in da_empresa(MapeamentoContabil)
+                  if m.tipo != MAP_TEXTO}
+    campos = [(f'categoria_{c.id}', MAP_CATEGORIA, c.id) for c in da_empresa(Categoria)]
+    campos += [(f'banco_{b.id}', MAP_BANCO, b.id) for b in da_empresa(ContaBancaria)]
+    campos += [(f'padrao_{tipo}', tipo, None) for tipo in (MAP_CAIXA, MAP_DESPESA, MAP_RECEITA)]
+
+    alterados = invalidos = 0
+    for nome_campo, tipo, referencia in campos:
+        if nome_campo not in request.form:
+            continue
+        bruto = request.form.get(nome_campo, '')
+        atual = existentes.get((tipo, referencia))
+        if not bruto:
+            if atual is not None:
+                db.session.delete(atual)
+                alterados += 1
+            continue
+        conta = _conta_analitica(bruto)
+        if conta is None:
+            invalidos += 1
+            continue
+        if atual is None:
+            db.session.add(novo_registro(MapeamentoContabil, tipo=tipo, referencia_id=referencia,
+                                         conta_id=conta.id, origem='contador'))
+            alterados += 1
+        elif atual.conta_id != conta.id or atual.origem != 'contador':
+            atual.conta_id, atual.origem = conta.id, 'contador'
+            alterados += 1
+    db.session.commit()
+    registrar_acao('conciliacao_configurada', f'{alterados} vínculo(s) alterado(s)')
+    if invalidos:
+        flash(f'{invalidos} escolha(s) não eram contas analíticas deste plano e foram ignoradas.', 'erro')
+    flash(f'Conciliação salva ({alterados} vínculo(s) alterado(s)). Os lançamentos já aparecem com as contas novas.',
+          'sucesso')
+    return redirect(url_for('contabil_tela') + '#conciliacao')
+
+
+@app.route('/contabil/regras', methods=['POST'])
+def contador_regra_adicionar():
+    bloqueio = _so_o_contador()
+    if bloqueio:
+        return bloqueio
+    texto = re.sub(r'\s+', ' ', request.form.get('texto', '')).strip()
+    tipo = request.form.get('tipo_lancamento', '')
+    conta = _conta_analitica(request.form.get('conta_id'))
+    erro = None
+    if not 2 <= len(texto) <= 80:
+        erro = 'A palavra da regra precisa ter de 2 a 80 letras.'
+    elif tipo not in ('', 'Pagar', 'Receber'):
+        erro = 'Tipo de lançamento inválido.'
+    elif conta is None:
+        erro = 'Escolha uma conta analítica do plano.'
+    if erro:
+        flash(erro, 'erro')
+        guardar_formulario('regra_contabil')
+        return redirect(url_for('contabil_tela') + '#regras')
+    db.session.add(novo_registro(MapeamentoContabil, tipo=MAP_TEXTO, texto=texto,
+                                 tipo_lancamento=tipo or None, conta_id=conta.id, origem='contador'))
+    db.session.commit()
+    registrar_acao('conciliacao_configurada', f'regra "{texto}" → {conta.classificacao}')
+    flash(f'Regra criada: o que tiver "{texto}" vai para {conta.rotulo}.', 'sucesso')
+    return redirect(url_for('contabil_tela') + '#regras')
+
+
+@app.route('/contabil/regras/<int:id>/excluir', methods=['POST'])
+def contador_regra_excluir(id):
+    bloqueio = _so_o_contador()
+    if bloqueio:
+        return bloqueio
+    regra = buscar_ou_404(MapeamentoContabil, id)
+    if regra.tipo != MAP_TEXTO:
+        abort(404)
+    texto = regra.texto
+    db.session.delete(regra)
+    db.session.commit()
+    registrar_acao('conciliacao_configurada', f'regra "{texto}" apagada')
+    flash(f'Regra "{texto}" apagada.', 'sucesso')
+    return redirect(url_for('contabil_tela') + '#regras')
+
+
+def _colunas_contabeis(transacoes):
+    """Débito, crédito e situação de cada lançamento, para a planilha do contador.
+    None quando a empresa ainda não tem plano de contas."""
+    conciliador = contabil.Conciliador(auth.empresa_atual_id())
+    if not conciliador.tem_plano:
+        return None
+    cabecalho = ['Débito (reduzido)', 'Débito (classificação)', 'Débito', 'Crédito (reduzido)',
+                 'Crédito (classificação)', 'Crédito', 'Conciliação']
+    linhas = []
+    for t in transacoes:
+        r = conciliador.classificar(t)
+        linha = []
+        for conta in (r.debito, r.credito):
+            linha += [conta.codigo or '', conta.classificacao, conta.descricao] if conta else ['', '', '']
+        linha.append('Conciliado' if r.conciliado else 'Pendente: ' + '; '.join(r.pendencias))
+        linhas.append(linha)
+    return cabecalho, linhas
 
 
 @app.route('/relatorio/exportar')

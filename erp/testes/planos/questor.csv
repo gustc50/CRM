@@ -1,0 +1,7 @@
+Conta;Classificação;Descrição;Tipo;Natureza
+1;1;ATIVO;S;D
+10;1.1.01.001;Caixa;A;D
+11;1.1.02.001;Banco Itaú;A;D
+20;3.1.01.001;Vendas de produtos;A;C
+30;4.1.01.001;Aluguel;A;D
+31;4.1.01.002;Energia elétrica;A;D
